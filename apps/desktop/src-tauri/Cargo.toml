@@ -1,0 +1,20 @@
+[package]
+name = "nocterm-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Nocterm cross-platform desktop terminal"
+
+[lib]
+name = "nocterm_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+nocterm-application = { path = "../../../crates/nocterm-application" }
+nocterm-infrastructure = { path = "../../../crates/nocterm-infrastructure" }
+serde.workspace = true
+tauri.workspace = true

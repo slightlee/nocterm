@@ -1,0 +1,43 @@
+:root {
+  color-scheme: dark;
+  font-family: 'Avenir Next', 'Segoe UI Variable', sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizelegibility;
+
+  --font-display: 'Avenir Next Condensed', 'Bahnschrift', sans-serif;
+  --font-mono: 'SFMono-Regular', 'Cascadia Code', 'Roboto Mono', monospace;
+  --surface-root: #10110f;
+  --surface-panel: #141612;
+  --ink-strong: #e7e8df;
+  --ink-muted: #9b9e91;
+  --ink-faint: #676a60;
+  --line: #2c2f28;
+  --line-soft: rgb(89 94 78 / 22%);
+  --accent: #b7d45c;
+  --accent-dim: #7f963d;
+  --warning: #e1a84b;
+  --danger: #e2785d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--surface-root);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
