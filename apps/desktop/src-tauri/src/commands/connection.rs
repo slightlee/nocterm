@@ -110,9 +110,18 @@ mod tests {
 
     #[test]
     fn accepts_standard_ssh_config_only_for_reading() {
-        assert!(validate_connection_read_path("/Users/test/.ssh/config").is_ok());
-        assert!(validate_connection_backup_write_path("/Users/test/.ssh/config").is_err());
-        assert!(validate_connection_backup_write_path("/Users/test/backup.json").is_ok());
+        // Build absolute paths with the platform's native prefix so this test
+        // exercises the same validation branch on Unix and Windows.
+        let ssh_config = std::env::temp_dir().join(".ssh").join("config");
+        let backup_file = std::env::temp_dir().join("backup.json");
+
+        assert!(validate_connection_read_path(ssh_config.to_string_lossy().as_ref()).is_ok());
+        assert!(
+            validate_connection_backup_write_path(ssh_config.to_string_lossy().as_ref()).is_err()
+        );
+        assert!(
+            validate_connection_backup_write_path(backup_file.to_string_lossy().as_ref()).is_ok()
+        );
     }
 }
 
