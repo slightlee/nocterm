@@ -61,6 +61,6 @@ corepack pnpm cargo:check
 5. 关闭一个标签，确认仅对应 Shell 子进程退出，其他本地或 SSH 会话继续工作；
 6. 在 Shell 中执行 `exit`，确认标签状态变为已关闭，并可通过“重新连接”重新创建本地 Shell；
 7. 退出应用，确认所有本地 Shell 子进程被回收；
-8. macOS 记录实际默认 Shell；Windows 分别验证 PowerShell 或 `COMSPEC` 对应的 ConPTY 行为。
+8. macOS 记录实际默认 Shell；Windows 默认验证 PowerShell（优先 `pwsh.exe`、其次 `powershell.exe`），未安装 PowerShell 时再验证 `COMSPEC` 对应的 CMD/ConPTY 行为。
 
 只有在目标系统完成上述交互后，才能把本地终端更新为对应平台“已验收”。

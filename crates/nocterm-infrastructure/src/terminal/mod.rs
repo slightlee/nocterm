@@ -286,7 +286,7 @@ impl LocalTerminalManager {
             .map_err(error("创建本地 PTY 失败"))?;
         let mut child = pair
             .slave
-            .spawn_command(CommandBuilder::new_default_prog())
+            .spawn_command(local_shell_command())
             .map_err(error("启动本地 Shell 失败"))?;
         let writer = match pair.master.take_writer() {
             Ok(writer) => writer,
@@ -378,6 +378,68 @@ impl Drop for LocalTerminalManager {
         for mut terminal in terminals.into_values() {
             let _ = terminal.child.kill();
         }
+    }
+}
+
+/// Windows 的系统默认 Shell 通常是 CMD，但 PowerShell 更适合作为客户端默认终端。
+/// 候选按现代 PowerShell、系统 PowerShell、用户配置和最后兜底的顺序选择。
+fn local_shell_command() -> CommandBuilder {
+    #[cfg(windows)]
+    {
+        for shell in windows_shell_candidates(std::env::var("COMSPEC").ok()).iter() {
+            if windows_command_available(shell) {
+                return CommandBuilder::new(shell);
+            }
+        }
+        return CommandBuilder::new("cmd.exe");
+    }
+
+    #[cfg(not(windows))]
+    {
+        CommandBuilder::new_default_prog()
+    }
+}
+
+#[cfg(windows)]
+fn windows_shell_candidates(comspec: Option<String>) -> Vec<String> {
+    let mut candidates = vec!["pwsh.exe".to_string(), "powershell.exe".to_string()];
+    if let Some(comspec) = comspec.filter(|value| !value.trim().is_empty()) {
+        candidates.push(comspec);
+    } else {
+        candidates.push("cmd.exe".to_string());
+    }
+    candidates
+}
+
+#[cfg(windows)]
+fn windows_command_available(program: &str) -> bool {
+    if std::path::Path::new(program).is_absolute() {
+        return std::path::Path::new(program).is_file();
+    }
+    std::process::Command::new("where.exe")
+        .arg(program)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(all(test, windows))]
+mod local_shell_tests {
+    use super::windows_shell_candidates;
+
+    #[test]
+    fn prefers_powershell_before_comspec() {
+        assert_eq!(
+            windows_shell_candidates(Some(r"C:\Windows\System32\cmd.exe".to_string())),
+            vec!["pwsh.exe", "powershell.exe", r"C:\Windows\System32\cmd.exe"]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_cmd_when_comspec_is_missing() {
+        assert_eq!(
+            windows_shell_candidates(None),
+            vec!["pwsh.exe", "powershell.exe", "cmd.exe"]
+        );
     }
 }
 
