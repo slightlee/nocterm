@@ -391,7 +391,7 @@ fn local_shell_command() -> CommandBuilder {
                 return CommandBuilder::new(shell);
             }
         }
-        return CommandBuilder::new("cmd.exe");
+        CommandBuilder::new("cmd.exe")
     }
 
     #[cfg(not(windows))]
