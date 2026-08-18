@@ -1,0 +1,218 @@
+/* ========================================
+ * Nocterm Design Tokens（原始色板）
+ * ========================================
+ *
+ * 分层约定（必须遵守）：
+ *   tokens.css      → 唯一允许写 #hex / rgb() 等原始色值
+ *   variables.css   → 语义别名，只写 var(--ds-*)
+ *   组件 *.module.css → 只用语义变量 var(--bg-*) / var(--text-*) / var(--accent-*) …
+ *
+ * 新增颜色：
+ *   1. 在本文件 light + dark 各补一份 --ds-*
+ *   2. 若组件要用，再到 variables.css 增加语义名（如 --icon-bg-xxx）
+ *   3. 组件禁止直接使用 --ds-*，禁止再写死颜色
+ *
+ * 暗色 gray 阶命名注意（重要）：
+ *   浅色主题：--ds-gray-0 最浅 → --ds-gray-900 最深（常规 Tailwind 方向）
+ *   深色主题：--ds-gray-0 最深 → --ds-gray-900 最浅（已反转，贴近 GitHub dark）
+ *   因此 dark 下不要用 --ds-gray-800 当「深色背景」——它实际是浅色字色。
+ *   背景请用 --ds-bg-* / --ds-bg-elevated；文字请用 --ds-text-*。
+ *
+ * 主题切换：html[data-theme="light|dark"]，由 useTheme 写入。
+ * ======================================== */
+
+:root,
+[data-theme='light'] {
+  /* ---- Primary ---- */
+  --ds-blue-50: #eff6ff;
+  --ds-blue-100: #dbeafe;
+  --ds-blue-200: #bfdbfe;
+  --ds-blue-400: #60a5fa;
+  --ds-blue-500: #3b82f6;
+  --ds-blue-600: #2563eb;
+  --ds-blue-700: #1d4ed8;
+
+  /* ---- Green ---- */
+  --ds-green-50: #f0fdf4;
+  --ds-green-500: #22c55e;
+
+  /* ---- Red ---- */
+  --ds-red-50: #fef2f2;
+  --ds-red-500: #ef4444;
+
+  /* ---- Orange ---- */
+  --ds-orange-50: #fffbeb;
+  --ds-orange-500: #f59e0b;
+
+  /* ---- Purple ---- */
+  --ds-purple-50: #f3e8ff;
+  --ds-purple-500: #8b5cf6;
+  --ds-purple-600: #7c3aed;
+
+  /* ---- Cyan ---- */
+  --ds-cyan-500: #0ea5e9;
+  --ds-cyan-50: #f0f9ff;
+
+  /* ---- Gray（浅色：0 最浅 → 900 最深）---- */
+  --ds-gray-0: #fff;
+  --ds-gray-50: #f8fafc;
+  --ds-gray-100: #f1f5f9;
+  --ds-gray-200: #e2e8f0;
+  --ds-gray-300: #cbd5e1;
+  --ds-gray-400: #94a3b8;
+  --ds-gray-500: #6b7280;
+  --ds-gray-600: #4b5563;
+  --ds-gray-700: #374151;
+  --ds-gray-800: #1f2937;
+  --ds-gray-900: #111827;
+
+  /* ---- Desktop Rail ---- */
+  --ds-rail-bg: #ebebeb;
+  --ds-rail-hover: #e2e2e2;
+  --ds-rail-text: #5f6368;
+  --ds-sidebar-soft-bg: #f2f2f2;
+
+  /* ---- Text ---- */
+  --ds-text-1: #111827;
+  --ds-text-2: #4b5563;
+  --ds-text-3: #6b7280;
+
+  /* 实心强调色按钮上的文字（两主题同为白） */
+  --ds-on-accent: #fff;
+
+  /* ---- Background ---- */
+  --ds-bg-1: #fff;
+  --ds-bg-2: #f8fafc;
+  --ds-bg-3: #f1f5f9;
+  --ds-bg-elevated: #fff;
+  --ds-bg-selected: #f1f5f9;
+
+  /* ---- Overlay / Scrim ---- */
+  --ds-overlay: rgb(15 23 42 / 36%);
+
+  /* ---- Border ---- */
+  --ds-border: #e2e8f0;
+  --ds-border-light: #f1f5f9;
+
+  /* ---- Terminal palette ---- */
+  --ds-term-panel: #f7f8fb;
+  --ds-term-border: #e7ebf0;
+  --ds-term-text: #24292f;
+  --ds-term-muted: #6e7781;
+  --ds-term-green: #14823b;
+  --ds-term-blue: #0969da;
+  --ds-term-red: #d1242f;
+  --ds-term-yellow: #9a6700;
+  --ds-term-selection: #ddf4ff;
+
+  /* ---- Radius ---- */
+  --ds-r-sm: 8px;
+  --ds-r-md: 12px;
+  --ds-r-lg: 16px;
+  --ds-r-xl: 20px;
+  --ds-r-full: 999px;
+
+  /* ---- Shadow ---- */
+  --ds-shadow-sm: 0 1px 2px rgb(0 0 0 / 4%), 0 0 0 1px rgb(0 0 0 / 3%);
+  --ds-shadow-md: 0 4px 12px rgb(0 0 0 / 6%), 0 1px 3px rgb(0 0 0 / 4%);
+  --ds-shadow-lg: 0 12px 28px rgb(0 0 0 / 8%), 0 2px 4px rgb(0 0 0 / 4%);
+  --ds-shadow-primary: 0 8px 18px rgb(59 130 246 / 22%);
+
+  /* ---- Duration ---- */
+  --ds-dur-fast: 100ms;
+  --ds-dur-normal: 160ms;
+  --ds-dur-slow: 220ms;
+  --ds-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* ---- Dark Theme ---- */
+[data-theme='dark'] {
+  /* Primary */
+  --ds-blue-50: rgb(56 139 253 / 15%);
+  --ds-blue-500: #58a6ff;
+  --ds-blue-600: #79b8ff;
+  --ds-blue-700: #388bfd;
+
+  /* Green */
+  --ds-green-50: rgb(63 185 80 / 15%);
+  --ds-green-500: #3fb950;
+
+  /* Red */
+  --ds-red-50: rgb(248 81 73 / 15%);
+  --ds-red-500: #f85149;
+
+  /* Orange */
+  --ds-orange-50: rgb(210 153 34 / 15%);
+  --ds-orange-500: #d29922;
+
+  /* Purple */
+  --ds-purple-50: rgb(188 140 255 / 15%);
+  --ds-purple-500: #bc8cff;
+  --ds-purple-600: #bc8cff;
+
+  /* Cyan */
+  --ds-cyan-500: #39d2c0;
+  --ds-cyan-50: rgb(57 210 192 / 15%);
+
+  /*
+   * Gray（深色：0 最深 → 900 最浅，与浅色阶方向相反）
+   * 不要把 gray-700/800/900 当「深色表面」用，它们偏亮，接近文字色。
+   * 表面色请用下方 --ds-bg-* / --ds-bg-elevated。
+   */
+  --ds-gray-0: #0d1117;
+  --ds-gray-50: #161b22;
+  --ds-gray-100: #1c2128;
+  --ds-gray-200: #30363d;
+  --ds-gray-300: #484f58;
+  --ds-gray-400: #6e7681;
+  --ds-gray-500: #6e7681;
+  --ds-gray-600: #8b949e;
+  --ds-gray-700: #b1bac4;
+  --ds-gray-800: #c9d1d9;
+  --ds-gray-900: #e6edf3;
+
+  /* Desktop Rail */
+  --ds-rail-bg: var(--ds-gray-50);
+  --ds-rail-hover: var(--ds-gray-100);
+  --ds-rail-text: var(--ds-text-3);
+  --ds-sidebar-soft-bg: var(--ds-gray-100);
+
+  /* Text */
+  --ds-text-1: #e6edf3;
+  --ds-text-2: #8b949e;
+  --ds-text-3: #6e7681;
+  --ds-on-accent: #fff;
+
+  /* Background（深色表面请用这组，不要用 gray-800+） */
+  --ds-bg-1: #0d1117;
+  --ds-bg-2: #161b22;
+  --ds-bg-3: #1c2128;
+
+  /* 浮层：比主背景略亮的深色面（菜单 / 弹窗面板） */
+  --ds-bg-elevated: #21262d;
+  --ds-bg-selected: #2d333b;
+
+  /* Overlay / Scrim */
+  --ds-overlay: rgb(0 0 0 / 55%);
+
+  /* Border */
+  --ds-border: #30363d;
+  --ds-border-light: #21262d;
+
+  /* Terminal palette */
+  --ds-term-panel: var(--ds-gray-50);
+  --ds-term-border: var(--ds-border);
+  --ds-term-text: #e2e8f0;
+  --ds-term-muted: #64748b;
+  --ds-term-green: #4ade80;
+  --ds-term-blue: #60a5fa;
+  --ds-term-red: #f87171;
+  --ds-term-yellow: #fbbf24;
+  --ds-term-selection: #334155;
+
+  /* Shadow */
+  --ds-shadow-sm: 0 1px 2px rgb(0 0 0 / 20%), 0 0 0 1px rgb(0 0 0 / 15%);
+  --ds-shadow-md: 0 4px 12px rgb(0 0 0 / 30%), 0 1px 3px rgb(0 0 0 / 20%);
+  --ds-shadow-lg: 0 12px 28px rgb(0 0 0 / 40%), 0 2px 4px rgb(0 0 0 / 20%);
+  --ds-shadow-primary: 0 8px 18px rgb(56 139 253 / 30%);
+}

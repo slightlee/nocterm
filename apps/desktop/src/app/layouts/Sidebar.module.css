@@ -1,0 +1,144 @@
+/* ========================================
+ * Sidebar — 可折叠、可拖拽调整宽度的侧边栏容器
+ * Width: 300px (design system)
+ * ======================================== */
+
+.sidebar {
+  width: var(--layout-sidebar);
+  background: var(--bg-primary);
+  display: flex;
+  flex-shrink: 0;
+  overflow: hidden;
+  position: relative;
+  border-right: 1px solid var(--border-primary);
+}
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ---- 通用 Sidebar 内部样式（供子面板复用） ---- */
+
+/* Header */
+.sidebarHeader {
+  padding: 14px 16px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-primary);
+}
+
+.sidebarTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.sidebarActions {
+  display: flex;
+  gap: 4px;
+}
+
+.sidebarAction {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  border: none;
+  background: none;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+
+.sidebarAction:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sidebarAction svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Search */
+.sidebarSearch {
+  padding: 0 14px 10px;
+}
+
+.sidebarSearch input {
+  width: 100%;
+  height: 36px;
+  background: var(--bg-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 0 12px;
+  outline: none;
+  transition:
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast),
+    background var(--dur-fast);
+}
+
+.sidebarSearch input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.sidebarSearch input:focus {
+  background: var(--bg-primary);
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-blue-soft);
+}
+
+/* Scrollable content */
+.sidebarScrollContent {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 10px 10px;
+}
+
+/* Footer */
+.sidebarFooter {
+  padding: 10px 14px;
+  display: flex;
+  gap: 8px;
+}
+
+.sidebarFooterBtn {
+  flex: 1;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+
+.sidebarFooterBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sidebarFooterBtn svg {
+  width: 12px;
+  height: 12px;
+}

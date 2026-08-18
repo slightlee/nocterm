@@ -1,0 +1,76 @@
+/* ========================================
+ * ActivityBar — 左侧一级导航栏 (Rail)
+ * 68px width, nav
+ * ======================================== */
+
+.activityBar {
+  width: var(--layout-activity-bar);
+  background: var(--rail-bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  border-right: 1px solid var(--border-primary);
+}
+
+.navItems {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 60px 6px 10px;
+}
+
+.navItem {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: 12px;
+  cursor: pointer;
+  color: var(--rail-text);
+  transition:
+    background var(--dur-normal) var(--ease-out),
+    color var(--dur-normal) var(--ease-out);
+}
+
+.navItem:hover {
+  background: var(--rail-hover);
+  color: var(--text-primary);
+}
+
+.navItem.active {
+  background: var(--rail-active);
+  color: var(--text-primary);
+}
+
+.navItem svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentcolor;
+  fill: none;
+}
+
+.navLabel {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: inherit;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.bottomSection {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 14px;
+  width: 100%;
+}

@@ -257,7 +257,7 @@ creating → running → closing → closed
 
 ### 8.4 SSH
 
-负责认证参数、主机密钥策略、连接超时、保活和会话状态。第一版优先封装系统 OpenSSH，但必须隐藏在 `SshBackend` 后面，并在架构验证阶段完成 Windows `ssh.exe` 可用性探测。
+负责认证参数、主机密钥策略、连接超时、保活和会话状态。第一版优先封装系统 OpenSSH，由 Domain `SshTerminalPort` 和 Infrastructure `SshTerminalManager` 隐藏具体进程与 PTY 实现；平台探针负责报告 macOS `/usr/bin/ssh` 或 Windows `ssh.exe` 的可用性。
 
 ### 8.5 SFTP
 
@@ -275,7 +275,7 @@ Windows 不是最后补上的兼容层，而是从工程基线开始参与编译
 | -------- | ----------------------------- | -------------------------------- | ------------------------ |
 | 本地终端 | PTY                           | ConPTY                           | `TerminalBackend`        |
 | 凭据     | Keychain                      | Credential Manager               | `CredentialStore`        |
-| SSH      | `/usr/bin/ssh` 或后续原生实现 | `ssh.exe` 能力探测或后续原生实现 | `SshBackend`             |
+| SSH      | `/usr/bin/ssh` 或后续原生实现 | `ssh.exe` 能力探测或后续原生实现 | `SshTerminalPort`        |
 | SFTP     | 待 ADR 验证                   | 待 ADR 验证                      | `SftpBackend`            |
 | 路径     | POSIX path                    | Windows path                     | `LocalPath`/平台 Adapter |
 | 进程信号 | Unix signal                   | Windows process control          | `ProcessController`      |
@@ -384,55 +384,76 @@ tauri build（发布分支或发布流水线）
 → 才进入下一功能
 ```
 
-### 阶段 0：工程骨架
+本项目采用迭代式建设：以稳定的行为契约、清晰的模块边界、跨平台适配和可验证的测试为约束，持续完善产品能力。任何用户可见行为变更都必须经过明确的产品决策和验收。
+
+每个实施单元必须形成一项可独立验证、可独立提交的功能目标。测试、Migration、IPC DTO 和必要文档应随所属功能一起完成；不得提前实现下一功能的占位代码、未来接口或无消费者的抽象。
+
+### 阶段 0：工程骨架（已完成）
 
 - 创建 pnpm/Rust workspace、Tauri 和 React 最小应用；
 - 建立三层 Rust crate 和前端 Feature 边界；
 - 建立统一错误、日志、配置和 IPC 示例链路；
 - 建立 macOS/Windows CI；
-- 输出并验证 ADR：SSH/SFTP、类型生成、凭据实现；
 - 完成“启动应用 → UI 调用 health command → 返回结构化结果”。
 
-### 阶段 1：连接与本地数据
+阶段 0 只负责建立可持续开发的工程基线，不继续添加脱离真实业务的技术示例。后续 ADR 在对应业务首次需要该决策时完成。
 
-- SQLite Migration、Connection Repository；
-- 连接/分组增删改查、排序、重启恢复；
-- 完成 Schema 版本升级、事务失败和数据库恢复测试。
+### 阶段 1：SSH 完整链路建设
 
-### 阶段 2：凭据
+目标是建立一致的连接页和终端页体验，并跑通“保存连接 → 打开 SSH 终端 → 输入输出 → 调整尺寸 → 关闭会话”。按以下子功能依次建设：
 
-- macOS Keychain 和 Windows Credential Manager；
-- 密码、私钥、SSH Agent 引用；
-- 保存、替换、删除和连接删除后的清理策略。
+1. **应用壳与终端页面**：建设 `ActivityBar`、`Sidebar`、`TerminalTabs`、`StatusBar`、主题 Token 和窗口布局。
+2. **连接资料与列表**：定义连接资料、连接列表、新建弹窗、搜索、分组和排序行为；按架构拆分 UI、用例和 SQLite Repository。
+3. **系统凭据**：实现密码、私钥和 SSH Agent，通过 `CredentialStore` 分别适配 macOS Keychain 与 Windows Credential Manager；数据库只保存引用。
+4. **终端会话**：实现 xterm.js、多标签页、会话状态、输出订阅和资源释放；后端统一 `open/write/resize/close/output/exit` 契约。
+5. **SSH 后端**：实现系统 OpenSSH 调用、认证参数、初始目录、保活和断线处理，并补齐主机密钥与 Windows 能力探测。
+6. **验收**：覆盖页面、交互和真实 SSH 行为，macOS/Windows 分别记录结果。
 
-### 阶段 3：本地终端
+### 阶段 2：SFTP 完整链路建设
 
-- macOS PTY、Windows ConPTY；
-- open/write/resize/close/output/exit；
-- 多标签页、异常退出、应用关闭资源回收。
+目标是建立双栏文件管理页面和稳定的文件操作体验，复用阶段 1 的连接与凭据能力。按以下子功能依次建设：
 
-### 阶段 4：SSH 终端
+1. **SFTP 页面**：建设导航入口、连接侧栏、双栏布局、路径栏、文件列表、选择态和反馈样式；
+2. **目录浏览**：实现本地与远程目录读取、父级导航、刷新和错误展示；
+3. **文件操作**：实现创建目录、重命名、删除和覆盖确认；
+4. **文件传输**：实现上传、下载、进度、取消、目录传输和失败清理；
+5. **验收**：覆盖大文件、Unicode 路径、权限错误、覆盖和网络中断。
 
-- 密码、私钥、SSH Agent；
-- 主机密钥、保活、超时、取消和断线；
-- macOS/Windows 真实主机验收。
+正式实现前通过 ADR-002 的 macOS/Windows 原型确定 SFTP Adapter；允许替换不符合跨平台契约的底层实现，但不得改变已确认的上层页面和交互契约。
 
-### 阶段 5：SFTP
+### 阶段 3：其余本地客户端能力
 
-- 浏览和文件操作；
-- 上传、下载、进度、取消、失败清理；
-- 大文件、覆盖、权限、网络中断测试。
+在 SSH 与 SFTP 稳定后，按产品路线依次建设：
 
-### 阶段 6：监控与设置
+1. 本地终端；
+2. 设置与主题；
+3. 服务器监控；
+4. 连接备份、恢复和 OpenSSH Config 导入。
 
-- 定义并实现首期服务器监控指标；
-- 完成本地设置、诊断信息和跨平台差异处理。
-
-### 阶段 7：成熟 Agent
+### 阶段 4：成熟 Agent
 
 - 定义最小 `AgentAdapter`；
 - 只接入一个成熟 Agent；
 - 命令必须绑定明确终端、经过确认并返回真实结构化结果。
+
+Agent 只能在基础终端能力稳定后开始，不提前创建占位接口或预留实现。
+
+### 功能提交边界
+
+- 一次提交只表达一个完整功能意图，不按 UI、Rust 或数据库技术层拆分半成品提交；
+- 一个功能需要的 UI、IPC、Application、Domain、Infrastructure、测试、Migration 和必要文档应在同一交付单元内闭环；
+- 不得混入下一功能代码、顺手重构或与当前验收无关的依赖升级；
+- 提交前必须完成对应检查，区分静态通过、自动测试通过和目标平台真实验收；
+- 是否执行 `git commit` 仍须由用户明确确认。
+
+提交信息示例：
+
+```text
+feat(shell): build desktop workspace layout
+feat(ssh): implement connection profiles
+feat(ssh): implement terminal session lifecycle
+feat(sftp): build remote directory browsing
+```
 
 ## 14. 脚手架阶段完成标准
 

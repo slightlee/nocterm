@@ -1,0 +1,35 @@
+/* ========================================
+ * Nocterm Layout Variables
+ * 布局尺寸、间距等固定值
+ * ======================================== */
+
+:root {
+  /* ---- Layout Dimensions ---- */
+  --layout-activity-bar: 68px;
+  --layout-sidebar: 280px;
+  --layout-ai-panel: 360px;
+  --layout-topbar: 54px;
+  --layout-statusbar: 28px;
+  --layout-tab: 48px;
+
+  /* ---- Sidebar Constraints ---- */
+  --layout-sidebar-min: 200px;
+  --layout-sidebar-max: 420px;
+
+  /* ---- AI Panel Constraints ---- */
+  --layout-ai-panel-min: 340px;
+  --layout-ai-panel-max: 600px;
+
+  /* ---- Typography ---- */
+  --font-sans:
+    -apple-system, blinkmacsystemfont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', arial,
+    sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', menlo, consolas, monospace;
+
+  /* ---- Z-Index ---- */
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal-backdrop: 300;
+  --z-modal: 400;
+  --z-tooltip: 600;
+}

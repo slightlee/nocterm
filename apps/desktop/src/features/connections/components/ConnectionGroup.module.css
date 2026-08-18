@@ -1,0 +1,195 @@
+.group {
+  position: relative;
+  margin-top: 6px;
+  border-radius: var(--radius-md);
+}
+
+.group:first-child {
+  margin-top: 2px;
+}
+
+.dropActive {
+  background: var(--accent-blue-soft);
+}
+
+.groupHeader {
+  position: relative;
+  display: flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.groupHeader:hover {
+  opacity: 0.85;
+}
+
+.groupDragging {
+  opacity: 0.45;
+}
+
+.groupDropBefore {
+  box-shadow: inset 0 2px 0 var(--accent-primary);
+}
+
+.groupDropAfter {
+  box-shadow: inset 0 -2px 0 var(--accent-primary);
+}
+
+.arrow {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+
+.arrow.expanded {
+  transform: rotate(0deg);
+}
+
+.arrow svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.groupName,
+.groupNameInput {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupNameInput {
+  height: 24px;
+  padding: 0 6px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.count {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  border-radius: 50%;
+}
+
+.moreBtn {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.moreBtn:hover,
+.moreBtn:focus-visible {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  opacity: 1;
+}
+
+.moreBtn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentcolor;
+}
+
+.children {
+  padding-left: 0;
+}
+
+.menu {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  min-width: 180px;
+  padding: 4px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.menuSeparator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border-secondary);
+}
+
+.menuItem {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: var(--bg-hover);
+}
+
+.menuItem svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.menuItem.danger {
+  color: var(--accent-red);
+}
+
+.danger {
+  color: var(--accent-red);
+}

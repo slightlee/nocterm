@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Nocterm desktop core permissions",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

@@ -1,0 +1,10 @@
+.terminal {
+  --terminal-content-inset-x: 6px;
+
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  padding: 0;
+  background: var(--term);
+  overflow: hidden;
+}

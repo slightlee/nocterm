@@ -7,3 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 nocterm-domain = { path = "../nocterm-domain" }
+portable-pty.workspace = true
+keyring.workspace = true
+rusqlite.workspace = true

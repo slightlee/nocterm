@@ -1,0 +1,624 @@
+/* 结构和尺寸以旧客户端 NewConnectionModal 为视觉基线。 */
+.overlay {
+  position: fixed;
+  z-index: var(--z-modal-backdrop);
+  inset: 0;
+  background: var(--overlay);
+  animation: fade-in var(--dur-normal) var(--ease-out);
+}
+
+.modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--z-modal);
+  display: flex;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  flex-direction: column;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, -50%);
+  animation: slide-up var(--dur-slow) var(--ease-out);
+}
+
+.modalHead {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.titleWrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.closeBtn {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+
+.closeBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.closeBtn:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.closeBtn svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.modalBody {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 18px 24px 14px;
+}
+
+.modalBody::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modalBody::-webkit-scrollbar-thumb {
+  background: var(--border-primary);
+  border-radius: 6px;
+}
+
+.form {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nameIconRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  align-items: start;
+  gap: 12px;
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 12px;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.required {
+  color: var(--accent-red);
+  font-weight: 800;
+}
+
+.labelOpt {
+  margin-left: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.fieldError,
+.errorMsg {
+  color: var(--accent-red);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.fieldNotice {
+  color: var(--accent-orange);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.inputWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.inputIcon {
+  position: absolute;
+  left: 13px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.input {
+  width: 100%;
+  height: 38px;
+  padding: 0 13px;
+  color: var(--text-primary);
+  font-size: 13px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition:
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+
+.inputWithIcon {
+  padding-left: 36px;
+}
+
+.input[type='number']::-webkit-inner-spin-button,
+.input[type='number']::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.input[type='number'] {
+  appearance: textfield;
+}
+
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--accent-red);
+}
+
+.input:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-blue-soft);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.select {
+  padding-right: 36px;
+  line-height: 38px;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-repeat: no-repeat;
+  background-position:
+    calc(100% - 18px) 16px,
+    calc(100% - 13px) 16px;
+  background-size:
+    5px 5px,
+    5px 5px;
+}
+
+.iconPicker {
+  position: relative;
+}
+
+.iconSelectButton {
+  display: inline-flex;
+  width: 56px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast),
+    border-color var(--dur-fast),
+    color var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+
+.iconSelectButton:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.iconSelectButton:focus-visible {
+  border-color: var(--border-focus);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-blue-soft);
+}
+
+.selectedIcon {
+  display: contents;
+}
+
+.selectedIcon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.iconChevron {
+  width: 11px;
+  height: 11px;
+  color: var(--text-tertiary);
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.iconMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+  display: grid;
+  width: 112px;
+  grid-template-columns: repeat(3, 30px);
+  gap: 5px;
+  padding: 7px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.iconOption {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast),
+    border-color var(--dur-fast),
+    color var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+
+.iconOption:hover {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.iconOption:focus-visible {
+  border-color: var(--border-focus);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-blue-soft);
+}
+
+.iconOptionActive {
+  color: var(--accent-blue);
+  background: var(--accent-blue-soft);
+  border-color: var(--accent-blue);
+}
+
+.iconOption svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.authFieldset {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.authFieldset .label {
+  margin-bottom: 6px;
+}
+
+.segGroup {
+  display: inline-flex;
+  width: fit-content;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+}
+
+.segBtn {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 13px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+
+.segBtn:hover {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.segBtn:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.segBtn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.segActive {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.fileBtn {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--bg-input);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: background var(--dur-fast);
+}
+
+.fileBtn:hover {
+  background: var(--bg-tertiary);
+}
+
+.fileBtn svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.agentBox {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 13px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+}
+
+.agentBox svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--text-tertiary);
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.modalFoot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-secondary);
+}
+
+.footInfo {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.footActions {
+  display: flex;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.btnGhost,
+.btnPrimary {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.btnGhost {
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+
+.btnGhost:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.btnPrimary {
+  gap: 7px;
+  padding-inline: 20px;
+  color: var(--text-on-accent);
+  background: var(--accent-blue);
+  border: 0;
+  box-shadow: var(--shadow-primary);
+  transition: background var(--dur-fast);
+}
+
+.btnPrimary:hover {
+  background: var(--accent-blue-hover);
+}
+
+.btnPrimary:active {
+  background: var(--accent-blue-pressed);
+}
+
+.btnGhost:disabled,
+.btnPrimary:disabled {
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  box-shadow: none;
+  cursor: wait;
+}
+
+.btnPrimary svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
+@media (width <= 560px) {
+  .modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .modalHead,
+  .modalBody,
+  .modalFoot {
+    padding-inline: 18px;
+  }
+
+  .row2 {
+    grid-template-columns: minmax(0, 1fr) 104px;
+  }
+
+  .iconMenu {
+    right: auto;
+    left: 0;
+  }
+
+  .footInfo {
+    display: none;
+  }
+}

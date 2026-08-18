@@ -1,0 +1,327 @@
+/* ========================================
+ * StatusBar — 底部状态栏
+ * Design System spec: 28px height, terminal colors
+ * ======================================== */
+
+.statusbar {
+  position: relative;
+  height: var(--layout-statusbar);
+  background: var(--term-panel);
+  border-top: 1px solid var(--term-border);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--term-muted);
+  gap: 12px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.statusItem {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.statusButton {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--term-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.statusButton:hover {
+  color: var(--term-text);
+}
+
+.statusLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(60vw, 720px);
+  overflow: hidden;
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.green {
+  background: var(--accent-green);
+}
+
+.orange {
+  background: var(--accent-orange);
+}
+
+.red {
+  background: var(--accent-red);
+}
+
+.sessionName {
+  color: var(--term-text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 180px;
+}
+
+.sessionPath {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--term-muted);
+  text-overflow: ellipsis;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.statusRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.statusRight span {
+  color: var(--term-muted);
+}
+
+.statusRight b {
+  color: var(--term-text);
+  font-weight: 600;
+}
+
+.transferStatus {
+  min-width: 0;
+  width: clamp(300px, 34vw, 420px);
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.transferBadge {
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-blue-soft) 72%, transparent);
+  color: var(--accent-blue);
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  flex: none;
+}
+
+.transferError {
+  background: color-mix(in srgb, var(--accent-red-soft) 72%, transparent);
+  color: var(--accent-red);
+}
+
+.transferCancelled {
+  background: var(--bg-tertiary);
+  color: var(--term-muted);
+}
+
+.transferName {
+  min-width: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--term-text);
+  font-size: 11px;
+}
+
+.progressTrack {
+  width: 72px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--term-muted) 22%, transparent);
+  overflow: hidden;
+  flex: none;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-blue);
+  display: block;
+}
+
+.progressFillUnknown {
+  width: 38%;
+  animation: transfer-indeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes transfer-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+.transferMeta {
+  color: var(--term-muted);
+  font-size: 10px;
+  flex: none;
+}
+
+.transferQueue {
+  color: var(--term-muted);
+  font-size: 10px;
+  flex: none;
+}
+
+.transferPanel {
+  position: absolute;
+  right: 12px;
+  bottom: calc(100% + 6px);
+  width: min(500px, calc(100vw - 48px));
+  max-height: 300px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-dropdown);
+  overflow: hidden;
+}
+
+.transferPanelHeader {
+  height: 34px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.transferPanelActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transferPanelActions button {
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.transferPanelActions button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.transferPanelClose {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.transferPanelActions .transferPanelClose {
+  padding: 0;
+}
+
+.transferPanelClose:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.transferList {
+  max-height: 266px;
+  overflow: auto;
+}
+
+.transferItem {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.transferItem:last-child {
+  border-bottom: 0;
+}
+
+.transferItemTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.transferItemName {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.transferItemMeta {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  flex: none;
+}
+
+.transferItemAction {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  cursor: pointer;
+  flex: none;
+}
+
+.transferItemAction:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.transferItemTrack {
+  height: 4px;
+  margin-top: 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-tertiary) 18%, transparent);
+  display: block;
+  overflow: hidden;
+}

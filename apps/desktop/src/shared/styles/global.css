@@ -1,43 +1,67 @@
-:root {
-  color-scheme: dark;
-  font-family: 'Avenir Next', 'Segoe UI Variable', sans-serif;
-  font-synthesis: none;
-  text-rendering: optimizelegibility;
+/* ========================================
+ * Nocterm Global Styles
+ * Import this in main.tsx to bootstrap all styles
+ *
+ * 颜色相关入口顺序（勿调换）：
+ *   tokens.css    → 原始色板
+ *   variables.css → 语义变量（组件只依赖这一层）
+ *   layout / reset → 尺寸与基础元素
+ * 详见 tokens.css / variables.css 文件头约定。
+ * ======================================== */
 
-  --font-display: 'Avenir Next Condensed', 'Bahnschrift', sans-serif;
-  --font-mono: 'SFMono-Regular', 'Cascadia Code', 'Roboto Mono', monospace;
-  --surface-root: #10110f;
-  --surface-panel: #141612;
-  --ink-strong: #e7e8df;
-  --ink-muted: #9b9e91;
-  --ink-faint: #676a60;
-  --line: #2c2f28;
-  --line-soft: rgb(89 94 78 / 22%);
-  --accent: #b7d45c;
-  --accent-dim: #7f963d;
-  --warning: #e1a84b;
-  --danger: #e2785d;
+@import url('./tokens.css');
+@import url('./variables.css');
+@import url('./layout.css');
+@import url('./reset.css');
+
+/* xterm 的 class 来自第三方包，集中放在全局层以避免 CSS Modules 泄漏。 */
+.nocterm-terminal {
+  --terminal-content-inset-x: 6px;
 }
 
-* {
+.nocterm-terminal .xterm {
   box-sizing: border-box;
+  height: 100%;
+  padding-inline: var(--terminal-content-inset-x);
+  background: var(--term);
 }
 
-html,
-body,
-#root {
-  min-width: 320px;
-  min-height: 100%;
-  margin: 0;
+.nocterm-terminal .xterm-viewport {
+  right: var(--terminal-content-inset-x) !important;
+  left: var(--terminal-content-inset-x) !important;
+  overflow-y: auto !important;
+  background: var(--term) !important;
+  scrollbar-color: var(--border-primary) transparent;
+  scrollbar-width: thin !important;
 }
 
-body {
-  min-height: 100vh;
-  background: var(--surface-root);
+.nocterm-terminal .xterm-screen {
+  height: 100% !important;
+  background: var(--term);
 }
 
-button,
-input,
-textarea {
-  font: inherit;
+.nocterm-terminal .xterm .xterm-viewport::-webkit-scrollbar,
+.nocterm-terminal .xterm .xterm-scrollable-element > .scrollbar {
+  width: 4px !important;
+}
+
+.nocterm-terminal .xterm .xterm-viewport::-webkit-scrollbar-track,
+.nocterm-terminal .xterm .xterm-scrollable-element > .scrollbar {
+  background: transparent !important;
+}
+
+.nocterm-terminal .xterm .xterm-viewport::-webkit-scrollbar-thumb,
+.nocterm-terminal .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  width: 4px !important;
+  background: var(--border-primary) !important;
+  border-radius: 4px !important;
+}
+
+.nocterm-terminal .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary) !important;
+}
+
+.nocterm-terminal .xterm .xterm-scrollable-element > .scrollbar > .scra,
+.nocterm-terminal .xterm .xterm-scrollable-element > .shadow {
+  display: none !important;
 }

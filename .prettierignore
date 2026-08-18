@@ -4,3 +4,5 @@ target
 coverage
 pnpm-lock.yaml
 apps/desktop/src-tauri/gen
+.playwright-mcp
+phase1-*.png

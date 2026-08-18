@@ -1,0 +1,206 @@
+/* ========================================
+ * Nocterm Semantic Variables（语义变量）
+ * ========================================
+ *
+ * 本文件：把 tokens 映射成组件可用的语义名。
+ * 全部使用 var(--ds-*)，禁止在此写 #hex / rgb() 裸色值。
+ *
+ * 组件应使用的前缀约定：
+ *   --bg-*          背景（primary / elevated / hover …）
+ *   --text-*        文字（primary / secondary / tertiary / on-accent）
+ *   --border-*      边框
+ *   --accent-*      强调色与 soft 底
+ *   --term-*        终端专用
+ *   --shadow-*      阴影
+ *   --overlay       弹层遮罩
+ *   --rail-*        左侧 Activity 栏
+ *   --sidebar-*     侧栏
+ *   --icon-bg-*     图标底色
+ *   --code-block-*  AI 代码块
+ *
+ * 不要在组件中使用 --ds-*（原始 token），以便换肤只改 tokens + 本文件。
+ *
+ * 深色覆盖规则：
+ *   [data-theme='dark'] 只覆盖与浅色不同的映射；值仍必须是 var(--ds-*)。
+ * ======================================== */
+
+:root,
+[data-theme='light'] {
+  /* ---- Primary ---- */
+  --accent-blue: var(--ds-blue-500);
+  --accent-blue-hover: var(--ds-blue-600);
+  --accent-blue-pressed: var(--ds-blue-700);
+  --accent-blue-soft: var(--ds-blue-50);
+
+  /* 历史/个别组件别名（= accent-blue） */
+  --accent-primary: var(--ds-blue-500);
+
+  /* ---- Semantic ---- */
+  --accent-green: var(--ds-green-500);
+  --accent-green-soft: var(--ds-green-50);
+  --accent-red: var(--ds-red-500);
+  --accent-red-soft: var(--ds-red-50);
+  --accent-orange: var(--ds-orange-500);
+  --accent-orange-soft: var(--ds-orange-50);
+  --accent-purple: var(--ds-purple-500);
+  --accent-purple-soft: var(--ds-purple-50);
+  --accent-cyan: var(--ds-cyan-500);
+
+  /* ---- Background ---- */
+  --bg-primary: var(--ds-bg-1);
+  --bg-secondary: var(--ds-bg-2);
+  --bg-tertiary: var(--ds-bg-3);
+  --bg-elevated: var(--ds-bg-elevated);
+  --bg-hover: var(--ds-bg-3);
+  --bg-active: var(--ds-gray-200);
+  --bg-selected: var(--ds-bg-selected);
+
+  /* 表单输入底（与主背景一致，单独命名便于以后区分） */
+  --bg-input: var(--ds-bg-1);
+
+  /* ---- Overlay ---- */
+  --overlay: var(--ds-overlay);
+
+  /* ---- Activity Rail ---- */
+  --rail-bg: var(--ds-rail-bg);
+  --rail-hover: var(--ds-rail-hover);
+  --rail-active: var(--ds-rail-hover);
+  --rail-text: var(--ds-rail-text);
+
+  /* ---- Sidebar ---- */
+  --sidebar-control-bg: var(--ds-sidebar-soft-bg);
+  --sidebar-item-hover: var(--ds-sidebar-soft-bg);
+  --sidebar-item-selected: var(--ds-sidebar-soft-bg);
+
+  /* ---- Border ---- */
+  --border-primary: var(--ds-border);
+  --border-secondary: var(--ds-border-light);
+  --border-focus: var(--ds-blue-500);
+
+  /* ---- Text ---- */
+  --text-primary: var(--ds-text-1);
+  --text-secondary: var(--ds-text-2);
+  --text-tertiary: var(--ds-text-3);
+  --text-on-accent: var(--ds-on-accent);
+
+  /* ---- AI Gradient ---- */
+  --ai-start: var(--ds-purple-600);
+  --ai-end: var(--ds-blue-600);
+
+  /* ---- Icon Background ---- */
+  --icon-bg-green: var(--ds-green-50);
+  --icon-bg-blue: var(--ds-blue-50);
+  --icon-bg-red: var(--ds-red-50);
+  --icon-bg-orange: var(--ds-orange-50);
+  --icon-bg-purple: var(--ds-purple-50);
+
+  /* ---- Terminal Theme ---- */
+  --term: var(--ds-bg-1);
+  --term-panel: var(--ds-term-panel);
+  --term-border: var(--ds-term-border);
+  --term-text: var(--ds-term-text);
+  --term-muted: var(--ds-term-muted);
+  --term-green: var(--ds-term-green);
+  --term-blue: var(--ds-term-blue);
+  --term-red: var(--ds-term-red);
+  --term-yellow: var(--ds-term-yellow);
+  --term-selection: var(--ds-term-selection);
+
+  /* ---- Radius ---- */
+  --radius-sm: var(--ds-r-sm);
+  --radius-md: var(--ds-r-md);
+  --radius-lg: var(--ds-r-lg);
+  --radius-xl: var(--ds-r-xl);
+  --radius-full: var(--ds-r-full);
+
+  /* ---- Shadow ---- */
+  --shadow-sm: var(--ds-shadow-sm);
+  --shadow-md: var(--ds-shadow-md);
+  --shadow-lg: var(--ds-shadow-lg);
+  --shadow-primary: var(--ds-shadow-primary);
+
+  /* ---- Motion ---- */
+  --dur-fast: var(--ds-dur-fast);
+  --dur-normal: var(--ds-dur-normal);
+  --dur-slow: var(--ds-dur-slow);
+  --ease-out: var(--ds-ease-out);
+
+  /* ---- Code Block（AI/Markdown 代码块，跟随主题）---- */
+  --code-block-bg: var(--ds-bg-2);
+  --code-block-header: var(--ds-bg-3);
+  --code-block-border: var(--ds-border);
+  --code-block-text: var(--ds-text-2);
+  --code-block-muted: var(--ds-text-3);
+  --code-block-hover: var(--ds-gray-200);
+}
+
+/* ---- Dark Theme：只覆盖映射目标（值仍必须是 var(--ds-*)）---- */
+[data-theme='dark'] {
+  --accent-blue: var(--ds-blue-500);
+  --accent-blue-hover: var(--ds-blue-600);
+  --accent-blue-pressed: var(--ds-blue-700);
+  --accent-blue-soft: var(--ds-blue-50);
+  --accent-primary: var(--ds-blue-500);
+  --accent-green: var(--ds-green-500);
+  --accent-green-soft: var(--ds-green-50);
+  --accent-red: var(--ds-red-500);
+  --accent-red-soft: var(--ds-red-50);
+  --accent-orange: var(--ds-orange-500);
+  --accent-orange-soft: var(--ds-orange-50);
+  --accent-purple: var(--ds-purple-500);
+  --accent-purple-soft: var(--ds-purple-50);
+  --accent-cyan: var(--ds-cyan-500);
+
+  /* 注意：dark 的 --ds-gray-* 阶方向与 light 相反，此处 hover/active 用 gray-200/300
+     实际是「略亮的表面」，不是「更深的灰」。 */
+  --bg-primary: var(--ds-bg-1);
+  --bg-secondary: var(--ds-bg-2);
+  --bg-tertiary: var(--ds-bg-3);
+  --bg-elevated: var(--ds-bg-elevated);
+  --bg-hover: var(--ds-gray-200);
+  --bg-active: var(--ds-gray-300);
+  --bg-selected: var(--ds-bg-selected);
+  --bg-input: var(--ds-bg-1);
+  --overlay: var(--ds-overlay);
+  --rail-bg: var(--ds-rail-bg);
+  --rail-hover: var(--ds-rail-hover);
+  --rail-active: var(--ds-rail-hover);
+  --rail-text: var(--ds-rail-text);
+  --sidebar-control-bg: var(--ds-sidebar-soft-bg);
+  --sidebar-item-hover: var(--ds-sidebar-soft-bg);
+  --sidebar-item-selected: var(--ds-sidebar-soft-bg);
+  --border-primary: var(--ds-border);
+  --border-secondary: var(--ds-border-light);
+  --border-focus: var(--ds-blue-500);
+  --text-primary: var(--ds-text-1);
+  --text-secondary: var(--ds-text-2);
+  --text-tertiary: var(--ds-text-3);
+  --text-on-accent: var(--ds-on-accent);
+  --ai-start: var(--ds-purple-600);
+  --ai-end: var(--ds-blue-500);
+  --icon-bg-green: var(--ds-green-50);
+  --icon-bg-blue: var(--ds-blue-50);
+  --icon-bg-red: var(--ds-red-50);
+  --icon-bg-orange: var(--ds-orange-50);
+  --icon-bg-purple: var(--ds-purple-50);
+  --term: var(--ds-bg-1);
+  --term-panel: var(--ds-term-panel);
+  --term-border: var(--ds-term-border);
+  --term-text: var(--ds-term-text);
+  --term-muted: var(--ds-term-muted);
+  --term-green: var(--ds-term-green);
+  --term-blue: var(--ds-term-blue);
+  --term-red: var(--ds-term-red);
+  --term-yellow: var(--ds-term-yellow);
+  --term-selection: var(--ds-term-selection);
+  --shadow-sm: var(--ds-shadow-sm);
+  --shadow-md: var(--ds-shadow-md);
+  --shadow-lg: var(--ds-shadow-lg);
+  --shadow-primary: var(--ds-shadow-primary);
+  --code-block-bg: var(--ds-bg-2);
+  --code-block-header: var(--ds-bg-3);
+  --code-block-border: var(--ds-border);
+  --code-block-text: var(--ds-text-2);
+  --code-block-muted: var(--ds-text-3);
+  --code-block-hover: var(--ds-gray-200);
+}
