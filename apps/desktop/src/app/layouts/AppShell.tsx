@@ -3,10 +3,12 @@ import { Outlet, useLocation } from 'react-router-dom';
 
 import { ConnectionList } from '../../features/connections';
 import { useTopWindowDrag } from '../../shared/hooks/useWindowDrag';
+import { isWindowsDesktopRuntime } from '../../shared/lib/desktop-platform';
 import { ActivityBar } from './ActivityBar';
 import { Sidebar } from './Sidebar';
 import { StatusBar } from './StatusBar';
 import { TerminalWorkspace } from './TerminalWorkspace';
+import { WindowsWindowControls } from './WindowsWindowControls';
 import styles from './AppShell.module.css';
 
 /** 旧客户端主布局：一级导航、连接侧栏、终端工作区和状态栏。 */
@@ -17,6 +19,7 @@ export function AppShell() {
   const sidebarRoute = connectionRoute || location.pathname.startsWith('/sftp');
   const settingsRoute = location.pathname.startsWith('/settings');
   const handleTopWindowDrag = useTopWindowDrag();
+  const windowsDesktop = isWindowsDesktopRuntime();
 
   /** 桌面客户端统一禁用 WebView 原生菜单；业务右键菜单仍由后续冒泡事件打开。 */
   const suppressBrowserContextMenu = (event: MouseEvent<HTMLDivElement>) => {
@@ -50,6 +53,7 @@ export function AppShell() {
       onContextMenuCapture={suppressBrowserContextMenu}
       onMouseDownCapture={handleTopWindowDrag}
     >
+      {windowsDesktop ? <WindowsWindowControls /> : null}
       <ActivityBar />
       {sidebarRoute && !sidebarCollapsed ? (
         <Sidebar>
@@ -63,6 +67,7 @@ export function AppShell() {
           <TerminalWorkspace
             sidebarCollapsed={sidebarCollapsed}
             onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            windowsTitleBar={windowsDesktop}
           />
         </div>
         {!connectionRoute ? <Outlet /> : null}

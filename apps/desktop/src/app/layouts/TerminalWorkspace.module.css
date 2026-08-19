@@ -22,6 +22,10 @@
   border-bottom: 1px solid var(--term-border);
 }
 
+.windowsTabBar {
+  padding-right: 147px;
+}
+
 .panelToggle {
   display: inline-flex;
   width: 34px;

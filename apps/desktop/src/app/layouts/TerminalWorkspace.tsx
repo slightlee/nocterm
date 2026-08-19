@@ -14,6 +14,7 @@ const EXTRA_LOCAL_TERMINAL_PREFIX = 'local:extra:';
 interface TerminalWorkspaceProps {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  windowsTitleBar: boolean;
 }
 
 function sessionStatus(
@@ -26,7 +27,11 @@ function sessionStatus(
 }
 
 /** 终端容器沿用旧客户端结构，负责多会话切换、状态反馈和重连入口。 */
-export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: TerminalWorkspaceProps) {
+export function TerminalWorkspace({
+  sidebarCollapsed,
+  onToggleSidebar,
+  windowsTitleBar,
+}: TerminalWorkspaceProps) {
   const sessions = useTerminalStore((state) => state.sessions);
   const activeId = useTerminalStore((state) => state.activeId);
   const status = useTerminalStore((state) => state.status);
@@ -65,7 +70,7 @@ export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: Termina
 
   return (
     <div className={styles.container}>
-      <header className={styles.tabBar}>
+      <header className={`${styles.tabBar} ${windowsTitleBar ? styles.windowsTabBar : ''}`}>
         <button
           aria-label={sidebarCollapsed ? '显示连接面板' : '隐藏连接面板'}
           aria-pressed={!sidebarCollapsed}
