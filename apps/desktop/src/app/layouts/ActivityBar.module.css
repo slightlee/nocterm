@@ -22,6 +22,11 @@
   padding: 60px 6px 10px;
 }
 
+/* Windows 已由原生标题栏承载窗口操作，内容区无需再避让 macOS 交通灯。 */
+.compactTop .navItems {
+  padding-top: 14px;
+}
+
 .navItem {
   width: 48px;
   height: 48px;

@@ -40,13 +40,17 @@ const navigation = [
 ];
 
 /** 一级导航沿用旧客户端的尺寸、图标与入口顺序。 */
-export function ActivityBar() {
+export function ActivityBar({ compactTop = false }: { compactTop?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const handleWindowDrag = useWindowDrag();
 
   return (
-    <nav className={styles.activityBar} aria-label="主导航" onMouseDown={handleWindowDrag}>
+    <nav
+      className={`${styles.activityBar} ${compactTop ? styles.compactTop : ''}`}
+      aria-label="主导航"
+      onMouseDown={handleWindowDrag}
+    >
       <div className={styles.navItems}>
         {navigation.map((item) => (
           <button

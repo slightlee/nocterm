@@ -8,7 +8,6 @@ import { ActivityBar } from './ActivityBar';
 import { Sidebar } from './Sidebar';
 import { StatusBar } from './StatusBar';
 import { TerminalWorkspace } from './TerminalWorkspace';
-import { WindowsWindowControls } from './WindowsWindowControls';
 import styles from './AppShell.module.css';
 
 /** 旧客户端主布局：一级导航、连接侧栏、终端工作区和状态栏。 */
@@ -53,8 +52,7 @@ export function AppShell() {
       onContextMenuCapture={suppressBrowserContextMenu}
       onMouseDownCapture={handleTopWindowDrag}
     >
-      {windowsDesktop ? <WindowsWindowControls /> : null}
-      <ActivityBar />
+      <ActivityBar compactTop={windowsDesktop} />
       {sidebarRoute && !sidebarCollapsed ? (
         <Sidebar>
           <ConnectionList />
@@ -67,7 +65,6 @@ export function AppShell() {
           <TerminalWorkspace
             sidebarCollapsed={sidebarCollapsed}
             onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
-            windowsTitleBar={windowsDesktop}
           />
         </div>
         {!connectionRoute ? <Outlet /> : null}
