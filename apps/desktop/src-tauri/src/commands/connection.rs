@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use nocterm_application::{
     connection::{CreateConnection, CredentialInput, ImportConnection},
@@ -9,6 +12,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
+    commands::sftp::{SftpTransferState, close_sftp_master},
     dto::{
         connection::{
             ConnectionBackupImportRequest, ConnectionCreateRequest, ConnectionGroupRequest,
@@ -126,7 +130,14 @@ mod tests {
 }
 
 #[tauri::command]
-pub fn connection_delete(state: State<'_, AppState>, id: i64) -> Result<(), ErrorResponse> {
+pub fn connection_delete(
+    state: State<'_, AppState>,
+    transfers: State<'_, SftpTransferState>,
+    id: i64,
+) -> Result<(), ErrorResponse> {
+    // 凭据和连接资料删除后无法再清理远端临时文件，因此先等待相关传输完整退出。
+    transfers.cancel_connection_and_wait(id, Duration::from_secs(5))?;
+    close_sftp_master(&state, id)?;
     state
         .terminal_service()
         .close_connection(id)

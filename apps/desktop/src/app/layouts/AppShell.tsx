@@ -55,7 +55,7 @@ export function AppShell() {
       <ActivityBar compactTop={windowsDesktop} />
       {sidebarRoute && !sidebarCollapsed ? (
         <Sidebar>
-          <ConnectionList />
+          <ConnectionList mode={location.pathname.startsWith('/sftp') ? 'sftp' : 'terminal'} />
         </Sidebar>
       ) : null}
       <section className={styles.workspace}>
@@ -67,7 +67,14 @@ export function AppShell() {
             onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
           />
         </div>
-        {!connectionRoute ? <Outlet /> : null}
+        {!connectionRoute ? (
+          <Outlet
+            context={{
+              sidebarCollapsed,
+              toggleSidebar: () => setSidebarCollapsed((collapsed) => !collapsed),
+            }}
+          />
+        ) : null}
         {!settingsRoute ? <StatusBar /> : null}
       </section>
     </div>

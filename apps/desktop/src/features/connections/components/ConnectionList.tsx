@@ -33,11 +33,12 @@ import type { ConnectionProfile } from '../types/connection-types';
 import { useTerminalStore } from '../../terminal';
 import styles from './ConnectionList.module.css';
 import { onConnectionDialogRequested } from '../model/connection-events';
+import { disconnectSftpSession, getSftpErrorMessage, useSftpStore } from '../../sftp';
 
 const ACTION_FEEDBACK_TIMEOUT_MS = 5_000;
 
 /** 连接侧栏沿用旧客户端的搜索、创建和列表布局。 */
-export function ConnectionList() {
+export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sftp' }) {
   const [query, setQuery] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newGroupId, setNewGroupId] = useState<string | undefined>();
@@ -68,6 +69,10 @@ export function ConnectionList() {
   const terminalStatuses = useTerminalStore((state) => state.statuses);
   const terminalErrors = useTerminalStore((state) => state.errors);
   const closeConnection = useTerminalStore((state) => state.closeConnection);
+  const sftpSessions = useSftpStore((state) => state.sessions);
+  const openSftpSession = useSftpStore((state) => state.openSession);
+  const activateSftpSession = useSftpStore((state) => state.setActive);
+  const closeSftpSession = useSftpStore((state) => state.closeSession);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     if (!normalized) return connections;
@@ -79,6 +84,10 @@ export function ConnectionList() {
   }, [connections, query]);
 
   const groupedConnections = useMemo(() => groupConnections(filtered, groups), [filtered, groups]);
+  const sftpSessionsByConnectionId = useMemo(
+    () => new Map(sftpSessions.map((session) => [session.connectionId, session])),
+    [sftpSessions]
+  );
 
   const createGroup = async () => {
     if (!requireDesktopRuntime()) return;
@@ -114,6 +123,16 @@ export function ConnectionList() {
   const clearActionFeedback = () => {
     setActionError(null);
     setActionMessage(null);
+  };
+
+  const disconnectSftpConnection = async (connectionId: number) => {
+    clearActionFeedback();
+    try {
+      await disconnectSftpSession(String(connectionId));
+      closeSftpSession(String(connectionId));
+    } catch (disconnectError) {
+      setActionError(`断开 SFTP 失败：${getSftpErrorMessage(disconnectError)}`);
+    }
   };
 
   useEffect(() => {
@@ -251,7 +270,8 @@ export function ConnectionList() {
       setDialogOpen(true);
       return;
     }
-    openConnection(connection);
+    if (mode === 'sftp') openSftpSession(connection);
+    else openConnection(connection);
   };
 
   const credentialNotice =
@@ -454,12 +474,26 @@ export function ConnectionList() {
                     onSelect={() => {
                       if (shouldSuppressConnectionClick()) return;
                       setSelectedId(connection.id);
-                      if (sessions.some((session) => session.id === connection.id)) {
+                      if (mode === 'sftp') {
+                        if (
+                          sftpSessions.some(
+                            (session) => session.connectionId === String(connection.id)
+                          )
+                        ) {
+                          activateSftpSession(String(connection.id));
+                        }
+                      } else if (sessions.some((session) => session.id === connection.id)) {
                         activateConnection(connection.id);
                       }
                     }}
                     onOpen={() => openTerminalConnection(connection)}
-                    onDisconnect={() => closeConnection(connection.id)}
+                    onDisconnect={() => {
+                      if (mode === 'sftp') {
+                        void disconnectSftpConnection(connection.id);
+                      } else {
+                        closeConnection(connection.id);
+                      }
+                    }}
                     onEdit={() => {
                       setEditing(connection);
                       setDialogOpen(true);
@@ -472,13 +506,34 @@ export function ConnectionList() {
                     }}
                     onDelete={() => {
                       if (window.confirm(`确定删除连接“${connection.name}”吗？`)) {
-                        closeConnection(connection.id);
-                        void remove(connection.id);
+                        void remove(connection.id)
+                          .then(() => {
+                            closeConnection(connection.id);
+                            closeSftpSession(String(connection.id));
+                          })
+                          .catch(() => undefined);
                       }
                     }}
                     onClone={() => void cloneConnection(connection)}
-                    connectionStatus={terminalStatuses[connection.id]}
-                    connectionError={terminalErrors[connection.id]}
+                    connectionStatus={
+                      mode === 'sftp'
+                        ? sftpSessionsByConnectionId.get(String(connection.id))?.status ===
+                          'connected'
+                          ? 'connected'
+                          : sftpSessionsByConnectionId.get(String(connection.id))?.status ===
+                              'connecting'
+                            ? 'connecting'
+                            : sftpSessionsByConnectionId.get(String(connection.id))?.status ===
+                                'error'
+                              ? 'error'
+                              : 'closed'
+                        : terminalStatuses[connection.id]
+                    }
+                    connectionError={
+                      mode === 'sftp'
+                        ? sftpSessionsByConnectionId.get(String(connection.id))?.lastError
+                        : terminalErrors[connection.id]
+                    }
                     selected={selectedId === connection.id}
                     dragging={draggingConnectionId === connection.id}
                     dropPosition={

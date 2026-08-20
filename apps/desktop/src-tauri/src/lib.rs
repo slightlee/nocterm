@@ -4,6 +4,7 @@ mod state;
 
 use std::sync::Arc;
 
+use commands::sftp::{SftpTransferState, shutdown_sftp};
 use nocterm_application::{connection::ConnectionService, health::HealthService};
 use nocterm_infrastructure::{
     credential::SystemCredentialStore, persistence::SqliteConnectionRepository,
@@ -17,7 +18,7 @@ pub fn run() {
     let health_service =
         HealthService::new(Arc::new(SystemPlatformProbe), env!("CARGO_PKG_VERSION"));
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let database_path = app.path().app_data_dir()?.join("nocterm.db");
@@ -25,11 +26,12 @@ pub fn run() {
                 SqliteConnectionRepository::open(&database_path)
                     .map_err(|error| std::io::Error::other(error.to_string()))?,
             );
-            let credential_store = Arc::new(SystemCredentialStore);
+            let credential_store = Arc::new(SystemCredentialStore::default());
             let connection_service =
                 ConnectionService::with_credential_store(repository.clone(), credential_store);
 
             app.manage(AppState::new(health_service, connection_service));
+            app.manage(SftpTransferState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -57,7 +59,26 @@ pub fn run() {
             commands::ssh_terminal::ssh_terminal_write,
             commands::ssh_terminal::ssh_terminal_resize,
             commands::ssh_terminal::ssh_terminal_close,
+            commands::sftp::list_local_dir,
+            commands::sftp::list_remote_dir,
+            commands::sftp::local_path_exists,
+            commands::sftp::remote_path_exists,
+            commands::sftp::create_local_dir,
+            commands::sftp::create_remote_dir,
+            commands::sftp::rename_local_path,
+            commands::sftp::rename_remote_path,
+            commands::sftp::delete_local_path,
+            commands::sftp::delete_remote_path,
+            commands::sftp::upload_local_to_remote,
+            commands::sftp::download_remote_to_local,
+            commands::sftp::cancel_file_transfer,
+            commands::sftp::close_sftp_session,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Nocterm desktop application");
+        .build(tauri::generate_context!())
+        .expect("failed to build Nocterm desktop application");
+    app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            shutdown_sftp(app_handle);
+        }
+    });
 }
