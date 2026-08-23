@@ -13,7 +13,7 @@ import {
   resizeLocalTerminal,
   writeLocalTerminal,
 } from '../api/local-terminal-client';
-import { attachRightClickPaste } from '../model/terminal-clipboard';
+import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
 import { useTerminalStore } from '../model/terminal-store';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
@@ -99,6 +99,15 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
       paste: (text) => terminal.paste(text),
       onUnavailable: (message) => terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`),
     });
+    // 复制同样要自己接管：Ctrl+C 会被 xterm 当成中断信号，浏览器不会派发 copy 事件。
+    terminal.attachCustomKeyEventHandler(
+      createCopyKeyHandler({
+        hasSelection: () => terminal.hasSelection(),
+        selection: () => terminal.getSelection(),
+        clearSelection: () => terminal.clearSelection(),
+        onUnavailable: (message) => terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`),
+      })
+    );
     const observer = new ResizeObserver(() => {
       fitAddon.fit();
       if (terminalId) void resizeLocalTerminal(terminalId, terminal.cols, terminal.rows);

@@ -21,7 +21,7 @@ import {
   type PasswordPromptState,
   reducePasswordPrompt,
 } from '../model/password-prompt';
-import { attachRightClickPaste } from '../model/terminal-clipboard';
+import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
 import { useTerminalStore } from '../model/terminal-store';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
@@ -168,6 +168,23 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
         drawPrompt();
       },
     });
+    /**
+     * 复制必须自己接管：Ctrl+C 会先被 xterm 当成中断信号，浏览器不会派发 `copy` 事件。
+     *
+     * 口令提示期间对外宣称"没有选区"，于是 Ctrl+C 照旧走 `onData` 去取消连接，而
+     * Ctrl+Shift+C 仍被这里吞掉（复制空选区即无操作），不会误发 `\x03` 打断提示。
+     */
+    terminal.attachCustomKeyEventHandler(
+      createCopyKeyHandler({
+        hasSelection: () => !prompt && terminal.hasSelection(),
+        selection: () => terminal.getSelection(),
+        clearSelection: () => terminal.clearSelection(),
+        onUnavailable: (message) => {
+          terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`);
+          drawPrompt();
+        },
+      })
+    );
     const observer = new ResizeObserver(() => {
       fitAddon.fit();
       if (terminalId) void resizeSshTerminal(terminalId, terminal.cols, terminal.rows);
