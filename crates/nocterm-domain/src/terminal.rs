@@ -15,6 +15,7 @@ pub trait SshTerminalPort: Send + Sync {
         profile: &ConnectionProfile,
         cols: u16,
         rows: u16,
+        password: Option<&str>,
         private_key: Option<&str>,
     ) -> Result<OpenedTerminal, String>;
 

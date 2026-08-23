@@ -1,6 +1,3 @@
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-use std::process::Command;
-
 use nocterm_domain::platform::{PlatformCapabilities, PlatformKind, PlatformProbe};
 
 #[derive(Debug, Default)]
@@ -57,23 +54,14 @@ const fn credential_store() -> &'static str {
     "unsupported"
 }
 
-fn ssh_transport() -> &'static str {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        let binary = if cfg!(target_os = "windows") {
-            "ssh.exe"
-        } else {
-            "/usr/bin/ssh"
-        };
-        return match Command::new(binary).arg("-V").output() {
-            Ok(output) if output.status.success() || !output.stderr.is_empty() => {
-                "openssh-available"
-            }
-            _ => "openssh-unavailable",
-        };
-    }
-    #[allow(unreachable_code)]
-    "unsupported"
+/// SSH 传输实现：进程内 `russh`，与系统是否安装 OpenSSH 无关（见 ADR-002）。
+///
+/// 这里曾经 spawn `ssh -V` 去探测系统 OpenSSH 并上报 `openssh-available`。
+/// 迁移到进程内实现后该探测既无用又有害：没装 OpenSSH 的 Windows 会被报成
+/// `openssh-unavailable`，让用户以为连不上 SSH；而从 GUI 进程 spawn 控制台程序
+/// 还会闪出黑窗，并把启动路径卡在一次同步的进程创建与等待上。
+const fn ssh_transport() -> &'static str {
+    "in-process-russh"
 }
 
 #[cfg(test)]
@@ -86,11 +74,7 @@ mod tests {
         assert_eq!(capabilities.architecture, std::env::consts::ARCH);
         assert_ne!(capabilities.terminal_backend, "");
         assert_ne!(capabilities.credential_store, "");
-        assert!(matches!(
-            capabilities.ssh_transport,
-            "openssh-available" | "openssh-unavailable" | "unsupported"
-        ));
-        #[cfg(target_os = "macos")]
-        assert_eq!(capabilities.ssh_transport, "openssh-available");
+        // SSH 传输与平台、与系统有没有装 OpenSSH 都无关，两个平台上都必须是进程内实现。
+        assert_eq!(capabilities.ssh_transport, "in-process-russh");
     }
 }

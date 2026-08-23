@@ -122,6 +122,18 @@ describe('connection list model', () => {
     ).toBe(true);
   });
 
+  it('treats a bound private key path as ready without any credential binding', () => {
+    // 私钥内容不再写入系统凭据库，所以资料里有路径就算就绪；
+    // 仍要求"没有路径也没有遗留绑定"时保持未就绪，避免连接列表谎报可用。
+    expect(
+      isConnectionReady({
+        ...connection(7, null, null),
+        privateKeyPath: 'D:\\keys\\deploy.pem',
+      })
+    ).toBe(true);
+    expect(isConnectionReady({ ...connection(7, null, null), privateKeyPath: null })).toBe(false);
+  });
+
   it('separates incomplete, offline, connecting, connected and failed indicators', () => {
     const incomplete = connection(6, null, null);
     const ready = markCredentialBound(incomplete, 'private_key');

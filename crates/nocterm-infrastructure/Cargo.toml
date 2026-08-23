@@ -10,3 +10,6 @@ nocterm-domain = { path = "../nocterm-domain" }
 portable-pty.workspace = true
 keyring.workspace = true
 rusqlite.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+tokio.workspace = true

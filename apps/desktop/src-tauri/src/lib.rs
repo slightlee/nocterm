@@ -50,7 +50,7 @@ pub fn run() {
             commands::connection::connection_backup_save,
             commands::credential::credential_store,
             commands::credential::credential_delete,
-            commands::credential::credential_store_file,
+            commands::credential::connection_bind_private_key,
             commands::local_terminal::local_terminal_open,
             commands::local_terminal::local_terminal_write,
             commands::local_terminal::local_terminal_resize,

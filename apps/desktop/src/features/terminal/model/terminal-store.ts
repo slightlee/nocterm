@@ -20,7 +20,15 @@ export type TerminalSession = RemoteTerminalSession | LocalTerminalSession;
 interface TerminalState {
   sessions: TerminalSession[];
   activeId: TerminalSessionId | null;
-  reconnectNonce: number;
+  /**
+   * 按会话记录的重连计数，用于强制重挂载对应终端组件。
+   *
+   * 必须逐会话隔离而不能用一个全局计数：全局计数一旦大于 0，
+   * "当前活动标签用计数、其余标签用 0"的 key 规则会让每次切换标签同时改变
+   * 新旧两个标签的 key，React 于是把两个终端都卸载重建——正在跑的 SSH 会话被关闭，
+   * 交互输入的口令因租约归还而重新追问。
+   */
+  reconnectNonces: Record<string, number>;
   statuses: Record<string, TerminalStatus>;
   errors: Record<string, string | null>;
   status: TerminalStatus;
@@ -39,7 +47,7 @@ interface TerminalState {
 export const useTerminalStore = create<TerminalState>((set) => ({
   sessions: [],
   activeId: null,
-  reconnectNonce: 0,
+  reconnectNonces: {},
   statuses: {},
   errors: {},
   status: 'idle',
@@ -93,6 +101,10 @@ export const useTerminalStore = create<TerminalState>((set) => ({
       const errors = Object.fromEntries(
         Object.entries(current.errors).filter(([key]) => key !== String(targetId))
       );
+      // 会话已从列表移除，其重连计数不再有对应组件，留着只会让映射无界增长。
+      const reconnectNonces = Object.fromEntries(
+        Object.entries(current.reconnectNonces).filter(([key]) => key !== String(targetId))
+      );
       return {
         sessions,
         activeId: nextId,
@@ -100,12 +112,17 @@ export const useTerminalStore = create<TerminalState>((set) => ({
         error: nextId === null ? null : (errors[nextId] ?? null),
         statuses,
         errors,
+        reconnectNonces,
       };
     }),
   reconnectConnection: (id) =>
     set((current) => ({
       activeId: id,
-      reconnectNonce: current.reconnectNonce + 1,
+      // 只递增目标会话的计数，其他标签的 key 保持不变，避免连带重挂载。
+      reconnectNonces: {
+        ...current.reconnectNonces,
+        [String(id)]: (current.reconnectNonces[String(id)] ?? 0) + 1,
+      },
       status: 'connecting',
       error: null,
       statuses: { ...current.statuses, [String(id)]: 'connecting' as TerminalStatus },

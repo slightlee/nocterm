@@ -20,17 +20,20 @@ pub struct ConnectionCreateRequest {
     pub remote_initial_path: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
+    /// 私钥文件路径随资料一起提交：它是本机元数据而非密钥内容，与 `IdentityFile` 同义。
+    #[serde(default)]
+    pub private_key_path: Option<String>,
 }
 
 /// 凭据只随单次写入请求传递，连接资料 DTO 永不包含明文。
+///
+/// 私钥不在此列：它按文件路径引用，随连接资料一起提交（见 `ConnectionCreateRequest`）。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialInputRequest {
     pub kind: String,
     #[serde(default)]
     pub secret: Option<String>,
-    #[serde(default)]
-    pub private_key_path: Option<String>,
 }
 
 impl From<ConnectionCreateRequest> for CreateConnection {
@@ -45,6 +48,7 @@ impl From<ConnectionCreateRequest> for CreateConnection {
             remark: value.remark,
             remote_initial_path: value.remote_initial_path,
             icon: value.icon,
+            private_key_path: value.private_key_path,
         }
     }
 }
@@ -68,6 +72,8 @@ pub struct ConnectionResponse {
     remote_initial_path: Option<String>,
     icon: Option<String>,
     sort_order: Option<f64>,
+    /// 回传路径而非密钥内容，编辑连接时才能显示"当前绑定了哪个私钥文件"。
+    private_key_path: Option<String>,
     credential_kind: Option<String>,
     credential_status: String,
 }
@@ -166,6 +172,7 @@ impl From<ConnectionProfile> for ConnectionResponse {
             remote_initial_path: value.remote_initial_path,
             icon: value.icon,
             sort_order: value.sort_order,
+            private_key_path: value.private_key_path,
             credential_kind: value.credential_kind,
             credential_status: value.credential_status,
         }

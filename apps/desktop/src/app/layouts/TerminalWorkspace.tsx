@@ -31,7 +31,7 @@ export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: Termina
   const activeId = useTerminalStore((state) => state.activeId);
   const status = useTerminalStore((state) => state.status);
   const statuses = useTerminalStore((state) => state.statuses);
-  const reconnectNonce = useTerminalStore((state) => state.reconnectNonce);
+  const reconnectNonces = useTerminalStore((state) => state.reconnectNonces);
   const closeConnection = useTerminalStore((state) => state.closeConnection);
   const activateConnection = useTerminalStore((state) => state.activateConnection);
   const reconnectConnection = useTerminalStore((state) => state.reconnectConnection);
@@ -156,7 +156,7 @@ export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: Termina
             {sessions.map((session) => (
               <div
                 className={session.id === activeId ? styles.terminalWrapper : styles.hidden}
-                key={`${session.id}-${session.id === activeId ? reconnectNonce : 0}`}
+                key={`${session.id}-${reconnectNonces[String(session.id)] ?? 0}`}
               >
                 {session.kind === 'local' ? (
                   <LocalTerminal active={session.id === activeId} sessionId={session.id} />

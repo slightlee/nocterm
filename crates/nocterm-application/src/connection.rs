@@ -20,6 +20,8 @@ pub struct CreateConnection {
     pub remark: Option<String>,
     pub remote_initial_path: Option<String>,
     pub icon: Option<String>,
+    /// 私钥文件路径；与密码不同，它是元数据而非密钥内容，可以随资料一起持久化。
+    pub private_key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,9 +112,7 @@ impl ConnectionService {
         if let Some(credential) = credential.as_ref() {
             store
                 .store(&id.to_string(), &credential.kind, &credential.secret)
-                .map_err(|_| {
-                    credential_error("CREDENTIAL_STORE_FAILED", "保存系统凭据失败", true)
-                })?;
+                .map_err(store_credential_error)?;
         }
 
         let updated = match self.repository.update(id, next.clone()) {
@@ -172,6 +172,36 @@ impl ConnectionService {
         Ok(updated)
     }
 
+    /// 绑定私钥文件：只记录路径，不复制密钥内容。
+    ///
+    /// 这与 OpenSSH 的 `IdentityFile` 同义，也是 PuTTY、Xshell、MobaXterm 的共同做法——
+    /// 没有任何主流客户端把私钥字节塞进系统凭据库。Windows 上更是硬约束：
+    /// 凭据管理器单条 blob 上限 2560 字节，2048 位 RSA 私钥（PEM 约 1.7 KB，
+    /// UTF-16 编码后翻倍）必然被拒。路径引用还顺带避免了密钥出现第二份副本。
+    ///
+    /// 路径的可读性由调用方（Tauri 命令层）在绑定前校验，用例层不做文件 I/O。
+    pub fn bind_private_key_path(
+        &self,
+        connection_id: i64,
+        path: &str,
+    ) -> Result<ConnectionProfile, AppError> {
+        let profile = self.get(connection_id)?;
+        if profile.authentication != AuthenticationMethod::PrivateKey {
+            return Err(credential_error(
+                "CREDENTIAL_KIND_INVALID",
+                "凭据类型与连接认证方式不匹配",
+                false,
+            ));
+        }
+        let path = normalize_private_key_path(Some(path.to_string()))
+            .ok_or_else(|| credential_error("CREDENTIAL_EMPTY", "私钥文件路径不能为空", false))?;
+        let mut next = profile_as_new(&profile);
+        next.private_key_path = Some(path);
+        self.repository.update(connection_id, next).map_err(|_| {
+            AppError::new("CONNECTION_UPDATE_FAILED", "更新连接失败，请稍后重试", true)
+        })
+    }
+
     pub fn store_credential(
         &self,
         connection_id: i64,
@@ -189,7 +219,7 @@ impl ConnectionService {
                 &credential.kind,
                 &credential.secret,
             )
-            .map_err(|_| credential_error("CREDENTIAL_STORE_FAILED", "保存系统凭据失败", true))?;
+            .map_err(store_credential_error)?;
         if self
             .repository
             .upsert_credential_binding(&connection_id.to_string(), &credential.kind, "bound")
@@ -405,6 +435,17 @@ fn validate_credential_input_for_authentication(
             false,
         ));
     }
+    // 私钥内容不再写入系统凭据库：Windows 凭据管理器单条 blob 上限 2560 字节，
+    // 常见 RSA 私钥（2048 位 PEM 约 1.7 KB，UTF-16 编码后翻倍）必然被拒。
+    // 私钥统一按文件路径引用（`bind_private_key_path`），与 OpenSSH `IdentityFile` 一致。
+    // 遗留条目仍可读取与删除，只是不再新增。
+    if credential.kind == "private_key" {
+        return Err(credential_error(
+            "CREDENTIAL_KIND_INVALID",
+            "私钥不写入系统凭据库，请改为绑定私钥文件",
+            false,
+        ));
+    }
     if secret_credential_kind(authentication) != Some(credential.kind.as_str()) {
         return Err(credential_error(
             "CREDENTIAL_KIND_INVALID",
@@ -434,6 +475,7 @@ fn profile_as_new(profile: &ConnectionProfile) -> NewConnectionProfile {
         remark: profile.remark.clone(),
         remote_initial_path: profile.remote_initial_path.clone(),
         icon: profile.icon.clone(),
+        private_key_path: profile.private_key_path.clone(),
     }
 }
 
@@ -474,6 +516,17 @@ fn credential_error(code: &'static str, message: &'static str, retryable: bool) 
     AppError::new(code, message, retryable)
 }
 
+/// 平台写入失败的原因必须带到 UI：长度超限、权限不足和存储不可用的处置方式完全不同，
+/// 统一折叠成"保存系统凭据失败"会让用户和排查者都无从下手。
+/// 适配器只回传平台诊断文本，不包含凭据本身，因此可以安全跨 IPC。
+fn store_credential_error(source: String) -> AppError {
+    AppError::new(
+        "CREDENTIAL_STORE_FAILED",
+        format!("保存系统凭据失败：{source}"),
+        true,
+    )
+}
+
 fn validate_credential_metadata(kind: Option<&str>, status: Option<&str>) -> Result<(), AppError> {
     if kind.is_some_and(|value| !matches!(value, "password" | "private_key" | "ssh_agent")) {
         return Err(AppError::new(
@@ -507,7 +560,18 @@ fn build_profile(input: CreateConnection) -> Result<NewConnectionProfile, AppErr
     profile.remark = input.remark;
     profile.remote_initial_path = input.remote_initial_path;
     profile.icon = input.icon;
+    // 只有私钥登录才保留路径：切换认证方式后残留的旧路径会让"是否已绑定私钥"的判断失真。
+    profile.private_key_path = match authentication {
+        AuthenticationMethod::PrivateKey => normalize_private_key_path(input.private_key_path),
+        _ => None,
+    };
     Ok(profile)
+}
+
+/// 空串与纯空白等同于"未绑定"，避免把用户清空后的输入框存成一个不存在的路径。
+fn normalize_private_key_path(path: Option<String>) -> Option<String> {
+    path.map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]
@@ -578,6 +642,7 @@ mod tests {
                 remark: profile.remark,
                 remote_initial_path: profile.remote_initial_path,
                 icon: profile.icon,
+                private_key_path: profile.private_key_path,
                 created_at: 1,
                 updated_at: 1,
                 group_name: None,
@@ -620,6 +685,7 @@ mod tests {
             current.remark = profile.remark;
             current.remote_initial_path = profile.remote_initial_path;
             current.icon = profile.icon;
+            current.private_key_path = profile.private_key_path;
             Ok(current.clone())
         }
 
@@ -723,6 +789,7 @@ mod tests {
                 remark: None,
                 remote_initial_path: None,
                 icon: None,
+                private_key_path: None,
             })
             .expect("create connection");
 
@@ -744,6 +811,7 @@ mod tests {
                 remark: None,
                 remote_initial_path: None,
                 icon: None,
+                private_key_path: None,
             })
             .expect_err("blank name must fail");
 
@@ -765,19 +833,22 @@ mod tests {
                 host: "server.example.com".to_string(),
                 port: 22,
                 username: "deploy".to_string(),
-                authentication: "password".to_string(),
+                authentication: "private_key".to_string(),
                 group_id: None,
                 remark: None,
                 remote_initial_path: None,
                 icon: None,
+                private_key_path: None,
             })
             .expect("create connection");
 
+        // 用"私钥切密码"而非反向，是因为私钥内容已不再允许写入系统凭据库；
+        // 补偿逻辑本身与凭据类型无关，密码同样能覆盖"写密钥成功但绑定状态失败"的路径。
         let error = service
             .update_with_credential(
                 created.id,
                 CreateConnection {
-                    authentication: "private_key".to_string(),
+                    authentication: "password".to_string(),
                     name: created.name.clone(),
                     host: created.host.clone(),
                     port: created.port,
@@ -786,10 +857,11 @@ mod tests {
                     remark: None,
                     remote_initial_path: None,
                     icon: None,
+                    private_key_path: None,
                 },
                 Some(CredentialInput {
-                    kind: "private_key".to_string(),
-                    secret: "private-key".to_string(),
+                    kind: "password".to_string(),
+                    secret: "s3cret".to_string(),
                 }),
             )
             .expect_err("binding failure must compensate");
@@ -800,8 +872,129 @@ mod tests {
                 .get(created.id)
                 .expect("read connection")
                 .authentication,
-            AuthenticationMethod::Password
+            AuthenticationMethod::PrivateKey
+        );
+        assert!(credentials.read("1", "password").is_err());
+    }
+
+    #[test]
+    fn refuses_to_write_private_key_content_into_the_credential_store() {
+        let credentials = Arc::new(FakeCredentialStore::default());
+        let service = ConnectionService::with_credential_store(
+            Arc::new(FakeRepository::default()),
+            credentials.clone(),
+        );
+        let created = service
+            .create(CreateConnection {
+                name: "Production".to_string(),
+                host: "server.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                authentication: "private_key".to_string(),
+                group_id: None,
+                remark: None,
+                remote_initial_path: None,
+                icon: None,
+                private_key_path: None,
+            })
+            .expect("create connection");
+
+        let error = service
+            .store_credential(
+                created.id,
+                CredentialInput {
+                    kind: "private_key".to_string(),
+                    secret: "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+                },
+            )
+            .expect_err("private key content must be rejected");
+
+        assert_eq!(error.code, "CREDENTIAL_KIND_INVALID");
+        // 拒绝必须发生在触碰平台存储之前，否则超长写入仍会在 Windows 上炸掉。
+        assert!(credentials.read("1", "private_key").is_err());
+    }
+
+    #[test]
+    fn binds_a_private_key_by_path_without_storing_its_content() {
+        let credentials = Arc::new(FakeCredentialStore::default());
+        let service = ConnectionService::with_credential_store(
+            Arc::new(FakeRepository::default()),
+            credentials.clone(),
+        );
+        let created = service
+            .create(CreateConnection {
+                name: "Production".to_string(),
+                host: "server.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                authentication: "private_key".to_string(),
+                group_id: None,
+                remark: None,
+                remote_initial_path: None,
+                icon: None,
+                private_key_path: None,
+            })
+            .expect("create connection");
+
+        let bound = service
+            .bind_private_key_path(created.id, "  D:\\keys\\deploy.pem  ")
+            .expect("bind private key path");
+
+        // 路径两端的空白来自用户粘贴，落库前必须规整，否则后续读文件会失败。
+        assert_eq!(
+            bound.private_key_path.as_deref(),
+            Some("D:\\keys\\deploy.pem")
         );
         assert!(credentials.read("1", "private_key").is_err());
+    }
+
+    #[test]
+    fn refuses_to_bind_a_private_key_path_for_password_login() {
+        let service = ConnectionService::with_credential_store(
+            Arc::new(FakeRepository::default()),
+            Arc::new(FakeCredentialStore::default()),
+        );
+        let created = service
+            .create(CreateConnection {
+                name: "Production".to_string(),
+                host: "server.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                authentication: "password".to_string(),
+                group_id: None,
+                remark: None,
+                remote_initial_path: None,
+                icon: None,
+                private_key_path: None,
+            })
+            .expect("create connection");
+
+        let error = service
+            .bind_private_key_path(created.id, "D:\\keys\\deploy.pem")
+            .expect_err("password login has no private key to bind");
+
+        assert_eq!(error.code, "CREDENTIAL_KIND_INVALID");
+    }
+
+    #[test]
+    fn drops_a_stale_private_key_path_when_switching_away_from_key_login() {
+        let service = ConnectionService::new(Arc::new(FakeRepository::default()));
+        // 认证方式改成密码后仍保留旧路径，会让"是否已绑定私钥"的判断长期失真。
+        let created = service
+            .create(CreateConnection {
+                name: "Production".to_string(),
+                host: "server.example.com".to_string(),
+                port: 22,
+                username: "deploy".to_string(),
+                authentication: "password".to_string(),
+                group_id: None,
+                remark: None,
+                remote_initial_path: None,
+                icon: None,
+                private_key_path: Some("D:\\keys\\deploy.pem".to_string()),
+            })
+            .expect("create connection");
+
+        assert_eq!(created.private_key_path, None);
     }
 }

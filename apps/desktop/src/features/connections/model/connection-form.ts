@@ -11,7 +11,7 @@ export interface ConnectionFormValues {
   username: string;
   authentication: AuthenticationMethod;
   password?: string;
-  privateKey?: string;
+  /** 只保存私钥文件路径；表单从不持有密钥内容，避免明文进入 React 状态树。 */
   privateKeyPath?: string;
   groupId?: string;
   remoteInitialPath?: string;
@@ -78,7 +78,6 @@ export function toConnectionCreateRequest(values: ConnectionFormValues): Connect
     username: values.username.trim(),
     authentication: values.authentication,
     password: values.authentication === 'password' ? values.password?.trim() : undefined,
-    privateKey: values.authentication === 'private_key' ? values.privateKey?.trim() : undefined,
     privateKeyPath:
       values.authentication === 'private_key' ? values.privateKeyPath?.trim() : undefined,
     groupId: values.groupId,

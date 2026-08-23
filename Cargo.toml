@@ -21,3 +21,10 @@ serde = { version = "1", features = ["derive"] }
 tauri = { version = "2" }
 tauri-plugin-dialog = "2.7.1"
 thiserror = "2"
+# 进程内 SSH/SFTP：russh + russh-sftp 纯 Rust 实现，规避 Windows OpenSSH 的密码注入
+# 与 ControlMaster 多路复用限制。使用 ring 加密后端而非默认 aws-lc-rs，
+# 避免 Windows 上额外的 NASM/CMake 原生构建依赖。
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "2.4"
+# 仅启用桥接同步 Port 契约所需的特性；未启用 "fs"，本地文件 IO 一律走 std::fs。
+tokio = { version = "1", features = ["rt-multi-thread", "io-util", "net", "sync", "time", "macros"] }

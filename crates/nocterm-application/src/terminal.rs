@@ -21,10 +21,11 @@ impl TerminalService {
         profile: &ConnectionProfile,
         cols: u16,
         rows: u16,
+        password: Option<&str>,
         private_key: Option<&str>,
     ) -> Result<OpenedTerminal, AppError> {
         self.backend
-            .open(profile, cols, rows, private_key)
+            .open(profile, cols, rows, password, private_key)
             .map_err(terminal_error)
     }
 
@@ -51,13 +52,11 @@ impl TerminalService {
     }
 }
 
+/// 基础设施层返回的都是已归一化、可直接展示的中文提示（不含口令、密钥或原始协议转储），
+/// 因此原样透出：否则认证失败、主机密钥变更、端口不通会塌缩成同一句话，用户无法定位。
+/// 不再叠加前缀——UI 自身已渲染"连接失败："，重复前缀只会让提示更难读。
 fn terminal_error(error: String) -> AppError {
-    let _ = error;
-    AppError::new(
-        "SSH_TERMINAL_FAILED",
-        "SSH 终端操作失败，请检查连接配置和网络后重试",
-        true,
-    )
+    AppError::new("SSH_TERMINAL_FAILED", error, true)
 }
 
 /// 本地终端用例独立于 SSH 连接资料，确保本地 Shell 不经过连接仓储和凭据链路。
@@ -124,6 +123,7 @@ mod tests {
             _profile: &ConnectionProfile,
             _cols: u16,
             _rows: u16,
+            _password: Option<&str>,
             _private_key: Option<&str>,
         ) -> Result<OpenedTerminal, String> {
             if self.fail_open {
@@ -191,6 +191,7 @@ mod tests {
             remote_initial_path: None,
             icon: None,
             sort_order: None,
+            private_key_path: None,
             group_name: None,
             credential_kind: None,
             credential_status: "missing".to_string(),
@@ -203,7 +204,7 @@ mod tests {
     fn delegates_terminal_lifecycle_and_normalizes_backend_errors() {
         let service = TerminalService::new(Arc::new(FakeTerminal::default()));
         let opened = service
-            .open(&profile(), 80, 24, None)
+            .open(&profile(), 80, 24, None, None)
             .expect("open terminal");
         assert_eq!(opened.id, "terminal-1");
         service.write(&opened.id, "echo ok").expect("write");
@@ -211,15 +212,13 @@ mod tests {
         service.close(&opened.id).expect("close");
 
         let failing = TerminalService::new(Arc::new(FakeTerminal { fail_open: true }));
-        let error = match failing.open(&profile(), 80, 24, None) {
+        let error = match failing.open(&profile(), 80, 24, None, None) {
             Ok(_) => panic!("open must fail"),
             Err(error) => error,
         };
         assert_eq!(error.code, "SSH_TERMINAL_FAILED");
-        assert_eq!(
-            error.message,
-            "SSH 终端操作失败，请检查连接配置和网络后重试"
-        );
+        // 后端原因必须原样透出：UI 已负责渲染"连接失败："前缀，用例层再加前缀会重复。
+        assert_eq!(error.message, "backend unavailable");
     }
 
     #[test]

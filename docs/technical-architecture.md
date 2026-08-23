@@ -257,11 +257,11 @@ creating → running → closing → closed
 
 ### 8.4 SSH
 
-负责认证参数、主机密钥策略、连接超时、保活和会话状态。第一版优先封装系统 OpenSSH，由 Domain `SshTerminalPort` 和 Infrastructure `SshTerminalManager` 隐藏具体进程与 PTY 实现；平台探针负责报告 macOS `/usr/bin/ssh` 或 Windows `ssh.exe` 的可用性。
+负责认证参数、主机密钥策略、连接超时、保活和会话状态。按 ADR-002 采用进程内 `russh` 纯 Rust 实现，由 Domain `SshTerminalPort` 和 Infrastructure `SshTerminalManager` 隐藏运行时、连接句柄与通道细节；不再依赖系统 `ssh`/`ssh.exe`，因此无需平台能力探测。
 
 ### 8.5 SFTP
 
-对上层暴露结构化文件能力，不暴露 Shell 命令：list、stat、mkdir、rename、delete、upload、download、cancel。系统 OpenSSH 方案和原生 Rust SSH/SFTP 库需要通过 ADR 与跨平台原型确定；远程 Shell 脚本不能充当 SFTP 领域接口。
+对上层暴露结构化文件能力，不暴露 Shell 命令：list、stat、mkdir、rename、delete、upload、download、cancel。按 ADR-002 采用 `russh-sftp`，与 SSH 终端复用同一套建连、认证与主机密钥策略；远程 Shell 脚本与远端 `tar` 不得充当 SFTP 领域接口。
 
 ### 8.6 Runtime Task
 
@@ -271,15 +271,15 @@ creating → running → closing → closed
 
 Windows 不是最后补上的兼容层，而是从工程基线开始参与编译和契约验证。
 
-| 能力     | macOS                         | Windows                          | 统一边界                 |
-| -------- | ----------------------------- | -------------------------------- | ------------------------ |
-| 本地终端 | PTY                           | ConPTY                           | `TerminalBackend`        |
-| 凭据     | Keychain                      | Credential Manager               | `CredentialStore`        |
-| SSH      | `/usr/bin/ssh` 或后续原生实现 | `ssh.exe` 能力探测或后续原生实现 | `SshTerminalPort`        |
-| SFTP     | 待 ADR 验证                   | 待 ADR 验证                      | `SftpBackend`            |
-| 路径     | POSIX path                    | Windows path                     | `LocalPath`/平台 Adapter |
-| 进程信号 | Unix signal                   | Windows process control          | `ProcessController`      |
-| 打包     | `.app`/`.dmg`                 | `.msi`/`.exe`                    | 构建流水线               |
+| 能力     | macOS               | Windows                 | 统一边界                 |
+| -------- | ------------------- | ----------------------- | ------------------------ |
+| 本地终端 | PTY                 | ConPTY                  | `TerminalBackend`        |
+| 凭据     | Keychain            | Credential Manager      | `CredentialStore`        |
+| SSH      | 进程内 `russh`      | 进程内 `russh`          | `SshTerminalPort`        |
+| SFTP     | 进程内 `russh-sftp` | 进程内 `russh-sftp`     | `SftpBackend`            |
+| 路径     | POSIX path          | Windows path            | `LocalPath`/平台 Adapter |
+| 进程信号 | Unix signal         | Windows process control | `ProcessController`      |
+| 打包     | `.app`/`.dmg`       | `.msi`/`.exe`           | 构建流水线               |
 
 平台规则：
 
@@ -406,7 +406,7 @@ tauri build（发布分支或发布流水线）
 2. **连接资料与列表**：定义连接资料、连接列表、新建弹窗、搜索、分组和排序行为；按架构拆分 UI、用例和 SQLite Repository。
 3. **系统凭据**：实现密码、私钥和 SSH Agent，通过 `CredentialStore` 分别适配 macOS Keychain 与 Windows Credential Manager；数据库只保存引用。
 4. **终端会话**：实现 xterm.js、多标签页、会话状态、输出订阅和资源释放；后端统一 `open/write/resize/close/output/exit` 契约。
-5. **SSH 后端**：实现系统 OpenSSH 调用、认证参数、初始目录、保活和断线处理，并补齐主机密钥与 Windows 能力探测。
+5. **SSH 后端**：实现进程内 `russh` 建连、认证参数、初始目录、保活和断线处理，并落实主机密钥 TOFU 策略。
 6. **验收**：覆盖页面、交互和真实 SSH 行为，macOS/Windows 分别记录结果。
 
 ### 阶段 2：SFTP 完整链路建设
@@ -419,7 +419,7 @@ tauri build（发布分支或发布流水线）
 4. **文件传输**：实现上传、下载、进度、取消、目录传输和失败清理；
 5. **验收**：覆盖大文件、Unicode 路径、权限错误、覆盖和网络中断。
 
-正式实现前通过 ADR-002 的 macOS/Windows 原型确定 SFTP Adapter；允许替换不符合跨平台契约的底层实现，但不得改变已确认的上层页面和交互契约。
+SFTP Adapter 已由 ADR-002 定案为 `russh-sftp`（与 SSH 终端复用同一连接后端）；允许替换不符合跨平台契约的底层实现，但不得改变已确认的上层页面和交互契约。
 
 ### 阶段 3：其余本地客户端能力
 
@@ -473,7 +473,7 @@ feat(sftp): build remote directory browsing
 脚手架实施前后需要形成以下 ADR：
 
 1. `ADR-001`：模块化单体与 Rust workspace 边界；
-2. `ADR-002`：系统 OpenSSH 与原生 Rust SSH/SFTP 的阶段性选择；
+2. `ADR-002`：系统 OpenSSH 与原生 Rust SSH/SFTP 的选择（已定案为 `russh` + `russh-sftp`）；
 3. `ADR-003`：macOS/Windows 凭据 Adapter 实现；
 4. `ADR-004`：Rust IPC DTO 到 TypeScript 的类型同步方式；
 5. `ADR-005`：SQLite Schema 与版本迁移策略；

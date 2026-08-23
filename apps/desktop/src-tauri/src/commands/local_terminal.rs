@@ -3,6 +3,7 @@ use std::{io::Read, thread};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
+    commands::terminal_text::Utf8Stream,
     dto::{
         error::ErrorResponse,
         local_terminal::{LocalTerminalExit, LocalTerminalOpenResponse, LocalTerminalOutput},
@@ -29,16 +30,23 @@ pub fn local_terminal_open(
     // 本地 Shell 输出可能长期阻塞，读取和资源回收都必须离开 IPC 线程。
     thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
+        // 解码器跨读取保持状态，否则被 8 KiB 边界切开的汉字会永久变成 U+FFFD。
+        let mut decoder = Utf8Stream::default();
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(length) => {
+                    let data = decoder.push(&buffer[..length]);
+                    if data.is_empty() {
+                        // 整块都是某个字符的前半截，等下一块补齐再发，避免前端收到空事件。
+                        continue;
+                    }
                     let _ = app.emit(
                         "local-terminal-output",
                         LocalTerminalOutput {
                             terminal_id: reader_terminal_id.clone(),
                             session_id: session_id.clone(),
-                            data: String::from_utf8_lossy(&buffer[..length]).to_string(),
+                            data,
                         },
                     );
                 }

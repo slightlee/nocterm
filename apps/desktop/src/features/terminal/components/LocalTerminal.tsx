@@ -13,6 +13,7 @@ import {
   resizeLocalTerminal,
   writeLocalTerminal,
 } from '../api/local-terminal-client';
+import { attachRightClickPaste } from '../model/terminal-clipboard';
 import { useTerminalStore } from '../model/terminal-store';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
@@ -93,6 +94,11 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
     const input = terminal.onData((data) => {
       if (terminalId) void writeLocalTerminal(terminalId, data);
     });
+    // 与 SSH 终端保持一致的右键粘贴：应用壳禁用了 WebView 原生右键菜单。
+    const detachPaste = attachRightClickPaste(container, {
+      paste: (text) => terminal.paste(text),
+      onUnavailable: (message) => terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`),
+    });
     const observer = new ResizeObserver(() => {
       fitAddon.fit();
       if (terminalId) void resizeLocalTerminal(terminalId, terminal.cols, terminal.rows);
@@ -144,6 +150,7 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
 
     return () => {
       disposed = true;
+      detachPaste();
       observer.disconnect();
       themeObserver.disconnect();
       input.dispose();

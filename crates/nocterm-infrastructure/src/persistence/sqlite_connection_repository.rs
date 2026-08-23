@@ -7,13 +7,15 @@ use nocterm_domain::connection::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
+/// 列顺序即 `map_profile` 的下标契约：新增列只能追加在末尾，避免改动既有下标。
 const PROFILE_COLUMNS: &str = "connection_profiles.id, connection_profiles.name, connection_profiles.host, connection_profiles.port, connection_profiles.username, connection_profiles.authentication, connection_profiles.created_at, connection_profiles.updated_at,
     connection_profiles.group_id, connection_profiles.remark, connection_profiles.remote_initial_path, connection_profiles.icon, connection_profiles.sort_order,
     cg.name AS group_name,
     (SELECT credential_kind FROM credential_bindings WHERE connection_id = CAST(connection_profiles.id AS TEXT)) AS credential_kind,
-    COALESCE((SELECT credential_status FROM credential_bindings WHERE connection_id = CAST(connection_profiles.id AS TEXT)), 'missing') AS credential_status";
+    COALESCE((SELECT credential_status FROM credential_bindings WHERE connection_id = CAST(connection_profiles.id AS TEXT)), 'missing') AS credential_status,
+    connection_profiles.private_key_path";
 
 /// 单进程桌面应用通过互斥连接串行访问 SQLite，避免把连接对象泄露给上层。
 pub struct SqliteConnectionRepository {
@@ -124,10 +126,10 @@ impl ConnectionRepository for SqliteConnectionRepository {
         let profile = connection
             .query_row(
                 "INSERT INTO connection_profiles
-                 (name, host, port, username, authentication, group_id, remark, remote_initial_path, icon)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 (name, host, port, username, authentication, group_id, remark, remote_initial_path, icon, private_key_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  RETURNING id, name, host, port, username, authentication, created_at, updated_at,
-                 group_id, remark, remote_initial_path, icon, sort_order, NULL, NULL, 'missing'",
+                 group_id, remark, remote_initial_path, icon, sort_order, NULL, NULL, 'missing', private_key_path",
                 params![
                     profile.name,
                     profile.host,
@@ -138,6 +140,7 @@ impl ConnectionRepository for SqliteConnectionRepository {
                     profile.remark,
                     profile.remote_initial_path,
                     profile.icon,
+                    profile.private_key_path,
                 ],
                 map_profile,
             )
@@ -177,8 +180,9 @@ impl ConnectionRepository for SqliteConnectionRepository {
                 "UPDATE connection_profiles SET
                    name = ?1, host = ?2, port = ?3, username = ?4, authentication = ?5,
                    group_id = ?6, remark = ?7, remote_initial_path = ?8, icon = ?9,
+                   private_key_path = ?10,
                    updated_at = unixepoch()
-                 WHERE id = ?10",
+                 WHERE id = ?11",
                 params![
                     profile.name,
                     profile.host,
@@ -189,6 +193,7 @@ impl ConnectionRepository for SqliteConnectionRepository {
                     profile.remark,
                     profile.remote_initial_path,
                     profile.icon,
+                    profile.private_key_path,
                     id,
                 ],
             )
@@ -514,6 +519,18 @@ fn migrate(connection: &mut Connection) -> Result<(), ConnectionRepositoryError>
             .map_err(repository_error)?;
     }
 
+    if current_version < 4 {
+        // 私钥改为按路径引用（等价于 OpenSSH 的 IdentityFile）：
+        // Windows 凭据管理器单条 blob 上限 2560 字节，装不下常见 RSA 私钥，
+        // 因此密钥字节留在用户文件里，库中只记录路径。
+        transaction
+            .execute_batch(
+                "ALTER TABLE connection_profiles ADD COLUMN private_key_path TEXT;
+                 INSERT INTO schema_migrations (version) VALUES (4);",
+            )
+            .map_err(repository_error)?;
+    }
+
     transaction.commit().map_err(repository_error)
 }
 
@@ -540,6 +557,7 @@ fn map_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConnectionProfile> {
         group_name: row.get(13)?,
         credential_kind: row.get(14)?,
         credential_status: row.get(15)?,
+        private_key_path: row.get(16)?,
         sync_mode: "local_only".to_string(),
         execution_target: "remote_terminal".to_string(),
     })
@@ -746,5 +764,85 @@ mod tests {
         assert_eq!(imported[0].group_name.as_deref(), Some("生产环境"));
         assert_eq!(imported[0].credential_kind.as_deref(), Some("private_key"));
         assert_eq!(imported[0].credential_status, "metadata_only");
+    }
+
+    #[test]
+    fn persists_the_private_key_path_through_create_update_and_list() {
+        let repository = SqliteConnectionRepository::open_in_memory().expect("open database");
+        let mut profile = draft("Keyed");
+        profile.private_key_path = Some("D:\\keys\\deploy.pem".to_string());
+        let created = repository.create(profile).expect("create");
+
+        // create 走 RETURNING、list 走 PROFILE_COLUMNS 下标映射，两条读路径都要覆盖，
+        // 否则新增列很容易只在其中一处生效。
+        assert_eq!(
+            created.private_key_path.as_deref(),
+            Some("D:\\keys\\deploy.pem")
+        );
+        assert_eq!(
+            repository.list().expect("list")[0]
+                .private_key_path
+                .as_deref(),
+            Some("D:\\keys\\deploy.pem")
+        );
+
+        let mut rebound = draft("Keyed");
+        rebound.private_key_path = Some("D:\\keys\\other.pem".to_string());
+        let updated = repository.update(created.id, rebound).expect("update");
+        assert_eq!(
+            updated.private_key_path.as_deref(),
+            Some("D:\\keys\\other.pem")
+        );
+
+        // 切回密码登录时上层会把路径清空，仓储必须把 NULL 真正写下去而不是保留旧值。
+        let cleared = repository
+            .update(created.id, draft("Keyed"))
+            .expect("clear path");
+        assert_eq!(cleared.private_key_path, None);
+    }
+
+    #[test]
+    fn upgrades_a_pre_v4_database_by_adding_the_private_key_path_column() {
+        let mut connection = Connection::open_in_memory().expect("open database");
+        configure_connection(&connection).expect("configure");
+        // 复刻 v3 结构：老库里没有 private_key_path，迁移必须补列而不是要求重建数据库。
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                     version INTEGER PRIMARY KEY,
+                     applied_at INTEGER NOT NULL DEFAULT (unixepoch())
+                 );
+                 CREATE TABLE connection_profiles (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     name TEXT NOT NULL,
+                     host TEXT NOT NULL,
+                     port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+                     username TEXT NOT NULL,
+                     authentication TEXT NOT NULL,
+                     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     group_id TEXT,
+                     remark TEXT,
+                     sort_order REAL,
+                     remote_initial_path TEXT,
+                     icon TEXT
+                 );
+                 INSERT INTO schema_migrations (version) VALUES (1), (2), (3);
+                 INSERT INTO connection_profiles (name, host, port, username, authentication)
+                 VALUES ('Legacy', 'legacy.example.com', 22, 'deploy', 'private_key');",
+            )
+            .expect("seed legacy schema");
+
+        migrate(&mut connection).expect("migrate legacy database");
+
+        let path: Option<String> = connection
+            .query_row(
+                "SELECT private_key_path FROM connection_profiles WHERE name = 'Legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated column");
+        // 老连接迁移后路径为空，由 resolve_private_key 回落到凭据库里的遗留密钥。
+        assert_eq!(path, None);
     }
 }

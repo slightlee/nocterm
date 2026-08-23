@@ -7,13 +7,13 @@ import { ConnectionItem } from './ConnectionItem';
 import { ContextMenu } from '../../../shared/components/ContextMenu';
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import {
+  bindConnectionPrivateKeyFile,
   importConnectionBackup,
   normalizeConnectionError,
   pickConnectionBackup,
   pickSshConfig,
   resolveLocalUsername,
   resolveSshConfigPrivateKeyPath,
-  storeConnectionCredentialFile,
   saveConnectionBackup,
 } from '../api/connection-client';
 import { createConnectionBackup, parseConnectionBackup } from '../model/connection-backup';
@@ -230,7 +230,7 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
           continue;
         }
         try {
-          await storeConnectionCredentialFile(connectionId, 'private_key', privateKeyPath);
+          await bindConnectionPrivateKeyFile(connectionId, privateKeyPath);
         } catch {
           // 导入主体已由事务提交；单个本机私钥不可用时保留连接并提示用户手动绑定。
           unboundPrivateKeys += 1;
@@ -276,9 +276,9 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
 
   const credentialNotice =
     editing && !isConnectionReady(editing)
-      ? editing.authentication === 'password'
-        ? '此连接尚未绑定密码，请重新输入并保存后再连接。'
-        : '此连接尚未绑定私钥，请选择私钥文件并保存后再连接。'
+      ? editing.authentication === 'private_key'
+        ? '此连接尚未绑定私钥，请选择私钥文件并保存后再连接。'
+        : 'SSH Agent 尚未提供可用身份，请确认代理已启动并已加载密钥。'
       : undefined;
 
   const moveGroup = async (
@@ -591,6 +591,8 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
                   remoteInitialPath: editing.remoteInitialPath ?? undefined,
                   remark: editing.remark ?? undefined,
                   icon: editing.icon ?? undefined,
+                  // 回填已绑定的私钥路径，否则编辑其它字段后保存会把绑定清空。
+                  privateKeyPath: editing.privateKeyPath ?? undefined,
                 }
               : { groupId: newGroupId }
           }

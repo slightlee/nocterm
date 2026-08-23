@@ -1,6 +1,10 @@
 use std::{error::Error, fmt};
 
 /// 连接资料只描述如何定位主机，不保存密码或私钥明文。
+///
+/// `private_key_path` 是唯一的例外形态：它只是一个本机文件路径，属于元数据而非密钥内容，
+/// 与 OpenSSH 的 `IdentityFile` 同义。私钥字节始终留在用户自己的文件里，
+/// 连接时按路径读取，既不入库也不进系统凭据库。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionProfile {
     pub id: i64,
@@ -19,6 +23,7 @@ pub struct ConnectionProfile {
     pub remote_initial_path: Option<String>,
     pub icon: Option<String>,
     pub sort_order: Option<f64>,
+    pub private_key_path: Option<String>,
     pub credential_kind: Option<String>,
     pub credential_status: String,
 }
@@ -108,6 +113,8 @@ pub struct NewConnectionProfile {
     pub remark: Option<String>,
     pub remote_initial_path: Option<String>,
     pub icon: Option<String>,
+    /// 私钥文件路径，仅在认证方式为私钥时有意义；为空表示尚未绑定私钥。
+    pub private_key_path: Option<String>,
 }
 
 /// 备份导入项保留来源 ID，仅用于在事务内关联无密钥的凭据元数据。
@@ -203,6 +210,7 @@ impl NewConnectionProfile {
             remark: None,
             remote_initial_path: None,
             icon: None,
+            private_key_path: None,
         })
     }
 }

@@ -19,6 +19,8 @@ export interface ConnectionProfile {
   remoteInitialPath?: string | null;
   icon?: ConnectionIcon | null;
   sortOrder?: number | null;
+  /** 私钥文件路径（等价于 OpenSSH 的 IdentityFile）；后端只回传路径，密钥内容始终留在文件里。 */
+  privateKeyPath?: string | null;
   credentialKind?: AuthenticationMethod | null;
   credentialStatus?: 'missing' | 'bound' | 'metadata_only';
 }
@@ -36,8 +38,9 @@ export interface ConnectionCreateRequest {
   port: number;
   username: string;
   authentication: AuthenticationMethod;
+  /** 密码只在单次保存请求里出现，随即写入系统凭据库，不回传也不落库。 */
   password?: string;
-  privateKey?: string;
+  /** 私钥按路径引用：与密码不同，它随连接资料一起持久化。 */
   privateKeyPath?: string;
   groupId?: string;
   remark?: string;

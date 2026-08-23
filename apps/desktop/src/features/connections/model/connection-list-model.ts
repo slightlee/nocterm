@@ -17,9 +17,15 @@ export function getNextGroupName(groups: Pick<ConnectionGroup, 'name'>[]): strin
   return `${baseName} ${index}`;
 }
 
-/** 密码可在终端交互输入；私钥必须绑定，SSH Agent 直接使用本机运行环境。 */
+/**
+ * 密码可在终端交互输入；私钥必须已绑定；SSH Agent 直接使用本机运行环境。
+ *
+ * 私钥的"已绑定"判定以资料里的 `privateKeyPath` 为主：密钥内容不再写入系统凭据库，
+ * 因此凭据绑定状态只作为老连接（改造前把密钥存进凭据库）的兼容回落。
+ */
 export function isConnectionReady(connection: ConnectionProfile) {
   if (connection.authentication === 'password') return true;
+  if (connection.authentication === 'private_key' && connection.privateKeyPath) return true;
   return (
     connection.credentialStatus === 'bound' &&
     connection.credentialKind === connection.authentication

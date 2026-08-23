@@ -12,7 +12,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
-    commands::sftp::{SftpTransferState, close_sftp_master},
+    commands::sftp::SftpTransferState,
     dto::{
         connection::{
             ConnectionBackupImportRequest, ConnectionCreateRequest, ConnectionGroupRequest,
@@ -49,6 +49,7 @@ pub fn connection_create(
     state: State<'_, AppState>,
     request: ConnectionCreateRequest,
 ) -> Result<ConnectionResponse, ErrorResponse> {
+    let request = validate_private_key_path(request)?;
     let created = state
         .connection_service()
         .create(CreateConnection::from(request))
@@ -84,28 +85,48 @@ pub fn connection_update(
     })?;
     let credential = credential
         .map(|credential| {
-            let secret = match (credential.secret, credential.private_key_path) {
-                (Some(secret), None) => Ok(secret),
-                (None, Some(path)) if credential.kind == "private_key" => {
-                    crate::commands::credential::read_private_key_file(&path)
-                }
-                _ => Err(ErrorResponse::from(AppError::new(
+            let secret = credential.secret.ok_or_else(|| {
+                ErrorResponse::from(AppError::new(
                     "CREDENTIAL_INPUT_INVALID",
                     "凭据请求无效",
                     false,
-                ))),
-            }?;
+                ))
+            })?;
             Ok::<CredentialInput, ErrorResponse>(CredentialInput {
                 kind: credential.kind,
                 secret,
             })
         })
         .transpose()?;
+    let request = validate_private_key_path(request)?;
     let updated = state
         .connection_service()
         .update_with_credential(id, CreateConnection::from(request), credential)
         .map_err(ErrorResponse::from)?;
     Ok(ConnectionResponse::from(updated))
+}
+
+/// 私钥路径在写库前先验证一次可读性：把"文件不存在/不可读"挡在保存阶段，
+/// 而不是等到用户点开终端才失败。校验只读取并丢弃内容，不做任何持久化。
+fn validate_private_key_path(
+    mut request: ConnectionCreateRequest,
+) -> Result<ConnectionCreateRequest, ErrorResponse> {
+    let path = request
+        .private_key_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if request.authentication != "private_key" {
+        // 换成密码或 Agent 登录后不再保留旧路径，避免"已绑定私钥"的状态残留。
+        request.private_key_path = None;
+        return Ok(request);
+    }
+    if let Some(path) = path.as_deref() {
+        crate::commands::credential::read_private_key_file(path)?;
+    }
+    request.private_key_path = path;
+    Ok(request)
 }
 
 #[cfg(test)]
@@ -137,7 +158,10 @@ pub fn connection_delete(
 ) -> Result<(), ErrorResponse> {
     // 凭据和连接资料删除后无法再清理远端临时文件，因此先等待相关传输完整退出。
     transfers.cancel_connection_and_wait(id, Duration::from_secs(5))?;
-    close_sftp_master(&state, id)?;
+    // 关闭复用的进程内 SFTP 会话，释放底层 russh 连接。
+    state.sftp_manager().close_connection(id);
+    // 连接资料不复存在，交互输入的口令必须一并从内存清除。
+    state.session_passwords().forget(id);
     state
         .terminal_service()
         .close_connection(id)
@@ -241,6 +265,9 @@ pub fn connection_backup_import(
                 remark: entry.remark,
                 remote_initial_path: entry.remote_initial_path,
                 icon: entry.icon,
+                // 备份文件可能来自另一台机器，本机路径在那里未必存在，
+                // 因此导入不携带私钥路径：恢复后由用户重新绑定，避免落一个指向空气的路径。
+                private_key_path: None,
             },
             sort_order: entry.sort_order,
             credential_kind: entry.credential_kind,

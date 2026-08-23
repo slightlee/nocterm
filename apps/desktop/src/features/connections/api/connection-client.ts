@@ -35,37 +35,24 @@ export function listConnections(): Promise<ConnectionProfile[]> {
   return invoke<ConnectionProfile[]>('connection_list');
 }
 
+/**
+ * 只有密码需要从资料里剥离——它写系统凭据库；
+ * `privateKeyPath` 是本机元数据，必须随资料一起提交，否则后端无从知道绑定了哪个私钥。
+ */
 export function createConnection(request: ConnectionCreateRequest): Promise<ConnectionProfile> {
-  const {
-    password: _password,
-    privateKey: _privateKey,
-    privateKeyPath: _privateKeyPath,
-    ...profile
-  } = request;
+  const { password: _password, ...profile } = request;
   void _password;
-  void _privateKey;
-  void _privateKeyPath;
   return invoke<ConnectionProfile>('connection_create', { request: profile });
 }
 
 export function updateConnection(request: ConnectionCreateRequest): Promise<ConnectionProfile> {
-  const {
-    password: _password,
-    privateKey: _privateKey,
-    privateKeyPath: _privateKeyPath,
-    ...profile
-  } = request;
+  const { password: _password, ...profile } = request;
   void _password;
-  void _privateKey;
-  void _privateKeyPath;
+  // 私钥没有"凭据"分支：路径已在资料里，凭据库只承载密码。
   const credential =
     request.authentication === 'password' && request.password
       ? { kind: 'password', secret: request.password }
-      : request.authentication === 'private_key' && request.privateKey
-        ? { kind: 'private_key', secret: request.privateKey }
-        : request.authentication === 'private_key' && request.privateKeyPath
-          ? { kind: 'private_key', privateKeyPath: request.privateKeyPath }
-          : undefined;
+      : undefined;
   return invoke<ConnectionProfile>('connection_update', { request: profile, credential });
 }
 
@@ -129,9 +116,10 @@ export async function resolveSshConfigPrivateKeyPath(path: string): Promise<stri
   return null;
 }
 
+/** 只有密码写入系统凭据库：私钥按路径引用，SSH Agent 无凭据可存。 */
 export function storeConnectionCredential(
   connectionId: number,
-  credentialKind: 'password' | 'private_key',
+  credentialKind: 'password',
   secret: string
 ) {
   return invoke<void>('credential_store', {
@@ -141,14 +129,15 @@ export function storeConnectionCredential(
   });
 }
 
-export function storeConnectionCredentialFile(
-  connectionId: number,
-  credentialKind: 'private_key',
-  path: string
-) {
-  return invoke<void>('credential_store_file', {
+/**
+ * 为已存在的连接补绑私钥文件：只记录路径，密钥字节不进系统凭据库。
+ *
+ * SSH Config 导入这类"先建资料、再补路径"的流程需要它；
+ * 普通新建/编辑走 `createConnection` / `updateConnection` 即可，路径已在资料里。
+ */
+export function bindConnectionPrivateKeyFile(connectionId: number, path: string) {
+  return invoke<void>('connection_bind_private_key', {
     connectionId: String(connectionId),
-    credentialKind,
     path,
   });
 }

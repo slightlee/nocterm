@@ -11,7 +11,6 @@ import {
   normalizeConnectionError,
   reorderConnection,
   storeConnectionCredential,
-  storeConnectionCredentialFile,
   upsertConnectionGroup,
   deleteConnectionGroup,
   updateConnection as updateConnectionRequest,
@@ -76,22 +75,12 @@ export function useConnections() {
     try {
       const created = await createConnectionRequest(request);
       createdId = created.id;
-      const credentialKind =
-        request.authentication === 'password'
-          ? 'password'
-          : request.authentication === 'private_key'
-            ? 'private_key'
-            : null;
-      const secret = credentialKind === 'password' ? request.password : request.privateKey;
-      if (credentialKind && secret) {
-        await storeConnectionCredential(created.id, credentialKind, secret);
-      } else if (created && request.privateKeyPath) {
-        await storeConnectionCredentialFile(created.id, 'private_key', request.privateKeyPath);
+      // 私钥路径已随资料写库，这里只需补写密码这一种系统凭据。
+      const password = request.authentication === 'password' ? request.password : undefined;
+      if (password) {
+        await storeConnectionCredential(created.id, 'password', password);
       }
-      const saved =
-        (credentialKind && secret) || request.privateKeyPath
-          ? markCredentialBound(created, credentialKind ?? 'private_key')
-          : created;
+      const saved = password ? markCredentialBound(created, 'password') : created;
       // 成功后直接使用后端返回对象更新列表，避免额外读取和时间窗口。
       setState((current) => ({
         ...current,
@@ -122,17 +111,8 @@ export function useConnections() {
     }
     try {
       const updated = await updateConnectionRequest(request);
-      const credentialKind =
-        request.authentication === 'password'
-          ? 'password'
-          : request.authentication === 'private_key'
-            ? 'private_key'
-            : null;
-      const secret = credentialKind === 'password' ? request.password : request.privateKey;
-      const saved =
-        (credentialKind && secret) || request.privateKeyPath
-          ? markCredentialBound(updated, credentialKind ?? 'private_key')
-          : updated;
+      const password = request.authentication === 'password' ? request.password : undefined;
+      const saved = password ? markCredentialBound(updated, 'password') : updated;
       setState((current) => ({
         ...current,
         connections: current.connections.map((item) => (item.id === saved.id ? saved : item)),

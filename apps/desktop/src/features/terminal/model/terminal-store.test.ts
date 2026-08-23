@@ -18,7 +18,7 @@ afterEach(() => {
   useTerminalStore.setState({
     sessions: [],
     activeId: null,
-    reconnectNonce: 0,
+    reconnectNonces: {},
     statuses: {},
     errors: {},
     status: 'idle',
@@ -87,5 +87,27 @@ describe('terminal session store', () => {
 
     expect(useTerminalStore.getState().statuses[first.id]).toBe('error');
     expect(useTerminalStore.getState().errors[first.id]).toBe('连接被拒绝');
+  });
+
+  it('bumps only the reconnected session so other tabs keep their mount key', () => {
+    const first = profile(1);
+    const second = profile(2);
+    useTerminalStore.getState().openConnection(first);
+    useTerminalStore.getState().openConnection(second);
+
+    useTerminalStore.getState().reconnectConnection(first.id);
+    // 切回另一个标签不得改变任何计数，否则活着的会话会被 React 卸载重建。
+    useTerminalStore.getState().activateConnection(second.id);
+
+    expect(useTerminalStore.getState().reconnectNonces).toEqual({ 1: 1 });
+  });
+
+  it('drops the reconnect counter together with the closed session', () => {
+    const first = profile(1);
+    useTerminalStore.getState().openConnection(first);
+    useTerminalStore.getState().reconnectConnection(first.id);
+    useTerminalStore.getState().closeConnection(first.id);
+
+    expect(useTerminalStore.getState().reconnectNonces).toEqual({});
   });
 });

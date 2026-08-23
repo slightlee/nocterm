@@ -12,6 +12,7 @@ type SftpErrorCode =
   | 'permissionDenied'
   | 'invalidPath'
   | 'localCredentialMissing'
+  | 'passwordRequired'
   | 'localReadFailed'
   | 'localWriteFailed'
   | 'unknown';
@@ -35,6 +36,10 @@ const SFTP_ERROR_MESSAGES: Record<SftpErrorCode, string> = {
   permissionDenied: '权限不足：当前账号没有执行该远程文件操作的权限。',
   invalidPath: '远程路径无效：请检查路径内容后重试。',
   localCredentialMissing: '本机凭据缺失：请编辑连接重新保存密码、重新绑定私钥或切换为 SSH Agent。',
+  // 文件页面没有输入提示符，只能引导用户去终端输入一次或把密码保存下来。
+  // 口令只在该连接还有活跃终端会话时驻留内存，因此提示里必须点明"保持终端标签打开"。
+  passwordRequired:
+    '尚未提供登录密码：请先打开该连接的 SSH 终端输入一次密码并保持该标签打开，或编辑连接保存密码。',
   localReadFailed: '读取本地文件失败：请检查文件是否仍存在，以及当前账号是否有读取权限。',
   localWriteFailed: '写入本地文件失败：原目标已保留，请检查磁盘空间和目录权限后重试。',
   unknown: '远程文件操作失败，请检查连接配置或稍后重试。',
@@ -62,6 +67,8 @@ function parseSftpError(message: string): ParsedSftpError | null {
   };
 }
 
+// 兼容历史版本遗留的 OpenSSH stderr 文本：当前后端已改为进程内 russh 并统一返回稳定
+// code，此分支只作为未识别错误的最后兜底，避免旧持久化状态或第三方文本直接透出英文。
 function normalizeLegacySftpError(message: string): string {
   if (
     message.includes('AI 命令执行不能使用交互式密码认证') ||
@@ -87,7 +94,7 @@ export function getSftpErrorMessage(err: unknown): string {
   const message = getErrorText(err).trim();
   if (!message) return SFTP_ERROR_MESSAGES.unknown;
 
-  // Tauri 错误同时携带稳定 code 和 OpenSSH 分类标记，优先解析标记而不是泛化 code。
+  // Tauri 错误同时携带命令级 code 和后端稳定分类标记，优先解析标记而不是泛化 code。
   const markerIndex = message.indexOf(SFTP_ERROR_PREFIX);
   if (markerIndex >= 0) {
     const parsed = parseSftpError(message.slice(markerIndex));
@@ -97,6 +104,7 @@ export function getSftpErrorMessage(err: unknown): string {
   const [code] = message.split('\t');
   const codeMessages: Record<string, SftpErrorCode> = {
     SFTP_PASSWORD_UNSUPPORTED: 'passwordUnsupported',
+    SFTP_PASSWORD_REQUIRED: 'passwordRequired',
     SFTP_CREDENTIAL_FAILED: 'localCredentialMissing',
     CREDENTIAL_READ_FAILED: 'localCredentialMissing',
     CREDENTIAL_KIND_INVALID: 'localCredentialMissing',

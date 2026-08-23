@@ -378,7 +378,12 @@ export function ConnectionCreateDialog({
                     <input
                       className={`${styles.input} ${styles.inputWithIcon} ${styles.mono}`}
                       id="connection-private-key"
-                      placeholder={credentialBound ? '已绑定本机私钥' : '选择本地私钥文件'}
+                      placeholder={
+                        // 路径本身已显示在输入框里，占位符只需覆盖"尚未选择"与"旧版凭据"两种空值。
+                        credentialBound
+                          ? '已绑定旧版私钥凭据，可重新选择以改为文件引用'
+                          : '选择本地私钥文件'
+                      }
                       readOnly
                       type="text"
                       value={values.privateKeyPath ?? ''}
