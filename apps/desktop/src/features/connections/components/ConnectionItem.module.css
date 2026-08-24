@@ -5,6 +5,8 @@
 
 .item {
   display: flex;
+  width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 10px;
   min-height: 42px;
@@ -16,6 +18,14 @@
   position: relative;
   user-select: none;
   text-align: left;
+}
+
+.statusSlot {
+  display: grid;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  place-items: center;
 }
 
 .item:hover {
@@ -186,13 +196,11 @@
   border-radius: 50%;
   background: var(--accent-orange-soft);
   border: 1.5px solid var(--accent-orange);
-  flex-shrink: 0;
 }
 
 .offlineDot {
   width: 8px;
   height: 8px;
-  flex-shrink: 0;
   background: var(--text-tertiary);
   border-radius: 50%;
   opacity: 0.72;
@@ -239,7 +247,6 @@
   height: 8px;
   border-radius: 50%;
   background: var(--accent-red);
-  flex-shrink: 0;
 }
 
 /* ---- Online Dot (right side) ---- */
@@ -248,5 +255,4 @@
   height: 10px;
   border-radius: 50%;
   background: var(--accent-green);
-  flex-shrink: 0;
 }

@@ -153,19 +153,20 @@ export function ConnectionItem({
         )}
       </span>
       {indicator ? (
-        <span
-          className={
-            indicator === 'readiness'
-              ? styles.readinessDot
-              : indicator === 'offline'
-                ? styles.offlineDot
-                : indicator === 'error'
-                  ? styles.errorDot
-                  : styles.onlineDot
-          }
-          aria-label={statusLabel}
-          title={statusLabel}
-        />
+        <span className={styles.statusSlot} aria-label={statusLabel} title={statusLabel}>
+          <span
+            aria-hidden="true"
+            className={
+              indicator === 'readiness'
+                ? styles.readinessDot
+                : indicator === 'offline'
+                  ? styles.offlineDot
+                  : indicator === 'error'
+                    ? styles.errorDot
+                    : styles.onlineDot
+            }
+          />
+        </span>
       ) : null}
     </button>
   );
