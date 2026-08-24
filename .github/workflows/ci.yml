@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -23,6 +24,23 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Validate release version sources
+        run: pnpm release:check
+      - name: Validate pull request release change
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-release-version.mjs --base "$BASE_SHA"
+      - name: Validate pushed release change
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          BASE_SHA: ${{ github.event.before }}
+        run: node scripts/check-release-version.mjs --base "$BASE_SHA"
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/check-release-version.mjs --tag "$RELEASE_TAG"
       - name: Validate pull request title
         if: github.event_name == 'pull_request'
         env:

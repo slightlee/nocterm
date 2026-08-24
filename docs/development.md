@@ -53,8 +53,10 @@ corepack pnpm cargo:check
 提交信息采用 Conventional Commits：
 
 ```text
-<type>(<optional-scope>): <subject>
+<type>: <subject>
 ```
+
+仓库不使用 scope，`feat(terminal): ...` 等带括号形式会被 Commitlint 拒绝，以保持提交历史简洁一致。
 
 允许的 `type`：
 
@@ -73,8 +75,8 @@ corepack pnpm cargo:check
 主题必须简洁、明确，不超过 100 个字符。例如：
 
 ```text
-feat(terminal): add local session lifecycle
-fix(sftp): release transfer task after cancellation
+feat: add local session lifecycle
+fix: release transfer task after cancellation
 chore: initialize Nocterm project scaffold
 ```
 
