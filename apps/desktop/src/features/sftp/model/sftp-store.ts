@@ -19,6 +19,7 @@ interface SftpSession {
 interface SftpState {
   sessions: SftpSession[];
   activeId: string | null;
+  runningTransfers: Record<string, string>;
   selectionSummary: {
     scope: 'local' | 'remote' | null;
     count: number;
@@ -34,6 +35,9 @@ interface SftpState {
   setSelectionSummary: (summary: SftpState['selectionSummary']) => void;
   setActive: (connectionId: string) => void;
   closeSession: (connectionId: string) => void;
+  trackTransfer: (taskId: string, connectionId: string) => void;
+  finishTransfer: (taskId: string) => void;
+  hasRunningTransfers: (connectionIds: readonly string[]) => boolean;
 }
 
 function toSftpSession(connection: ConnectionProfile): SftpSession {
@@ -54,6 +58,7 @@ function toSftpSession(connection: ConnectionProfile): SftpSession {
 export const useSftpStore = create<SftpState>()((set, get) => ({
   sessions: [],
   activeId: null,
+  runningTransfers: {},
   selectionSummary: {
     scope: null,
     count: 0,
@@ -129,5 +134,24 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       activeId: nextActiveId,
       selectionSummary: { scope: null, count: 0, totalSize: null },
     });
+  },
+
+  // 传输状态跨路由保留，用户离开文件页后返回仍能获得安全关闭提示。
+  trackTransfer: (taskId, connectionId) =>
+    set((state) => ({
+      runningTransfers: { ...state.runningTransfers, [taskId]: connectionId },
+    })),
+
+  finishTransfer: (taskId) =>
+    set((state) => {
+      if (!(taskId in state.runningTransfers)) return state;
+      const runningTransfers = { ...state.runningTransfers };
+      delete runningTransfers[taskId];
+      return { runningTransfers };
+    }),
+
+  hasRunningTransfers: (connectionIds) => {
+    const targets = new Set(connectionIds);
+    return Object.values(get().runningTransfers).some((connectionId) => targets.has(connectionId));
   },
 }));

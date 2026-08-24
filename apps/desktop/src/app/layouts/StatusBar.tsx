@@ -53,6 +53,9 @@ export function StatusBar() {
 
     onFileTransferProgress((progress) => {
       const now = Date.now();
+      if (progress.status !== 'running') {
+        useSftpStore.getState().finishTransfer(progress.taskId);
+      }
 
       setTransferTasks((current) => {
         const next = new Map(current);

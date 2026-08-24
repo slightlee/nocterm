@@ -14,6 +14,10 @@
   box-shadow: var(--shadow-lg);
 }
 
+.menu.compact {
+  min-width: 112px;
+}
+
 .item {
   display: flex;
   width: 100%;
@@ -21,10 +25,11 @@
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 500;
   text-align: left;
+  white-space: nowrap;
   background: transparent;
   border: 0;
   border-radius: var(--radius-sm);

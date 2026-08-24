@@ -21,10 +21,11 @@ export interface ContextMenuItem {
 interface ContextMenuProps {
   items: (ContextMenuItem | 'separator')[];
   children: ReactNode;
+  compact?: boolean;
 }
 
 /** 使用原生事件实现右键菜单，避免为迁移阶段新增 Radix 依赖。 */
-export function ContextMenu({ items, children }: ContextMenuProps) {
+export function ContextMenu({ items, children, compact = false }: ContextMenuProps) {
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -44,7 +45,8 @@ export function ContextMenu({ items, children }: ContextMenuProps) {
   }, [position]);
 
   const openAt = (x: number, y: number) => {
-    const menuWidth = 190;
+    // 宽度包含内容、内边距和边框，用于确保菜单不会溢出窗口右侧。
+    const menuWidth = compact ? 112 : 190;
     const menuHeight = items.reduce((height, item) => height + (item === 'separator' ? 9 : 34), 8);
     setPosition({
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -77,7 +79,7 @@ export function ContextMenu({ items, children }: ContextMenuProps) {
             <div
               ref={menuRef}
               aria-label="上下文菜单"
-              className={styles.menu}
+              className={`${styles.menu} ${compact ? styles.compact : ''}`}
               role="menu"
               style={{ left: position.x, top: position.y }}
               onMouseDown={(event) => event.stopPropagation()}

@@ -94,7 +94,9 @@ export const useTerminalStore = create<TerminalState>((set) => ({
     set((current) => {
       const targetId = id ?? current.activeId;
       const sessions = current.sessions.filter((item) => item.id !== targetId);
-      const nextId = sessions.at(-1)?.id ?? null;
+      // 关闭后台标签不得抢走当前会话；只有活动标签被关闭时才选择相邻剩余会话。
+      const nextId =
+        current.activeId === targetId ? (sessions.at(-1)?.id ?? null) : current.activeId;
       const statuses = Object.fromEntries(
         Object.entries(current.statuses).filter(([key]) => key !== String(targetId))
       );

@@ -6,6 +6,7 @@ import {
   useTerminalStore,
   type TerminalSessionId,
 } from '../../features/terminal';
+import { TabContextMenu } from '../../shared/components/TabContextMenu';
 import styles from './TerminalWorkspace.module.css';
 
 const PRIMARY_LOCAL_TERMINAL_ID = 'local:default';
@@ -41,6 +42,7 @@ export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: Termina
   const emptyDescription = hasConnections
     ? '双击左侧连接打开远程终端，或先打开本地 Shell。'
     : '打开本地终端即可使用，也可以添加远程服务器。';
+  const sessionIds = sessions.map((session) => session.id);
 
   const handleTabWheel = (event: WheelEvent<HTMLDivElement>) => {
     if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
@@ -95,42 +97,48 @@ export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: Termina
               const production = session.kind === 'remote' && /prod|生产/i.test(session.name);
               const primaryLocal = session.id === PRIMARY_LOCAL_TERMINAL_ID;
               return (
-                <div
-                  className={`${styles.tab} ${primaryLocal ? styles.localTerminalTab : ''} ${selected ? styles.active : ''}`}
-                  data-no-window-drag="true"
+                <TabContextMenu
+                  ids={sessionIds}
                   key={session.id}
+                  targetId={session.id}
+                  onClose={(ids) => ids.forEach((id) => closeConnection(id))}
                 >
-                  <button
-                    aria-selected={selected}
-                    className={styles.tabSelect}
-                    onClick={() => activateConnection(session.id)}
-                    role="tab"
-                    type="button"
+                  <div
+                    className={`${styles.tab} ${primaryLocal ? styles.localTerminalTab : ''} ${selected ? styles.active : ''}`}
+                    data-no-window-drag="true"
                   >
-                    <span className={styles.tabDot} data-status={currentStatus} />
-                    {primaryLocal ? (
-                      <svg
-                        className={styles.localTerminalIcon}
-                        viewBox="0 0 24 24"
-                        aria-hidden="true"
-                      >
-                        <polyline points="4 17 10 11 4 5" />
-                        <line x1="12" y1="19" x2="20" y2="19" />
-                      </svg>
-                    ) : null}
-                    <span className={styles.tabName}>{session.name}</span>
-                    {production ? <span className={styles.tabBadge}>PROD</span> : null}
-                  </button>
-                  <button
-                    aria-label={`关闭 ${session.name}`}
-                    className={styles.tabClose}
-                    onClick={() => closeConnection(session.id)}
-                    title="关闭终端"
-                    type="button"
-                  >
-                    ×
-                  </button>
-                </div>
+                    <button
+                      aria-selected={selected}
+                      className={styles.tabSelect}
+                      onClick={() => activateConnection(session.id)}
+                      role="tab"
+                      type="button"
+                    >
+                      <span className={styles.tabDot} data-status={currentStatus} />
+                      {primaryLocal ? (
+                        <svg
+                          className={styles.localTerminalIcon}
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <polyline points="4 17 10 11 4 5" />
+                          <line x1="12" y1="19" x2="20" y2="19" />
+                        </svg>
+                      ) : null}
+                      <span className={styles.tabName}>{session.name}</span>
+                      {production ? <span className={styles.tabBadge}>PROD</span> : null}
+                    </button>
+                    <button
+                      aria-label={`关闭 ${session.name}`}
+                      className={styles.tabClose}
+                      onClick={() => closeConnection(session.id)}
+                      title="关闭终端"
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </TabContextMenu>
               );
             })}
             {sessions.length > 0 ? (

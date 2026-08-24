@@ -52,6 +52,20 @@ describe('terminal session store', () => {
     expect(useTerminalStore.getState().status).toBe('idle');
   });
 
+  it('keeps the active session when a background tab closes', () => {
+    const first = profile(1);
+    const second = profile(2);
+    useTerminalStore.getState().openConnection(first);
+    useTerminalStore.getState().setSessionStatus(first.id, 'connected');
+    useTerminalStore.getState().openConnection(second);
+    useTerminalStore.getState().activateConnection(first.id);
+
+    useTerminalStore.getState().closeConnection(second.id);
+
+    expect(useTerminalStore.getState().activeId).toBe(first.id);
+    expect(useTerminalStore.getState().status).toBe('connected');
+  });
+
   it('activates an existing session without resetting its status', () => {
     const first = profile(1);
     useTerminalStore.getState().openConnection(first);

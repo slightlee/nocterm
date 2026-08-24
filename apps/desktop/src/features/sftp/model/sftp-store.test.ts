@@ -20,6 +20,7 @@ afterEach(() => {
   useSftpStore.setState({
     sessions: [],
     activeId: null,
+    runningTransfers: {},
     selectionSummary: { scope: null, count: 0, totalSize: null },
   });
 });
@@ -68,5 +69,19 @@ describe('sftp session store', () => {
       status: 'connecting',
       lastError: null,
     });
+  });
+
+  it('tracks running transfers by connection until they finish', () => {
+    const store = useSftpStore.getState();
+    store.trackTransfer('task-1', '1');
+    store.trackTransfer('task-2', '2');
+
+    expect(useSftpStore.getState().hasRunningTransfers(['1'])).toBe(true);
+    expect(useSftpStore.getState().hasRunningTransfers(['3'])).toBe(false);
+
+    useSftpStore.getState().finishTransfer('task-1');
+
+    expect(useSftpStore.getState().hasRunningTransfers(['1'])).toBe(false);
+    expect(useSftpStore.getState().hasRunningTransfers(['2'])).toBe(true);
   });
 });

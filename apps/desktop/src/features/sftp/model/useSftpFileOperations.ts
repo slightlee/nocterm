@@ -16,6 +16,7 @@ import {
   type RemoteDirectoryListing,
 } from '../api/sftp-client';
 import { getSftpErrorMessage } from './sftp-error';
+import { useSftpStore } from './sftp-store';
 import type { CreateEditState, FileRow, PathEditState, RenameEditState } from '../types/sftp-types';
 import { getErrorMessage, joinPath, validateNameInput } from './sftp-view-model';
 
@@ -104,6 +105,7 @@ export function useSftpFileOperations({
             connectionId: activeConnectionId,
             sourcePath: row.path,
           });
+          useSftpStore.getState().trackTransfer(task.taskId, activeConnectionId);
         } catch (err) {
           showToast(`上传失败：${getSftpErrorMessage(err)}`);
         }
@@ -154,6 +156,7 @@ export function useSftpFileOperations({
             total: row.sizeBytes,
             isDir: row.isDir,
           });
+          useSftpStore.getState().trackTransfer(task.taskId, activeConnectionId);
         } catch (err) {
           showToast(`下载失败：${getSftpErrorMessage(err)}`);
         }
@@ -436,6 +439,7 @@ export function useSftpFileOperations({
 
     // 上传/下载完成后只刷新受影响目录，避免整页重新加载。
     onFileTransferProgress((progress) => {
+      if (progress.status !== 'running') useSftpStore.getState().finishTransfer(progress.taskId);
       const target = transferTargetsRef.current.get(progress.taskId);
       if (!target) return;
       if (progress.status === 'error' || progress.status === 'cancelled') {
@@ -487,6 +491,7 @@ export function useSftpFileOperations({
         transferCleanupTimersRef.current.delete(taskId);
       }
       transferTargetsRef.current.delete(taskId);
+      useSftpStore.getState().finishTransfer(taskId);
 
       if (target.type === 'upload') {
         const connectionId = target.connectionId || activeConnectionIdRef.current;
@@ -494,6 +499,7 @@ export function useSftpFileOperations({
         void uploadLocalToRemote(connectionId, target.sourcePath, target.path)
           .then((task) => {
             transferTargetsRef.current.set(task.taskId, { ...target, connectionId });
+            useSftpStore.getState().trackTransfer(task.taskId, connectionId);
           })
           .catch((err) => {
             showToast(`重新上传失败：${getSftpErrorMessage(err)}`);
@@ -512,6 +518,7 @@ export function useSftpFileOperations({
       )
         .then((task) => {
           transferTargetsRef.current.set(task.taskId, { ...target, connectionId });
+          useSftpStore.getState().trackTransfer(task.taskId, connectionId);
         })
         .catch((err) => {
           showToast(`重新下载失败：${getSftpErrorMessage(err)}`);
