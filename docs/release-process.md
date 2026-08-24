@@ -57,26 +57,23 @@ Nocterm 使用四个发布阶段：
 
 正式版出现紧急安全或核心缺陷时，从受影响版本发布新的 Patch，不重新使用旧版本号。例如 `0.1.0` 修复后发布 `0.1.1`，不得替换已有的 `0.1.0` 安装包。
 
-## 4. 版本同步位置
+## 4. 唯一版本源
 
-发布版本必须在以下文件中保持一致：
+`package.json` 的 `version` 是 Nocterm 桌面产品版本的唯一来源。`apps/desktop/src-tauri/tauri.conf.json` 通过相对路径引用该文件，Tauri 构建产物与运行时健康信息都使用解析后的应用版本。
 
-- `package.json`；
-- `apps/desktop/package.json`；
-- `Cargo.toml` 的 `[workspace.package].version`；
-- `apps/desktop/src-tauri/tauri.conf.json` 的 `version`。
+`apps/desktop/package.json` 是私有前端工作区包，不声明独立版本；`Cargo.toml` 的 `[workspace.package].version` 只描述不会单独发布的内部 Rust crate，不得用作产品版本。这样可以避免一次发布人工同步多个文件，也不会因为产品发版而制造无意义的 npm 或 Cargo 锁文件变更。
 
-Git Tag 使用 `v` 前缀，例如 `v0.1.0-beta.1`。Tag 必须指向用于生成安装包的同一提交。版本修改由包管理器或明确的发布脚本完成；锁文件若被工具更新，应与版本变更一并审查，禁止为制造一致性而手工修改生成内容。
+Git Tag 使用 `v` 前缀，例如 `v0.1.0-beta.1`。Tag 必须指向用于生成安装包的同一提交。产品版本由 Release Please 更新；锁文件若被工具更新，应与版本变更一并审查，禁止为制造一致性而手工修改生成内容。
 
 Git Tag 是“已经发布”的唯一版本基线。版本递增必须高于目标分支可达的最新有效发布 Tag，Tag 推送还会与仓库已有的全部有效发布 Tag 比较，防止给旧提交补发低版本 Tag。仓库尚无发布 Tag 时允许建立首个预发布版本。因此，尚未发布阶段源码中的 `0.1.0` 开发占位值不会阻止首次 `0.1.0-beta.1`，但一旦存在 `v0.1.0-beta.1`，后续版本就必须严格高于它。CI 必须获取完整 Git 历史与 Tag，禁止在浅克隆且 Tag 不完整的环境中作发布判定。
 
-发布提交使用：
+Release Please 生成的发布提交使用：
 
 ```text
 chore: prepare v0.1.0-beta.1
 ```
 
-仓库通过 `pnpm release:check` 校验版本格式和同步状态。提交修改任何一个版本文件时，必须在同一个发布提交中修改全部四处；本地 `commit-msg` Hook 和远程 CI 会分别校验，不能依赖 Hook 作为唯一门禁。
+仓库通过 `pnpm release:check` 校验版本格式、唯一版本源配置、版本递增、发布提交和 Tag。修改 `package.json` 的产品版本时必须使用上述发布提交；本地 `commit-msg` Hook 和远程 CI 会分别校验，不能依赖 Hook 作为唯一门禁。
 
 ## 5. 变更等级与发布决策
 
@@ -197,16 +194,20 @@ Nocterm_0.1.0-beta.1_windows_x86_64-setup.exe
 
 当前阶段从受保护的 `main` 分支发布，不创建长期 `develop` 或 `release/*` 分支。需要修复时通过正常分支和 Pull Request 回到 `main`，以减少分支漂移。
 
+普通贡献者不创建发布分支、不修改产品版本，只通过正常分支和 Pull Request 合入 Conventional Commits。Release Please 在 `main` 更新后创建或刷新唯一的发布 Pull Request，统一维护 `package.json`、`.release-please-manifest.json` 和 `CHANGELOG.md`。发布 Pull Request 必须通过与普通 PR 相同的 CI 和人工审查，不自动合并。
+
+发布 Pull Request 必须使用 Rebase merge 或 Squash merge，使 `chore: prepare v<version>` 成为 `main` 上可直接标记的发布提交；禁止产生额外 Merge Commit，否则提交、Tag 与产物无法保持一一对应。
+
 发布步骤：
 
-1. 确认发布范围、问题等级、已知限制和目标版本；
-2. 更新全部版本位置和必要发布配置；
-3. 运行前端、Rust 和双平台 CI 门禁；
+1. 确认发布范围、问题等级、已知限制和目标通道；
+2. 审查 Release Please 提议的版本、变更日志和提交范围；
+3. 运行前端、Rust 和双平台 CI 门禁后合并发布 Pull Request；
 4. 在 macOS、Windows 分别生成安装包；
 5. 使用最终安装包执行对应冒烟与业务验收；
-6. 检查提交范围，创建版本提交；
+6. 确认发布提交仍为 `chore: prepare v<version>`；
 7. 创建与版本一致的 annotated Git Tag；
-8. 推送提交和 Tag，发布对应安装包、哈希与发布说明；
+8. 推送 Tag，发布对应安装包、哈希与发布说明；
 9. Alpha、Beta、RC 在发布平台标记为 Pre-release，正式版不得标记为 Pre-release；
 10. 记录测试结果，并只按真实证据更新能力矩阵。
 
@@ -243,8 +244,14 @@ Git Commit 与安装包 SHA-256
 
 若问题涉及凭据泄露或数据损坏，必须同时给出凭据轮换、数据恢复和用户通知方案，不能只发布二进制修复。
 
-## 13. 自动化边界
+## 13. 自动化边界与仓库配置
 
-当前阶段不创建专用 Release Skill。仓库内 `scripts/check-release-version.mjs` 已负责版本格式、同步、递增、发布提交和 Tag 一致性检查，本地 Hook 与 CI 共同调用；发布打包自动化在至少完成一次真实 Beta、流程稳定后再增加。
+当前阶段使用 Release Please 自动维护版本 Pull Request，不创建专用 Release Skill，也不自动创建 Tag、GitHub Release 或发布安装包。`scripts/check-release-version.mjs` 负责版本格式、唯一版本源、递增、发布提交和 Tag 一致性检查，本地 Hook 与 CI 共同调用。
 
-自动化不得代替版本范围确认、问题定级、真实设备验收、签名凭据操作和最终发布授权。
+`.release-please-manifest.json` 中的 `0.1.0-beta.0` 仅是首次自动发布的启动基线，不是已经发布或允许分发的产品版本；首次发布 Pull Request 应提议 `0.1.0-beta.1`。`release-please-config.json` 的 `bootstrap-sha` 只用于首次生成变更日志，首个发布 Pull Request 合并后可通过普通维护 PR 删除。
+
+仓库维护者必须创建名为 `RELEASE_PLEASE_TOKEN` 的 GitHub Actions Secret。推荐使用限定到本仓库、设置有效期的 fine-grained PAT，最小授予 Contents、Pull requests 和 Issues 的读写权限；不得把 Token 写入仓库、日志或 PR。不能使用默认 `GITHUB_TOKEN` 替代，因为它创建的发布 Pull Request 不会触发本仓库的后续 CI 工作流。
+
+Beta 阶段配置使用 `versioning=prerelease`、`prerelease-type=beta`。切换到 RC 或 GA 必须通过独立维护 PR 修改发布通道配置，并在提交正文加入明确的 `Release-As: <目标版本>`；例如 `0.1.0-rc.1` 或 `0.1.0`，不得依赖工具猜测跨通道版本。
+
+自动化不得代替版本范围确认、问题定级、真实设备验收、签名凭据操作、Tag 创建和最终发布授权。发布打包自动化在至少完成一次真实 Beta、流程稳定后再增加。

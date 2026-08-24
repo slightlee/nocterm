@@ -3,12 +3,11 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export const VERSION_FILES = [
-  'package.json',
-  'apps/desktop/package.json',
-  'Cargo.toml',
-  'apps/desktop/src-tauri/tauri.conf.json',
-];
+export const VERSION_FILES = ['package.json'];
+
+const DESKTOP_PACKAGE_FILE = 'apps/desktop/package.json';
+const TAURI_CONFIG_FILE = 'apps/desktop/src-tauri/tauri.conf.json';
+const TAURI_PRODUCT_VERSION_SOURCE = '../../../package.json';
 
 const VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.([1-9]\d*))?$/;
@@ -64,21 +63,22 @@ export function validateVersionEntries(entries) {
       errors.push(`${file} 的版本“${version}”不符合 Nocterm 发布格式`);
     }
   }
-  const versions = new Set(entries.map(([, version]) => version));
-  if (versions.size > 1) {
-    errors.push(
-      `版本号不一致：${entries.map(([file, version]) => `${file}=${version}`).join(', ')}`
-    );
-  }
   return errors;
 }
 
-export function validateChangedVersionFiles(changedFiles) {
-  const changed = new Set(changedFiles);
-  const touched = VERSION_FILES.filter((file) => changed.has(file));
-  if (touched.length === 0 || touched.length === VERSION_FILES.length) return [];
-  const missing = VERSION_FILES.filter((file) => !changed.has(file));
-  return [`版本变更必须同时修改四个版本文件，缺少：${missing.join(', ')}`];
+/** 防止重新引入多个产品版本源；内部 npm/Cargo 包版本不参与桌面产品发布。 */
+export function validateVersionSourceConfiguration(readContent) {
+  const errors = [];
+  const desktopPackage = JSON.parse(readContent(DESKTOP_PACKAGE_FILE));
+  const tauriConfig = JSON.parse(readContent(TAURI_CONFIG_FILE));
+
+  if (Object.hasOwn(desktopPackage, 'version')) {
+    errors.push(`${DESKTOP_PACKAGE_FILE} 不应声明独立产品版本`);
+  }
+  if (tauriConfig.version !== TAURI_PRODUCT_VERSION_SOURCE) {
+    errors.push(`${TAURI_CONFIG_FILE} 的 version 必须引用 ${TAURI_PRODUCT_VERSION_SOURCE}`);
+  }
+  return errors;
 }
 
 export function findChangedVersionFiles(beforeEntries, afterEntries) {
@@ -95,27 +95,14 @@ export function validateReleaseCommit(message, changedFiles, version) {
     return [`版本变更提交信息必须为“${expected}”，当前为“${subject}”`];
   }
   if (!touchesVersion && subject.startsWith('chore: prepare v')) {
-    return ['发布提交必须实际修改全部版本文件'];
+    return ['发布提交必须实际修改产品版本'];
   }
   return [];
 }
 
 function readVersionFromContent(file, content) {
-  if (file.endsWith('.json')) {
-    const version = JSON.parse(content).version;
-    if (typeof version !== 'string') throw new Error(`${file} 缺少字符串 version`);
-    return version;
-  }
-
-  const sectionStart = content.indexOf('[workspace.package]');
-  const workspaceSection =
-    sectionStart >= 0
-      ? content
-          .slice(sectionStart + '[workspace.package]'.length)
-          .split(/\n(?=\[[^\]]+\]\s*(?:\n|$))/, 1)[0]
-      : null;
-  const version = workspaceSection?.match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
-  if (!version) throw new Error(`${file} 的 [workspace.package] 缺少 version`);
+  const version = JSON.parse(content).version;
+  if (typeof version !== 'string') throw new Error(`${file} 缺少字符串 version`);
   return version;
 }
 
@@ -159,7 +146,6 @@ function validateStagedCommit(messageFile, errors) {
   const headEntries = readGitEntries('HEAD');
   const version = assertValidEntries(stagedEntries, errors);
   const changedVersionFiles = findChangedVersionFiles(headEntries, stagedEntries);
-  errors.push(...validateChangedVersionFiles(changedVersionFiles));
   errors.push(
     ...validateReleaseCommit(readFileSync(messageFile, 'utf8'), changedVersionFiles, version)
   );
@@ -186,7 +172,6 @@ function validateReleaseHistory(baseRef, version, errors) {
   }
 
   const { commit, changedVersionFiles } = versionCommits[0];
-  errors.push(...validateChangedVersionFiles(changedVersionFiles));
   const subject = runGit(['show', '-s', '--format=%s', commit]);
   errors.push(...validateReleaseCommit(subject, changedVersionFiles, version));
 }
@@ -197,8 +182,6 @@ function validateAgainstBase(baseRef, errors) {
   const currentEntries = readGitEntries('HEAD');
   const currentVersion = assertValidEntries(currentEntries, errors);
   const changedVersionFiles = findChangedVersionFiles(baseEntries, currentEntries);
-  const versionErrors = validateChangedVersionFiles(changedVersionFiles);
-  errors.push(...versionErrors);
   if (changedVersionFiles.length === 0) return;
 
   assertValidEntries(baseEntries, errors);
@@ -207,7 +190,7 @@ function validateAgainstBase(baseRef, errors) {
   } else {
     errors.push('发布版本校验需要完整 Git 历史与 Tag，请取消浅克隆后重试');
   }
-  if (versionErrors.length === 0) validateReleaseHistory(baseRef, currentVersion, errors);
+  validateReleaseHistory(baseRef, currentVersion, errors);
 }
 
 function validateTag(tag, errors) {
@@ -251,6 +234,10 @@ export function main(args = process.argv.slice(2)) {
   const baseRef = optionValue(args, '--base');
   const tag = optionValue(args, '--tag');
 
+  const readContent = commitMessageFile
+    ? (file) => runGit(['show', `:${file}`])
+    : (file) => readFileSync(file, 'utf8');
+  errors.push(...validateVersionSourceConfiguration(readContent));
   const entries = commitMessageFile ? readGitEntries('') : readWorkingTreeEntries();
   const currentVersion = assertValidEntries(entries, errors);
   if (commitMessageFile) validateStagedCommit(commitMessageFile, errors);

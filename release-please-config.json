@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "b9a9270161c7fce3d33d0ef72ba678fe8899223c",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "skip-github-release": true,
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "nocterm",
+      "versioning": "prerelease",
+      "prerelease": true,
+      "prerelease-type": "beta",
+      "pull-request-title-pattern": "chore: prepare v${version}"
+    }
+  }
+}

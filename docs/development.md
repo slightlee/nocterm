@@ -83,3 +83,5 @@ chore: initialize Nocterm project scaffold
 一次提交只表达一个完整意图。提交前 Husky 会通过 lint-staged 格式化并检查暂存文件，`commit-msg` Hook 会执行 Commitlint；不得使用 `--no-verify` 绕过失败，除非已明确说明 Hook 自身故障并获得确认。完整质量门禁仍使用 `corepack pnpm check` 和 `corepack pnpm cargo:check`。
 
 远程仓库必须保护 `main`，禁止直接推送，并把 CI 配置为 Pull Request 的 Required Check。本地 Hook 可被主动绕过，不能替代远程合并门禁。
+
+普通贡献者只提交符合上述规范的功能、修复和文档变更，不手工递增产品版本。Release Please 根据合并到 `main` 的 Conventional Commits 维护发布 Pull Request；产品版本、发布通道切换、Tag 和最终发布仍按 `docs/release-process.md` 执行。

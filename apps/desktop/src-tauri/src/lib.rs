@@ -15,12 +15,9 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let health_service =
-        HealthService::new(Arc::new(SystemPlatformProbe), env!("CARGO_PKG_VERSION"));
-
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(move |app| {
+        .setup(|app| {
             let database_path = app.path().app_data_dir()?.join("nocterm.db");
             let repository = Arc::new(
                 SqliteConnectionRepository::open(&database_path)
@@ -29,6 +26,11 @@ pub fn run() {
             let credential_store = Arc::new(SystemCredentialStore::default());
             let connection_service =
                 ConnectionService::with_credential_store(repository.clone(), credential_store);
+            // 产品版本由 Tauri 配置解析根 package.json；Cargo crate 版本仅描述内部包。
+            let health_service = HealthService::new(
+                Arc::new(SystemPlatformProbe),
+                app.package_info().version.to_string(),
+            );
 
             app.manage(AppState::new(health_service, connection_service));
             app.manage(SftpTransferState::default());

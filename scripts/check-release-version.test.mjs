@@ -7,10 +7,10 @@ import {
   findLatestReleaseVersion,
   findChangedVersionFiles,
   parseReleaseVersion,
-  validateChangedVersionFiles,
   validateReleaseCommit,
   validateReleaseProgression,
   validateVersionEntries,
+  validateVersionSourceConfiguration,
 } from './check-release-version.mjs';
 
 describe('release version rules', () => {
@@ -52,28 +52,39 @@ describe('release version rules', () => {
     assert.match(validateReleaseProgression('0.1.0', tags)[0], /0\.1\.0/);
   });
 
-  it('requires all version sources to change together', () => {
-    assert.deepEqual(validateChangedVersionFiles([]), []);
-    assert.deepEqual(validateChangedVersionFiles(VERSION_FILES), []);
-    assert.match(validateChangedVersionFiles([VERSION_FILES[0]])[0], /缺少/);
+  it('uses the root package as the only product version source', () => {
+    assert.deepEqual(VERSION_FILES, ['package.json']);
   });
 
   it('ignores non-version changes inside a version source file', () => {
     const before = VERSION_FILES.map((file) => [file, '0.1.0']);
     const unchanged = before.map(([file, version]) => [file, version]);
-    const changed = before.map(([file, version], index) => [file, index === 0 ? '0.1.1' : version]);
+    const changed = before.map(([file]) => [file, '0.1.1']);
 
     assert.deepEqual(findChangedVersionFiles(before, unchanged), []);
     assert.deepEqual(findChangedVersionFiles(before, changed), [VERSION_FILES[0]]);
   });
 
-  it('requires consistent version values', () => {
-    const consistent = VERSION_FILES.map((file) => [file, '0.1.0-beta.1']);
-    const inconsistent = consistent.map((entry, index) =>
-      index === 0 ? [entry[0], '0.1.0-beta.2'] : entry
+  it('validates the canonical product version', () => {
+    assert.deepEqual(validateVersionEntries([['package.json', '0.1.0-beta.1']]), []);
+    assert.match(validateVersionEntries([['package.json', '0.1.0-preview.1']])[0], /不符合/);
+  });
+
+  it('requires Tauri to reference the canonical version source', () => {
+    const files = new Map([
+      ['apps/desktop/package.json', '{"name":"@nocterm/desktop","private":true}'],
+      ['apps/desktop/src-tauri/tauri.conf.json', '{"version":"../../../package.json"}'],
+    ]);
+
+    assert.deepEqual(
+      validateVersionSourceConfiguration((file) => files.get(file)),
+      []
     );
-    assert.deepEqual(validateVersionEntries(consistent), []);
-    assert.match(validateVersionEntries(inconsistent)[0], /不一致/);
+
+    files.set('apps/desktop/package.json', '{"version":"0.1.0"}');
+    files.set('apps/desktop/src-tauri/tauri.conf.json', '{"version":"0.1.0"}');
+    const errors = validateVersionSourceConfiguration((file) => files.get(file));
+    assert.equal(errors.length, 2);
   });
 
   it('binds release commit messages to the staged version', () => {
