@@ -86,7 +86,6 @@ export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: Termina
           className={styles.remoteTabViewport}
           role="tablist"
           aria-label="SSH 终端会话"
-          data-no-window-drag="true"
           onWheel={handleTabWheel}
         >
           <div className={styles.remoteTabTrack}>
@@ -98,6 +97,7 @@ export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: Termina
               return (
                 <div
                   className={`${styles.tab} ${primaryLocal ? styles.localTerminalTab : ''} ${selected ? styles.active : ''}`}
+                  data-no-window-drag="true"
                   key={session.id}
                 >
                   <button

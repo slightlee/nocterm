@@ -28,12 +28,13 @@ corepack pnpm cargo:check
 
 1. 执行 `corepack pnpm tauri dev`；
 2. 确认窗口可启动、缩放和关闭；
-3. 顶部状态应变为 `desktop core ready`；
-4. TARGET 显示当前 `macos` 或 `windows` 及正确 CPU 架构；
-5. TERMINAL 显示 `macos-pty` 或 `windows-conpty`；
-6. CREDENTIAL 显示对应系统安全存储；
-7. 底部事件计数至少为 1，证明 Command/Event 示例链路均已接通；
-8. 关闭窗口后确认进程正常退出。
+3. 打开 SSH/SFTP 标签后，按住顶部标签栏空白区或左侧导航空白区拖动，确认窗口跟随鼠标移动；在按钮、输入框和具体标签上操作时不得误触窗口拖拽；
+4. 顶部状态应变为 `desktop core ready`；
+5. TARGET 显示当前 `macos` 或 `windows` 及正确 CPU 架构；
+6. TERMINAL 显示 `macos-pty` 或 `windows-conpty`；
+7. CREDENTIAL 显示对应系统安全存储；
+8. 底部事件计数至少为 1，证明 Command/Event 示例链路均已接通；
+9. 关闭窗口后确认进程正常退出。
 
 Windows 还需确认系统原生标题栏及右上角最小化、最大化/还原和关闭按钮均可用，内容区左侧导航不再保留 macOS 交通灯空位。macOS 继续使用系统交通灯覆盖样式。
 

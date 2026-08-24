@@ -25,7 +25,7 @@ function startWindowDrag(event: MouseEvent<HTMLElement>) {
   if (!isDesktopRuntime()) return;
   void getCurrentWindow()
     .startDragging()
-    .catch(() => undefined);
+    .catch((error: unknown) => console.warn('启动窗口拖拽失败', error));
 }
 
 /** 保持旧版无侵入标题栏拖拽，同时跳过所有交互控件。 */

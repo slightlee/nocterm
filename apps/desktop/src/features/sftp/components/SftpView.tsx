@@ -130,7 +130,6 @@ function SFTPView() {
         <div
           aria-label="SFTP 连接会话"
           className={styles.sessionTabViewport}
-          data-no-window-drag="true"
           onWheel={handleTabWheel}
           role="tablist"
         >
@@ -142,6 +141,7 @@ function SFTPView() {
               return (
                 <div
                   className={`${styles.sessionTab} ${selected ? styles.active : ''}`}
+                  data-no-window-drag="true"
                   key={session.connectionId}
                   title={connectionTitle}
                 >
