@@ -151,8 +151,9 @@ function validateStagedCommit(messageFile, errors) {
   );
 }
 
-function validateReleaseHistory(baseRef, version, errors) {
-  const commitsOutput = runGit(['log', '--format=%H', '--reverse', `${baseRef}..HEAD`]);
+function validateReleaseHistory(baseRef, headRef, version, errors) {
+  // PR CI 可能检出平台生成的临时合并提交；显式 headRef 可避免把它误算为第二次版本变更。
+  const commitsOutput = runGit(['log', '--format=%H', '--reverse', `${baseRef}..${headRef}`]);
   const commits = commitsOutput ? commitsOutput.split('\n') : [];
   const versionCommits = commits
     .map((commit) => ({
@@ -176,10 +177,10 @@ function validateReleaseHistory(baseRef, version, errors) {
   errors.push(...validateReleaseCommit(subject, changedVersionFiles, version));
 }
 
-function validateAgainstBase(baseRef, errors) {
+function validateAgainstBase(baseRef, headRef, errors) {
   if (!baseRef || /^0+$/.test(baseRef)) return;
   const baseEntries = readGitEntries(baseRef);
-  const currentEntries = readGitEntries('HEAD');
+  const currentEntries = readGitEntries(headRef);
   const currentVersion = assertValidEntries(currentEntries, errors);
   const changedVersionFiles = findChangedVersionFiles(baseEntries, currentEntries);
   if (changedVersionFiles.length === 0) return;
@@ -190,7 +191,7 @@ function validateAgainstBase(baseRef, errors) {
   } else {
     errors.push('发布版本校验需要完整 Git 历史与 Tag，请取消浅克隆后重试');
   }
-  validateReleaseHistory(baseRef, currentVersion, errors);
+  validateReleaseHistory(baseRef, headRef, currentVersion, errors);
 }
 
 function validateTag(tag, errors) {
@@ -232,16 +233,23 @@ export function main(args = process.argv.slice(2)) {
   const errors = [];
   const commitMessageFile = optionValue(args, '--commit-msg');
   const baseRef = optionValue(args, '--base');
+  const headRef = optionValue(args, '--head') ?? 'HEAD';
   const tag = optionValue(args, '--tag');
 
   const readContent = commitMessageFile
     ? (file) => runGit(['show', `:${file}`])
-    : (file) => readFileSync(file, 'utf8');
+    : baseRef
+      ? (file) => runGit(['show', `${headRef}:${file}`])
+      : (file) => readFileSync(file, 'utf8');
   errors.push(...validateVersionSourceConfiguration(readContent));
-  const entries = commitMessageFile ? readGitEntries('') : readWorkingTreeEntries();
+  const entries = commitMessageFile
+    ? readGitEntries('')
+    : baseRef
+      ? readGitEntries(headRef)
+      : readWorkingTreeEntries();
   const currentVersion = assertValidEntries(entries, errors);
   if (commitMessageFile) validateStagedCommit(commitMessageFile, errors);
-  if (baseRef) validateAgainstBase(baseRef, errors);
+  if (baseRef) validateAgainstBase(baseRef, headRef, errors);
   if (tag) validateTag(tag, errors);
 
   if (errors.length > 0) throw new Error(errors.map((error) => `- ${error}`).join('\n'));

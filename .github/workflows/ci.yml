@@ -30,7 +30,8 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/check-release-version.mjs --base "$BASE_SHA"
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-release-version.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
       - name: Validate pushed release change
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.before != '0000000000000000000000000000000000000000'
         env:

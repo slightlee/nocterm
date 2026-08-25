@@ -1,5 +1,11 @@
+/* global process */
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   VERSION_FILES,
@@ -12,6 +18,19 @@ import {
   validateVersionEntries,
   validateVersionSourceConfiguration,
 } from './check-release-version.mjs';
+
+const RELEASE_CHECK_SCRIPT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'check-release-version.mjs'
+);
+
+function runGit(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+}
+
+function writeJson(path, value) {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
 
 describe('release version rules', () => {
   it('accepts stable and numbered prerelease versions', () => {
@@ -108,5 +127,51 @@ describe('release version rules', () => {
       )[0],
       /提交信息必须/
     );
+  });
+
+  it('validates the pull request head instead of a synthetic merge commit', () => {
+    const repository = mkdtempSync(join(tmpdir(), 'nocterm-release-check-'));
+
+    try {
+      mkdirSync(join(repository, 'apps/desktop/src-tauri'), { recursive: true });
+      writeJson(join(repository, 'package.json'), { name: 'nocterm', version: '0.1.0' });
+      writeJson(join(repository, 'apps/desktop/package.json'), {
+        name: '@nocterm/desktop',
+        private: true,
+      });
+      writeJson(join(repository, 'apps/desktop/src-tauri/tauri.conf.json'), {
+        version: '../../../package.json',
+      });
+
+      runGit(repository, ['init', '--initial-branch=main']);
+      runGit(repository, ['config', 'user.name', 'Nocterm Test']);
+      runGit(repository, ['config', 'user.email', 'test@nocterm.local']);
+      runGit(repository, ['add', '.']);
+      runGit(repository, ['commit', '-m', 'chore: initialize release fixture']);
+      const base = runGit(repository, ['rev-parse', 'HEAD']);
+
+      runGit(repository, ['switch', '-c', 'release']);
+      writeJson(join(repository, 'package.json'), {
+        name: 'nocterm',
+        version: '0.1.0-beta.1',
+      });
+      runGit(repository, ['add', 'package.json']);
+      runGit(repository, ['commit', '-m', 'chore: prepare v0.1.0-beta.1']);
+      const releaseHead = runGit(repository, ['rev-parse', 'HEAD']);
+
+      runGit(repository, ['switch', 'main']);
+      runGit(repository, ['merge', '--no-ff', 'release', '-m', 'Merge release pull request']);
+
+      const result = spawnSync(
+        process.execPath,
+        [RELEASE_CHECK_SCRIPT, '--base', base, '--head', releaseHead],
+        { cwd: repository, encoding: 'utf8' }
+      );
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Release version check passed/);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
   });
 });
