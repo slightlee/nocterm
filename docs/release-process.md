@@ -37,7 +37,7 @@ Nocterm 使用四个发布阶段：
 0.1.0-alpha.1 < 0.1.0-beta.1 < 0.1.0-rc.1 < 0.1.0
 ```
 
-- 每次向任何测试人员分发新安装包时递增对应通道序号，不预先规定 Alpha、Beta 或 RC 数量；
+- 每次将安装包作为 Alpha、Beta 或 RC 向测试群体分发时递增对应通道序号，不预先规定各通道的版本数量；仅限指定验收人员使用、明确标注 Git Commit 与哈希且未宣称为已发布版本的临时构建属于发布前验证，不得代替最终产物；
 - 切换通道时序号从 `1` 开始，例如 `beta.4 → rc.1`；
 - RC 后若重新开放功能范围，应进入新的 Minor 开发周期，不得继续沿用原 RC；
 - 未实际生成和分发安装包的日常提交不递增产品版本；
@@ -196,24 +196,35 @@ Nocterm_0.1.0-beta.1_windows_x86_64-setup.exe
 
 普通贡献者不创建发布分支、不修改产品版本，只通过正常分支和 Pull Request 合入 Conventional Commits。Release Please 在 `main` 更新后创建或刷新唯一的发布 Pull Request，统一维护 `package.json`、`.release-please-manifest.json` 和 `CHANGELOG.md`。发布 Pull Request 必须通过与普通 PR 相同的 CI 和人工审查，不自动合并。
 
+发布 Pull Request 是发布准备入口，不是业务修复分支。在它合并前发现的功能或平台问题，应从最新 `main` 创建普通 `fix/*` 分支；同一轮验收中高度相关的问题收敛到一个稳定化分支和 Draft Pull Request。修复合入 `main` 后，Release Please 刷新原发布 Pull Request，不为同一候选范围重复创建手工发布 Pull Request。
+
 发布 Pull Request 必须使用 Rebase merge 或 Squash merge，使 `chore: prepare v<version>` 成为 `main` 上可直接标记的发布提交；禁止产生额外 Merge Commit，否则提交、Tag 与产物无法保持一一对应。
 
 发布步骤：
 
 1. 确认发布范围、问题等级、已知限制和目标通道；
-2. 审查 Release Please 提议的版本、变更日志和提交范围；
-3. 运行前端、Rust 和双平台 CI 门禁后合并发布 Pull Request；
-4. 在 macOS、Windows 分别生成安装包；
-5. 使用最终安装包执行对应冒烟与业务验收；
-6. 确认发布提交仍为 `chore: prepare v<version>`；
-7. 创建与版本一致的 annotated Git Tag；
-8. 推送 Tag，发布对应安装包、哈希与发布说明；
-9. Alpha、Beta、RC 在发布平台标记为 Pre-release，正式版不得标记为 Pre-release；
-10. 记录测试结果，并只按真实证据更新能力矩阵。
+2. 在 `main` 上完成本轮代码稳定化，运行前端、Rust 和双平台 CI，并完成能在发布提交前执行的真实环境预验证；临时构建必须记录 Git Commit 与哈希，不得对外宣称为可分发版本；
+3. 审查 Release Please 提议的版本、变更日志、提交范围和 CI；未收敛的发布 Pull Request 保持打开，不以合并代替验收；
+4. 确认候选范围已稳定后，使用 Rebase merge 或 Squash merge 合并发布 Pull Request；
+5. 从合并后的最终发布提交在 macOS、Windows 分别生成安装包，不使用早于该提交的开发构建代替；
+6. 使用最终安装包执行对应冒烟与业务验收；
+7. 确认发布提交仍为 `chore: prepare v<version>`，且本次变更日志不包含未发布候选的重复内容或失效 Tag 比较链接；
+8. 创建与版本一致的 annotated Git Tag；
+9. 推送 Tag，发布对应安装包、哈希与发布说明；
+10. Alpha、Beta、RC 在发布平台标记为 Pre-release，正式版不得标记为 Pre-release；
+11. 记录测试结果，并只按真实证据更新能力矩阵。
+
+### 10.1 候选版本失败与收敛
+
+- 发布 Pull Request 合并前发现问题：不消耗新版本号。通过普通修复分支和 Pull Request 合入 `main`，由 Release Please 刷新现有发布 Pull Request，再次执行受影响的检查与验收。
+- 发布 Pull Request 合并后、Tag 创建前发现问题：当前候选版本视为已放弃，不创建虚假 Tag，不修改或重用其版本号。同一轮相关问题在一个稳定化分支中修复，通过一个 Pull Request 合入 `main`，然后让 Release Please 提议下一个预发布序号。版本序号出现空档是正常审计结果，不得为连续性补发未验收版本。
+- 使用 `skip-github-release` 时，Release Please 仍会把已合并但未打 Tag 的发布 Pull Request 视为待发布。放弃候选版本时，仓库维护者必须移除该 Pull Request 的 `autorelease: pending` 标签后重新运行 Release Please；该操作只修正自动化状态，不得添加 `autorelease: tagged` 或伪造 Tag。
+- 继承未发布候选历史的下一个发布 Pull Request，必须在最终合并前人工审查 `CHANGELOG.md`：删除未发布候选的独立版本条目，去重提交记录，并让首个实际发布版本从 `bootstrap-sha` 开始比较；禁止保留指向不存在 Tag 的链接。
+- 候选版本已创建 Tag、已宣称为可分发版本，或已向指定发布验收范围之外共享时，按已发布版本处理；修复必须使用更高版本号，不删除历史 Tag 或覆盖已分发产物。
 
 Tag 创建后视为不可变。发现错误时删除尚未公开的本地产物并修复；一旦 Tag 或安装包已经共享，必须递增版本重新发布，不得强推、移动 Tag 或原位替换文件。
 
-Git 提交、Tag、推送和正式发布仍受 `AGENTS.md` 的确认规则约束，不因遵循本文档而获得自动授权。
+Git 提交、Tag、推送和正式发布都必须单独获得用户明确确认，不因执行本流程而获得自动授权。
 
 ## 11. 发布说明
 

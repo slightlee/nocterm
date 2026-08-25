@@ -59,3 +59,5 @@ UI 修改必须做浏览器或 Tauri 真实运行检查；终端、凭据、SSH/
 ## Git 约束
 
 未经用户明确要求，不执行 Git 初始化、提交、推送、重置、rebase、分支创建或切换。提交前必须检查已跟踪、已暂存和未跟踪文件，确认准确范围；提交信息必须符合 `docs/development.md` 的 Conventional Commits 规范；禁止使用 `--no-verify` 绕过门禁，禁止覆盖或丢弃用户现有改动。
+
+执行分支或 Pull Request 操作前必须读取 `docs/development.md`；涉及发布候选、版本放弃或 Release Please 状态时还必须读取 `docs/release-process.md`。详细规则只在对应文档中维护，本文件不复制第二份定义。

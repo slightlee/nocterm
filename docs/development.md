@@ -1,6 +1,6 @@
 # Nocterm 开发规范
 
-AI 与人工开发都必须遵守根 `AGENTS.md`。AI 的范围、安全、验证和交付规则详见 `docs/ai-development-policy.md`，审查标准详见 `docs/code-review.md`。
+本文件是 Nocterm 架构边界、开发验证、分支、Pull Request 和 Git 提交的详细规则来源。
 
 ## 1. 依赖方向
 
@@ -48,7 +48,20 @@ corepack pnpm check
 corepack pnpm cargo:check
 ```
 
-## 5. Git 提交规范
+## 5. 分支与 Pull Request
+
+`main` 是受保护的集成分支，不等同于已发布版本。禁止直接推送；功能、修复、文档和 CI 变更都必须从最新 `main` 创建短期任务分支，通过 Pull Request 合并。当前不维护长期 `develop` 或 `release/*` 分支；引入新分支模型必须有并行版本或发布列车等实际需求，并通过 ADR 同步自动化与合并策略。
+
+- 一个分支和 Pull Request 表达一个逻辑完整的变更，不与单个 Git 提交一一对应；
+- 同一任务可以在原分支上多次提交和推送，已打开的 Pull Request 会自动更新，不得为每次修改重复创建 Pull Request；
+- 同一轮验收发现的高度相关问题，优先收敛到一个临时稳定化分支和 Draft Pull Request；无关变更、需要独立回滚或不能互相等待的修复才拆分；
+- 当前 Pull Request 的 CI、评审或验收尚未完成时，先在原分支修正同范围问题；不得用新 Pull Request 规避原 Pull Request 的失败门禁；
+- 任务开发中可以提前打开 Draft Pull Request 供协作者拉取和评审；只有范围收敛、相关检查通过后才转为可合并状态；
+- Release Please Pull Request 只负责版本、变更日志和发布准备，业务修复必须通过普通任务分支合入 `main`，由自动化刷新原发布 Pull Request。
+
+分支名使用与 Conventional Commits 一致的类型前缀，例如 `feat/sftp-upload`、`fix/windows-keychain`、`docs/release-process` 或 `ci/release-validation`。分支合并后原则上删除，不将已完成的任务分支演变为长期集成分支。
+
+## 6. Git 提交规范
 
 提交信息采用 Conventional Commits：
 
