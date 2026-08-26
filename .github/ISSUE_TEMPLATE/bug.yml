@@ -1,0 +1,77 @@
+name: Bug 报告
+description: 报告可复现的功能缺陷、回归或跨平台问题
+title: '[Bug]: '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请提供可复现证据，并确保日志、截图和配置中不包含密码、私钥、Token 或其他敏感信息。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 说明实际发生了什么，以及它对使用造成的影响。
+      placeholder: 清晰描述问题及影响范围。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 受影响平台
+      options:
+        - macOS
+        - Windows
+        - macOS 和 Windows
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 填写操作系统版本、CPU 架构、Nocterm 版本或 Git Commit。
+      placeholder: 例如：macOS 15 / arm64 / commit 2aa4675
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 给出最小、稳定的复现步骤。
+      placeholder: |
+        1. 打开……
+        2. 执行……
+        3. 观察到……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏后的证据
+      description: 可提供错误码、日志片段、截图或录屏；请删除主机、用户名、路径和凭据等敏感内容。
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: 安全确认
+      options:
+        - label: 我已确认提交内容不包含密码、私钥、Token 或其他敏感信息。
+          required: true

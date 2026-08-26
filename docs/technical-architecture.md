@@ -449,10 +449,10 @@ Agent 只能在基础终端能力稳定后开始，不提前创建占位接口�
 提交信息示例：
 
 ```text
-feat(shell): build desktop workspace layout
-feat(ssh): implement connection profiles
-feat(ssh): implement terminal session lifecycle
-feat(sftp): build remote directory browsing
+feat: build desktop workspace layout
+feat: implement connection profiles
+feat: implement terminal session lifecycle
+feat: build remote directory browsing
 ```
 
 ## 14. 脚手架阶段完成标准
