@@ -1,1 +1,8 @@
+branch_name="$(git branch --show-current)"
+
+if [ "$branch_name" = "main" ]; then
+  echo "禁止直接在 main 分支提交；请从最新 main 创建短期任务分支。"
+  exit 1
+fi
+
 pnpm check:staged

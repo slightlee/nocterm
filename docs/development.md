@@ -48,9 +48,17 @@ corepack pnpm check
 corepack pnpm cargo:check
 ```
 
-## 5. 分支与 Pull Request
+## 5. Issue、分支与 Pull Request
 
 `main` 是受保护的集成分支，不等同于已发布版本。禁止直接推送；功能、修复、文档和 CI 变更都必须从最新 `main` 创建短期任务分支，通过 Pull Request 合并。当前不维护长期 `develop` 或 `release/*` 分支；引入新分支模型必须有并行版本或发布列车等实际需求，并通过 ADR 同步自动化与合并策略。
+
+### 5.1 Issue 边界
+
+- 可复现的 Bug 原则上先创建 Issue，记录影响平台、复现步骤、预期行为、实际行为和脱敏后的证据；涉及凭据泄露、远程代码执行或数据损坏的安全问题必须使用 GitHub Private Security Advisory，不得创建公开 Issue；
+- 非平凡功能先通过 Issue 明确用户问题、范围、非目标和验收标准；拼写、纯格式等无需独立跟踪的小改动可以不创建 Issue，但 Pull Request 必须说明原因；
+- Issue 描述问题和验收边界，不预先锁死实现；一个 Issue 可以经过讨论后拆分为多个独立交付的 Pull Request。
+
+### 5.2 分支与 Pull Request
 
 - 一个分支和 Pull Request 表达一个逻辑完整的变更，不与单个 Git 提交一一对应；
 - 同一任务可以在原分支上多次提交和推送，已打开的 Pull Request 会自动更新，不得为每次修改重复创建 Pull Request；
@@ -59,7 +67,11 @@ corepack pnpm cargo:check
 - 任务开发中可以提前打开 Draft Pull Request 供协作者拉取和评审；只有范围收敛、相关检查通过后才转为可合并状态；
 - Release Please Pull Request 只负责版本、变更日志和发布准备，业务修复必须通过普通任务分支合入 `main`；发布范围重新稳定后，由维护者手动运行 Release Please 刷新原发布 Pull Request。
 
-分支名使用与 Conventional Commits 一致的类型前缀，例如 `feat/sftp-upload`、`fix/windows-keychain`、`docs/release-process` 或 `ci/release-validation`。分支合并后原则上删除，不将已完成的任务分支演变为长期集成分支。
+分支名使用与 Conventional Commits 一致的类型前缀；有关联 Issue 时建议包含编号，例如 `feat/123-sftp-upload`、`fix/456-windows-keychain`、`docs/123-release-process` 或 `ci/123-release-validation`。分支合并后立即删除，不将已完成的任务分支演变为长期集成分支。
+
+Pull Request 标题必须符合第 6 节的 Conventional Commits 规范，并作为 Squash merge 后进入 `main` 的提交信息。关联 Issue 时在 Pull Request 描述中使用 `Closes #123` 或 `Fixes #123`，由合并动作自动关闭 Issue；不应为了关联 Issue 把编号塞入提交标题。仓库只允许 Squash merge，禁止 Merge Commit 和 Rebase merge，以保持一个 Pull Request 对应 `main` 上一个可回滚的逻辑提交。
+
+GitHub 必须通过 Ruleset 保护 `main`：所有变更必须经过 Pull Request，Required Checks 至少包含前端检查以及 macOS、Windows Rust 检查，并禁止强制推送和删除分支。单人维护阶段不强制批准人数，但必须解决 Review Conversation；增加协作者后再要求至少一名非作者批准。仓库设置应启用合并后自动删除分支。
 
 ## 6. Git 提交规范
 
@@ -95,6 +107,6 @@ chore: initialize Nocterm project scaffold
 
 一次提交只表达一个完整意图。提交前 Husky 会通过 lint-staged 格式化并检查暂存文件，`commit-msg` Hook 会执行 Commitlint；不得使用 `--no-verify` 绕过失败，除非已明确说明 Hook 自身故障并获得确认。完整质量门禁仍使用 `corepack pnpm check` 和 `corepack pnpm cargo:check`。
 
-远程仓库必须保护 `main`，禁止直接推送，并把 CI 配置为 Pull Request 的 Required Check。本地 Hook 可被主动绕过，不能替代远程合并门禁。
+本地 `pre-commit` Hook 禁止直接在 `main` 提交，远程 Ruleset 禁止绕过 Pull Request 推送，并把 CI 配置为 Pull Request 的 Required Check。本地 Hook 可被主动绕过，不能替代远程合并门禁。
 
 普通贡献者只提交符合上述规范的功能、修复和文档变更，不手工递增产品版本。仓库维护者在发布范围稳定后手动运行 Release Please，由其根据 `main` 上的 Conventional Commits 维护发布 Pull Request；产品版本、发布通道切换、Tag 和最终发布仍按 `docs/release-process.md` 执行。

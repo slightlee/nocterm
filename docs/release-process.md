@@ -208,14 +208,14 @@ corepack pnpm release:build:windows
 
 发布 Pull Request 是发布准备入口，不是业务修复分支。在它合并前发现的功能或平台问题，应从最新 `main` 创建普通 `fix/*` 分支；同一轮验收中高度相关的问题收敛到一个稳定化分支和 Draft Pull Request。修复合入 `main` 后，由维护者重新运行 Release Please 刷新原发布 Pull Request，不为同一候选范围重复创建手工发布 Pull Request。
 
-发布 Pull Request 必须使用 Rebase merge 或 Squash merge，使 `chore: prepare v<version>` 成为 `main` 上可直接标记的发布提交；禁止产生额外 Merge Commit，否则提交、Tag 与产物无法保持一一对应。
+发布 Pull Request 必须使用 Squash merge，使 `chore: prepare v<version>` 成为 `main` 上可直接标记的发布提交；禁止使用 Merge Commit 或 Rebase merge，确保普通变更与发布变更遵循同一合并策略，并让提交、Tag 与产物保持一一对应。
 
 发布步骤：
 
 1. 确认发布范围、问题等级、已知限制和目标通道；
 2. 在 `main` 上完成本轮代码稳定化，运行前端、Rust 和双平台 CI，并完成能在发布提交前执行的真实环境预验证；临时构建必须记录 Git Commit 与哈希，不得对外宣称为可分发版本；
 3. 由仓库维护者手动运行 Release Please，审查其提议的版本、变更日志、提交范围和 CI；未收敛的发布 Pull Request 保持打开，不以合并代替验收；
-4. 确认候选范围已稳定后，使用 Rebase merge 或 Squash merge 合并发布 Pull Request；合并本身不自动生成下一版本 Pull Request；
+4. 确认候选范围已稳定后，使用 Squash merge 合并发布 Pull Request；合并本身不自动生成下一版本 Pull Request；
 5. 确认发布提交仍为 `chore: prepare v<version>`，且本次变更日志不包含未发布候选的重复内容或失效 Tag 比较链接；
 6. 创建与版本一致的 annotated Git Tag；
 7. 推送 Tag，自动触发 Tag CI 和 Release 工作流；后者从 Tag 对应提交生成双平台安装包、SHA-256 和 Draft Release，不使用本地旧构建代替；
