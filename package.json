@@ -24,7 +24,8 @@
     "cargo:test": "cargo test --workspace",
     "cargo:check": "pnpm cargo:fmt && pnpm cargo:clippy && pnpm cargo:test",
     "release:check": "node scripts/check-release-version.mjs",
-    "release:test": "node --test scripts/check-release-version.test.mjs",
+    "release:test": "node --test scripts/check-release-version.test.mjs scripts/prepare-windows-artifact.test.mjs scripts/release-workflow-contract.test.mjs",
+    "release:build:windows": "node scripts/prepare-windows-artifact.mjs",
     "check:staged": "lint-staged && git diff --cached --check",
     "commitlint": "commitlint"
   },

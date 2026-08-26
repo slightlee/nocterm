@@ -1,0 +1,226 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing annotated release tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+      release_version: ${{ steps.release.outputs.release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
+      # checkout 可能只保留 Tag 解引用后的提交；发布前必须恢复并校验远端 Tag 对象。
+      - name: Fetch annotated release tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate release tag and bind immutable source
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          pnpm release:check
+          node scripts/check-release-version.mjs --tag "$RELEASE_TAG"
+          RELEASE_VERSION="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
+          RELEASE_SHA="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if [ "$RELEASE_TAG" != "v$RELEASE_VERSION" ]; then
+            echo "Tag $RELEASE_TAG does not match product version $RELEASE_VERSION." >&2
+            exit 1
+          fi
+          echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+  prepare-release:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+    steps:
+      - name: Create or reuse draft release
+        shell: bash
+        run: |
+          EXPECTED_PRERELEASE=false
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            EXPECTED_PRERELEASE=true
+          fi
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            IS_DRAFT="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+            IS_PRERELEASE="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)"
+            if [ "$IS_DRAFT" != "true" ]; then
+              echo "Release $RELEASE_TAG already exists and is not a draft; refusing to overwrite it." >&2
+              exit 1
+            fi
+            if [ "$IS_PRERELEASE" != "$EXPECTED_PRERELEASE" ]; then
+              echo "Draft release prerelease state does not match $RELEASE_TAG." >&2
+              exit 1
+            fi
+            exit 0
+          fi
+
+          RELEASE_ARGS=(
+            release create "$RELEASE_TAG"
+            --repo "$GITHUB_REPOSITORY"
+            --verify-tag
+            --draft
+            --title "Nocterm ${RELEASE_TAG#v}"
+            --generate-notes
+          )
+          if [ "$EXPECTED_PRERELEASE" = "true" ]; then
+            RELEASE_ARGS+=(--prerelease)
+          fi
+          gh "${RELEASE_ARGS[@]}"
+
+  build-macos:
+    needs: [validate, prepare-release]
+    runs-on: macos-14
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.release_sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      - name: Build macOS DMG
+        run: pnpm tauri build --target x86_64-apple-darwin --config '{"bundle":{"active":true}}' --bundles dmg --ci
+      - name: Prepare and upload macOS release assets
+        run: |
+          SOURCE_PATH="target/x86_64-apple-darwin/release/bundle/dmg/Nocterm_${RELEASE_VERSION}_x64.dmg"
+          ARTIFACT_PATH="target/release/artifacts/Nocterm_${RELEASE_VERSION}_macos_x86_64.dmg"
+          if [ ! -s "$SOURCE_PATH" ]; then
+            echo "Expected non-empty macOS DMG was not produced: $SOURCE_PATH" >&2
+            exit 1
+          fi
+          mkdir -p "$(dirname "$ARTIFACT_PATH")"
+          cp "$SOURCE_PATH" "$ARTIFACT_PATH"
+          CHECKSUM="$(shasum -a 256 "$ARTIFACT_PATH" | awk '{print $1}')"
+          printf '%s  %s\n' "$CHECKSUM" "$(basename "$ARTIFACT_PATH")" > "$ARTIFACT_PATH.sha256"
+          if [ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "Release $RELEASE_TAG is no longer a draft; refusing to upload assets." >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "$ARTIFACT_PATH" "$ARTIFACT_PATH.sha256" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  build-windows:
+    needs: [validate, prepare-release]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.release_sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      - name: Build Windows NSIS installer
+        run: pnpm release:build:windows
+      - name: Upload Windows release assets
+        shell: pwsh
+        run: |
+          $artifact = "target/release/artifacts/Nocterm_${env:RELEASE_VERSION}_windows_x86_64-setup.exe"
+          $checksum = "$artifact.sha256"
+          foreach ($path in @($artifact, $checksum)) {
+            if (!(Test-Path -LiteralPath $path) -or (Get-Item -LiteralPath $path).Length -eq 0) {
+              throw "Expected non-empty Windows release asset was not produced: $path"
+            }
+          }
+          $isDraft = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY `
+            --json isDraft --jq .isDraft
+          if ($LASTEXITCODE -ne 0 -or $isDraft -ne "true") {
+            throw "Release $env:RELEASE_TAG is no longer a draft; refusing to upload assets."
+          }
+          gh release upload $env:RELEASE_TAG $artifact $checksum `
+            --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload Windows release assets."
+          }
+
+  verify-draft-release:
+    needs: [validate, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.release_version }}
+    steps:
+      - name: Verify draft release assets
+        shell: bash
+        run: |
+          if [ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "Release $RELEASE_TAG is not a draft." >&2
+            exit 1
+          fi
+
+          ASSETS="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          EXPECTED_ASSETS=(
+            "Nocterm_${RELEASE_VERSION}_macos_x86_64.dmg"
+            "Nocterm_${RELEASE_VERSION}_macos_x86_64.dmg.sha256"
+            "Nocterm_${RELEASE_VERSION}_windows_x86_64-setup.exe"
+            "Nocterm_${RELEASE_VERSION}_windows_x86_64-setup.exe.sha256"
+          )
+          for asset in "${EXPECTED_ASSETS[@]}"; do
+            if ! grep -Fxq "$asset" <<< "$ASSETS"; then
+              echo "Draft release is missing required asset: $asset" >&2
+              exit 1
+            fi
+          done

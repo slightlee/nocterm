@@ -169,6 +169,16 @@ Nocterm_0.1.0-beta.1_macos_aarch64.dmg
 Nocterm_0.1.0-beta.1_windows_x86_64-setup.exe
 ```
 
+Tauri 的 Windows NSIS 默认文件名使用 `x64`，不直接作为发布产物。在 Windows x64 本机生成最终 NSIS 产物时，在仓库根目录执行：
+
+```powershell
+corepack pnpm release:build:windows
+```
+
+脚本从根 `package.json` 读取产品版本，精确删除当前版本的旧 NSIS 源文件、规范副本和校验文件，再执行 Tauri 构建。只有构建成功且新源文件存在、非空时，才会在 `target/release/artifacts/` 生成符合上述命名规则的 NSIS 副本和同名 `.sha256` 校验文件。脚本当前只接受本机 Windows x64 产物；新增架构时必须先在对应平台验证 Tauri 原始命名和安装行为。
+
+推送有效发布 Tag 后，`.github/workflows/release.yml` 从 Tag 解引用后的固定提交分别在 `macos-14` 与 `windows-latest` 原生构建 macOS x86_64 DMG 和 Windows x86_64 NSIS。工作流创建或复用同 Tag 的 Draft Release，上传两个安装包及各自的 `.sha256`，最后核对四个资产齐全。自动化只准备 Draft，不公开发布；任一平台失败时 Draft 保持不可见，修复后可重跑并安全覆盖同名资产。
+
 每次分发至少记录：
 
 - Git Commit、Tag、CI Run ID 和构建时间；
@@ -194,9 +204,9 @@ Nocterm_0.1.0-beta.1_windows_x86_64-setup.exe
 
 当前阶段从受保护的 `main` 分支发布，不创建长期 `develop` 或 `release/*` 分支。需要修复时通过正常分支和 Pull Request 回到 `main`，以减少分支漂移。
 
-普通贡献者不创建发布分支、不修改产品版本，只通过正常分支和 Pull Request 合入 Conventional Commits。Release Please 在 `main` 更新后创建或刷新唯一的发布 Pull Request，统一维护 `package.json`、`.release-please-manifest.json` 和 `CHANGELOG.md`。发布 Pull Request 必须通过与普通 PR 相同的 CI 和人工审查，不自动合并。
+普通贡献者不创建发布分支、不修改产品版本，只通过正常分支和 Pull Request 合入 Conventional Commits。本轮发布范围稳定后，由仓库维护者手动运行 Release Please，创建或刷新唯一的发布 Pull Request，统一维护 `package.json`、`.release-please-manifest.json` 和 `CHANGELOG.md`。发布 Pull Request 必须通过与普通 PR 相同的 CI 和人工审查，不自动运行、不自动合并。
 
-发布 Pull Request 是发布准备入口，不是业务修复分支。在它合并前发现的功能或平台问题，应从最新 `main` 创建普通 `fix/*` 分支；同一轮验收中高度相关的问题收敛到一个稳定化分支和 Draft Pull Request。修复合入 `main` 后，Release Please 刷新原发布 Pull Request，不为同一候选范围重复创建手工发布 Pull Request。
+发布 Pull Request 是发布准备入口，不是业务修复分支。在它合并前发现的功能或平台问题，应从最新 `main` 创建普通 `fix/*` 分支；同一轮验收中高度相关的问题收敛到一个稳定化分支和 Draft Pull Request。修复合入 `main` 后，由维护者重新运行 Release Please 刷新原发布 Pull Request，不为同一候选范围重复创建手工发布 Pull Request。
 
 发布 Pull Request 必须使用 Rebase merge 或 Squash merge，使 `chore: prepare v<version>` 成为 `main` 上可直接标记的发布提交；禁止产生额外 Merge Commit，否则提交、Tag 与产物无法保持一一对应。
 
@@ -204,20 +214,20 @@ Nocterm_0.1.0-beta.1_windows_x86_64-setup.exe
 
 1. 确认发布范围、问题等级、已知限制和目标通道；
 2. 在 `main` 上完成本轮代码稳定化，运行前端、Rust 和双平台 CI，并完成能在发布提交前执行的真实环境预验证；临时构建必须记录 Git Commit 与哈希，不得对外宣称为可分发版本；
-3. 审查 Release Please 提议的版本、变更日志、提交范围和 CI；未收敛的发布 Pull Request 保持打开，不以合并代替验收；
-4. 确认候选范围已稳定后，使用 Rebase merge 或 Squash merge 合并发布 Pull Request；
-5. 从合并后的最终发布提交在 macOS、Windows 分别生成安装包，不使用早于该提交的开发构建代替；
-6. 使用最终安装包执行对应冒烟与业务验收；
-7. 确认发布提交仍为 `chore: prepare v<version>`，且本次变更日志不包含未发布候选的重复内容或失效 Tag 比较链接；
-8. 创建与版本一致的 annotated Git Tag；
-9. 推送 Tag，发布对应安装包、哈希与发布说明；
-10. Alpha、Beta、RC 在发布平台标记为 Pre-release，正式版不得标记为 Pre-release；
+3. 由仓库维护者手动运行 Release Please，审查其提议的版本、变更日志、提交范围和 CI；未收敛的发布 Pull Request 保持打开，不以合并代替验收；
+4. 确认候选范围已稳定后，使用 Rebase merge 或 Squash merge 合并发布 Pull Request；合并本身不自动生成下一版本 Pull Request；
+5. 确认发布提交仍为 `chore: prepare v<version>`，且本次变更日志不包含未发布候选的重复内容或失效 Tag 比较链接；
+6. 创建与版本一致的 annotated Git Tag；
+7. 推送 Tag，自动触发 Tag CI 和 Release 工作流；后者从 Tag 对应提交生成双平台安装包、SHA-256 和 Draft Release，不使用本地旧构建代替；
+8. 等待两个工作流全部通过，核对 Draft 中版本、Tag、提交和四个发布资产一致；自动化失败时修复工作流或代码后重跑，不移动或重建 Tag；
+9. 下载 Draft 中的最终安装包，在 macOS、Windows 执行对应冒烟与业务验收；
+10. 验收通过并获得最终发布授权后，由仓库维护者公开 Draft；Alpha、Beta、RC 标记为 Pre-release，正式版不得标记为 Pre-release；
 11. 记录测试结果，并只按真实证据更新能力矩阵。
 
 ### 10.1 候选版本失败与收敛
 
-- 发布 Pull Request 合并前发现问题：不消耗新版本号。通过普通修复分支和 Pull Request 合入 `main`，由 Release Please 刷新现有发布 Pull Request，再次执行受影响的检查与验收。
-- 发布 Pull Request 合并后、Tag 创建前发现问题：当前候选版本视为已放弃，不创建虚假 Tag，不修改或重用其版本号。同一轮相关问题在一个稳定化分支中修复，通过一个 Pull Request 合入 `main`，然后让 Release Please 提议下一个预发布序号。版本序号出现空档是正常审计结果，不得为连续性补发未验收版本。
+- 发布 Pull Request 合并前发现问题：不消耗新版本号。通过普通修复分支和 Pull Request 合入 `main`，由维护者重新运行 Release Please 刷新现有发布 Pull Request，再次执行受影响的检查与验收。
+- 发布 Pull Request 合并后、Tag 创建前发现问题：当前候选版本视为已放弃，不创建虚假 Tag，不修改或重用其版本号。同一轮相关问题在一个稳定化分支中修复，通过一个 Pull Request 合入 `main`，然后由维护者手动运行 Release Please 提议下一个预发布序号。版本序号出现空档是正常审计结果，不得为连续性补发未验收版本。
 - 使用 `skip-github-release` 时，Release Please 仍会把已合并但未打 Tag 的发布 Pull Request 视为待发布。放弃候选版本时，仓库维护者必须移除该 Pull Request 的 `autorelease: pending` 标签后重新运行 Release Please；该操作只修正自动化状态，不得添加 `autorelease: tagged` 或伪造 Tag。
 - 继承未发布候选历史的下一个发布 Pull Request，必须在最终合并前人工审查 `CHANGELOG.md`：删除未发布候选的独立版本条目，去重提交记录，并让首个实际发布版本从 `bootstrap-sha` 开始比较；禁止保留指向不存在 Tag 的链接。
 - 候选版本已创建 Tag、已宣称为可分发版本，或已向指定发布验收范围之外共享时，按已发布版本处理；修复必须使用更高版本号，不删除历史 Tag 或覆盖已分发产物。
@@ -257,12 +267,23 @@ Git Commit 与安装包 SHA-256
 
 ## 13. 自动化边界与仓库配置
 
-当前阶段使用 Release Please 自动维护版本 Pull Request，不创建专用 Release Skill，也不自动创建 Tag、GitHub Release 或发布安装包。`scripts/check-release-version.mjs` 负责版本格式、唯一版本源、递增、发布提交和 Tag 一致性检查，本地 Hook 与 CI 共同调用。
+当前阶段使用 Release Please 维护版本 Pull Request，但工作流只允许仓库维护者手动触发。普通功能或修复合入 `main` 不会自动创建下一版本 Pull Request；只有维护者确认发布范围稳定后才运行该工作流。Release Please 不创建 Tag 或安装包。`scripts/check-release-version.mjs` 负责版本格式、唯一版本源、递增、发布提交和 Tag 一致性检查，本地 Hook 与 CI 共同调用。
 
-`.release-please-manifest.json` 中的 `0.1.0-beta.0` 仅是首次自动发布的启动基线，不是已经发布或允许分发的产品版本；首次发布 Pull Request 应提议 `0.1.0-beta.1`。`release-please-config.json` 的 `bootstrap-sha` 只用于首次生成变更日志，首个发布 Pull Request 合并后可通过普通维护 PR 删除。
+`.release-please-manifest.json` 记录 Release Please 已准备到的版本基线。合并发布 Pull Request 会把它更新为当前候选版本，但这不代表 Tag、安装包或 GitHub Release 已经创建；实际发布状态仍以不可变 Tag 和发布记录为准。该文件只能由发布 Pull Request 统一维护，不得手工提前推进。`release-please-config.json` 的 `bootstrap-sha` 只定义首次生成变更日志的起点，不代表一个版本，也不授予发布权限。
+
+Tag 推送会同时运行版本门禁和发布工作流。若 CI 平台检出的本地引用丢失 annotated tag 对象，工作流必须从远端显式取回同名 Tag 后再校验。发布工作流先锁定 Tag 解引用后的提交，再让所有构建 Job 从该提交检出源码；只有发布准备 Job 和平台上传 Job 获得最小 `contents: write` 权限。它可以自动创建 Draft Release 和覆盖同一 Draft 的同名资产，但不得公开发布、覆盖已发布 Release 或移动 Tag。
+
+修复工作流后重验已有不可变 Tag 时，维护者从 `main` 手动运行 CI 和 Release 工作流，并传入 `release_tag`；例如：
+
+```bash
+gh workflow run ci.yml --ref main -f release_tag=v0.1.0-beta.2
+gh workflow run release.yml --ref main -f release_tag=v0.1.0-beta.2
+```
+
+第一条命令只重新验证现有 Tag；第二条命令从该 Tag 自动构建并准备 Draft Release。两者都不创建、移动或覆盖 Tag，也不公开发布版本。
 
 仓库维护者必须创建名为 `RELEASE_PLEASE_TOKEN` 的 GitHub Actions Secret。推荐使用限定到本仓库、设置有效期的 fine-grained PAT，最小授予 Contents、Pull requests 和 Issues 的读写权限；不得把 Token 写入仓库、日志或 PR。不能使用默认 `GITHUB_TOKEN` 替代，因为它创建的发布 Pull Request 不会触发本仓库的后续 CI 工作流。
 
 Beta 阶段配置使用 `versioning=prerelease`、`prerelease-type=beta`。切换到 RC 或 GA 必须通过独立维护 PR 修改发布通道配置，并在提交正文加入明确的 `Release-As: <目标版本>`；例如 `0.1.0-rc.1` 或 `0.1.0`，不得依赖工具猜测跨通道版本。
 
-自动化不得代替版本范围确认、问题定级、真实设备验收、签名凭据操作、Tag 创建和最终发布授权。发布打包自动化在至少完成一次真实 Beta、流程稳定后再增加。
+自动化不得代替版本范围确认、问题定级、真实设备验收、签名凭据操作、Tag 创建和最终发布授权。确认推送 Tag 时必须同时说明它会自动创建或更新 Draft Release；公开 Draft 仍需单独授权。

@@ -57,7 +57,7 @@ corepack pnpm cargo:check
 - 同一轮验收发现的高度相关问题，优先收敛到一个临时稳定化分支和 Draft Pull Request；无关变更、需要独立回滚或不能互相等待的修复才拆分；
 - 当前 Pull Request 的 CI、评审或验收尚未完成时，先在原分支修正同范围问题；不得用新 Pull Request 规避原 Pull Request 的失败门禁；
 - 任务开发中可以提前打开 Draft Pull Request 供协作者拉取和评审；只有范围收敛、相关检查通过后才转为可合并状态；
-- Release Please Pull Request 只负责版本、变更日志和发布准备，业务修复必须通过普通任务分支合入 `main`，由自动化刷新原发布 Pull Request。
+- Release Please Pull Request 只负责版本、变更日志和发布准备，业务修复必须通过普通任务分支合入 `main`；发布范围重新稳定后，由维护者手动运行 Release Please 刷新原发布 Pull Request。
 
 分支名使用与 Conventional Commits 一致的类型前缀，例如 `feat/sftp-upload`、`fix/windows-keychain`、`docs/release-process` 或 `ci/release-validation`。分支合并后原则上删除，不将已完成的任务分支演变为长期集成分支。
 
@@ -97,4 +97,4 @@ chore: initialize Nocterm project scaffold
 
 远程仓库必须保护 `main`，禁止直接推送，并把 CI 配置为 Pull Request 的 Required Check。本地 Hook 可被主动绕过，不能替代远程合并门禁。
 
-普通贡献者只提交符合上述规范的功能、修复和文档变更，不手工递增产品版本。Release Please 根据合并到 `main` 的 Conventional Commits 维护发布 Pull Request；产品版本、发布通道切换、Tag 和最终发布仍按 `docs/release-process.md` 执行。
+普通贡献者只提交符合上述规范的功能、修复和文档变更，不手工递增产品版本。仓库维护者在发布范围稳定后手动运行 Release Please，由其根据 `main` 上的 Conventional Commits 维护发布 Pull Request；产品版本、发布通道切换、Tag 和最终发布仍按 `docs/release-process.md` 执行。
