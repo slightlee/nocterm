@@ -26,19 +26,25 @@ describe('release workflow contract', () => {
 
   it('builds both desktop platforms from tags and only prepares a draft release', () => {
     const workflow = readWorkflow('.github/workflows/release.yml');
+    const tauriConfig = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
 
     assert.match(workflow, /^ {2}push:\n {4}tags: \['v\*'\]/m);
     assert.match(workflow, /^ {2}workflow_dispatch:\n {4}inputs:\n {6}release_tag:/m);
     assert.match(workflow, /release_sha: \$\{\{ steps\.release\.outputs\.release_sha \}\}/);
     assert.match(workflow, /ref: \$\{\{ needs\.validate\.outputs\.release_sha \}\}/);
-    assert.match(workflow, /pnpm tauri build --target x86_64-apple-darwin .* --bundles dmg --ci/);
+    assert.match(workflow, /runner: macos-15\n {12}target: aarch64-apple-darwin/);
+    assert.match(workflow, /runner: macos-15-intel\n {12}target: x86_64-apple-darwin/);
+    assert.match(workflow, /MACOSX_DEPLOYMENT_TARGET: '14\.0'/);
+    assert.match(workflow, /pnpm tauri build --target "\$RUST_TARGET" .* --bundles dmg --ci/);
     assert.match(workflow, /pnpm release:build:windows/);
     assert.match(workflow, /release create "\$RELEASE_TAG"/);
     assert.match(workflow, /gh "\$\{RELEASE_ARGS\[@\]\}"/);
     assert.match(workflow, /--draft/);
     assert.match(workflow, /gh release upload/);
+    assert.match(workflow, /Nocterm_\$\{RELEASE_VERSION\}_macos_aarch64\.dmg/);
     assert.match(workflow, /Nocterm_\$\{RELEASE_VERSION\}_macos_x86_64\.dmg/);
     assert.match(workflow, /Nocterm_\$\{env:RELEASE_VERSION\}_windows_x86_64-setup\.exe/);
     assert.doesNotMatch(workflow, /gh release edit .*--draft=false/);
+    assert.equal(tauriConfig.bundle.macOS.minimumSystemVersion, '14.0');
   });
 });

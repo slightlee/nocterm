@@ -103,13 +103,29 @@ jobs:
 
   build-macos:
     needs: [validate, prepare-release]
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            source_arch: aarch64
+            artifact_arch: aarch64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            source_arch: x64
+            artifact_arch: x86_64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
       RELEASE_VERSION: ${{ needs.validate.outputs.release_version }}
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      RUST_TARGET: ${{ matrix.target }}
+      SOURCE_ARCH: ${{ matrix.source_arch }}
+      ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -123,15 +139,15 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: pnpm install --frozen-lockfile
       - name: Build macOS DMG
-        run: pnpm tauri build --target x86_64-apple-darwin --config '{"bundle":{"active":true}}' --bundles dmg --ci
+        run: pnpm tauri build --target "$RUST_TARGET" --config '{"bundle":{"active":true}}' --bundles dmg --ci
       - name: Prepare and upload macOS release assets
         run: |
-          SOURCE_PATH="target/x86_64-apple-darwin/release/bundle/dmg/Nocterm_${RELEASE_VERSION}_x64.dmg"
-          ARTIFACT_PATH="target/release/artifacts/Nocterm_${RELEASE_VERSION}_macos_x86_64.dmg"
+          SOURCE_PATH="target/${RUST_TARGET}/release/bundle/dmg/Nocterm_${RELEASE_VERSION}_${SOURCE_ARCH}.dmg"
+          ARTIFACT_PATH="target/release/artifacts/Nocterm_${RELEASE_VERSION}_macos_${ARTIFACT_ARCH}.dmg"
           if [ ! -s "$SOURCE_PATH" ]; then
             echo "Expected non-empty macOS DMG was not produced: $SOURCE_PATH" >&2
             exit 1
@@ -213,6 +229,8 @@ jobs:
 
           ASSETS="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
           EXPECTED_ASSETS=(
+            "Nocterm_${RELEASE_VERSION}_macos_aarch64.dmg"
+            "Nocterm_${RELEASE_VERSION}_macos_aarch64.dmg.sha256"
             "Nocterm_${RELEASE_VERSION}_macos_x86_64.dmg"
             "Nocterm_${RELEASE_VERSION}_macos_x86_64.dmg.sha256"
             "Nocterm_${RELEASE_VERSION}_windows_x86_64-setup.exe"
