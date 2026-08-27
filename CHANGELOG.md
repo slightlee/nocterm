@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.0-beta.1](https://github.com/slightlee/nocterm/compare/v0.1.0-beta.0...v0.1.0-beta.1) (2026-08-27)
+## [0.1.0-beta.1](https://github.com/slightlee/nocterm/compare/b9a9270161c7fce3d33d0ef72ba678fe8899223c...v0.1.0-beta.1) (2026-08-27)
 
 
 ### Features
