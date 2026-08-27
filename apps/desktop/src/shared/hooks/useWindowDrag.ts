@@ -16,8 +16,10 @@ const NO_DRAG_SELECTOR = [
   '[role="button"]',
 ].join(',');
 
-function isNoDragTarget(target: EventTarget | null) {
-  return target instanceof HTMLElement && Boolean(target.closest(NO_DRAG_SELECTOR));
+export function isNoDragTarget(target: EventTarget | null) {
+  // SVGElement 同样支持 closest；按 DOM 能力判断，避免点击图标路径时误启动窗口拖拽。
+  if (!target || typeof (target as Element).closest !== 'function') return false;
+  return Boolean((target as Element).closest(NO_DRAG_SELECTOR));
 }
 
 function startWindowDrag(event: MouseEvent<HTMLElement>) {
