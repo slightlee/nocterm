@@ -745,12 +745,19 @@ async fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>, ConnectFailur
             });
         }
     };
-    let addresses: Vec<SocketAddr> = lookup
-        .map_err(|error| ConnectFailure {
-            code: "hostResolveFailed",
-            message: format!("无法解析主机名 {host}：{error}"),
-        })?
-        .collect();
+    let addresses = lookup.map(|resolved| resolved.collect());
+    finish_resolution(host, addresses)
+}
+
+/// 将系统解析器结果收口成稳定错误码；独立于真实 DNS，便于跨平台确定性测试。
+fn finish_resolution(
+    host: &str,
+    lookup: io::Result<Vec<SocketAddr>>,
+) -> Result<Vec<SocketAddr>, ConnectFailure> {
+    let addresses = lookup.map_err(|error| ConnectFailure {
+        code: "hostResolveFailed",
+        message: format!("无法解析主机名 {host}：{error}"),
+    })?;
     if addresses.is_empty() {
         return Err(ConnectFailure {
             code: "hostResolveFailed",
@@ -1061,12 +1068,15 @@ mod tests {
         assert!(failure.message.contains(&format!("127.0.0.1:{port}")));
     }
 
-    #[tokio::test]
-    async fn dial_reports_an_unresolvable_host_before_attempting_any_connection() {
-        // .invalid 是 RFC 2606 保留后缀，保证不会被真实 DNS 解析成某个地址。
-        let failure = dial("nocterm-nonexistent.invalid", 22)
-            .await
-            .expect_err("unresolvable host must fail");
+    #[test]
+    fn resolve_reports_lookup_failures_without_external_dns() {
+        // 代理或 VPN 可能把 .invalid 映射到 Fake-IP；人工构造错误才能保持跨网络环境确定。
+        let lookup = Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "fixture lookup failure",
+        ));
+        let failure = finish_resolution("nocterm-nonexistent.invalid", lookup)
+            .expect_err("failed lookup must be classified");
         assert_eq!(failure.code, "hostResolveFailed");
         assert!(failure.message.contains("nocterm-nonexistent.invalid"));
     }
