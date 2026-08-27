@@ -166,6 +166,7 @@ Nocterm_<version>_<platform>_<arch>.<ext>
 
 ```text
 Nocterm_0.1.0-beta.1_macos_aarch64.dmg
+Nocterm_0.1.0-beta.1_macos_x86_64.dmg
 Nocterm_0.1.0-beta.1_windows_x86_64-setup.exe
 ```
 
@@ -177,7 +178,7 @@ corepack pnpm release:build:windows
 
 脚本从根 `package.json` 读取产品版本，精确删除当前版本的旧 NSIS 源文件、规范副本和校验文件，再执行 Tauri 构建。只有构建成功且新源文件存在、非空时，才会在 `target/release/artifacts/` 生成符合上述命名规则的 NSIS 副本和同名 `.sha256` 校验文件。脚本当前只接受本机 Windows x64 产物；新增架构时必须先在对应平台验证 Tauri 原始命名和安装行为。
 
-推送有效发布 Tag 后，`.github/workflows/release.yml` 从 Tag 解引用后的固定提交分别在 `macos-14` 与 `windows-latest` 原生构建 macOS x86_64 DMG 和 Windows x86_64 NSIS。工作流创建或复用同 Tag 的 Draft Release，上传两个安装包及各自的 `.sha256`，最后核对四个资产齐全。自动化只准备 Draft，不公开发布；任一平台失败时 Draft 保持不可见，修复后可重跑并安全覆盖同名资产。
+推送有效发布 Tag 后，`.github/workflows/release.yml` 从 Tag 解引用后的固定提交构建三个原生产物：在 `macos-15` ARM64 Runner 构建 macOS aarch64 DMG，在 `macos-15-intel` Runner 构建 macOS x86_64 DMG，并在 `windows-latest` 构建 Windows x86_64 NSIS。两个 macOS 构建都将最低运行版本固定为 macOS 14.0；Runner 系统版本只描述构建环境，不代表安装包只能在 macOS 15 运行。工作流创建或复用同 Tag 的 Draft Release，上传三个安装包及各自的 `.sha256`，最后核对六个资产齐全。自动化只准备 Draft，不公开发布；任一平台失败时 Draft 保持不可见，修复后可重跑并安全覆盖同名资产。
 
 每次分发至少记录：
 
@@ -219,7 +220,7 @@ corepack pnpm release:build:windows
 5. 确认发布提交仍为 `chore: prepare v<version>`，且本次变更日志不包含未发布候选的重复内容或失效 Tag 比较链接；
 6. 创建与版本一致的 annotated Git Tag；
 7. 推送 Tag，自动触发 Tag CI 和 Release 工作流；后者从 Tag 对应提交生成双平台安装包、SHA-256 和 Draft Release，不使用本地旧构建代替；
-8. 等待两个工作流全部通过，核对 Draft 中版本、Tag、提交和四个发布资产一致；自动化失败时修复工作流或代码后重跑，不移动或重建 Tag；
+8. 等待两个工作流全部通过，核对 Draft 中版本、Tag、提交和六个发布资产一致；自动化失败时修复工作流或代码后重跑，不移动或重建 Tag；
 9. 下载 Draft 中的最终安装包，在 macOS、Windows 执行对应冒烟与业务验收；
 10. 验收通过并获得最终发布授权后，由仓库维护者公开 Draft；Alpha、Beta、RC 标记为 Pre-release，正式版不得标记为 Pre-release；
 11. 记录测试结果，并只按真实证据更新能力矩阵。
