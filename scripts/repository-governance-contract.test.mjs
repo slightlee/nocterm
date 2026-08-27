@@ -32,6 +32,20 @@ describe('repository governance contract', () => {
     assert.doesNotMatch(pullRequestTemplate, /^Closes #$/m);
   });
 
+  it('keeps permanent Git history in English without restricting issue language', () => {
+    const workflow = readText('.github/workflows/ci.yml');
+    const pullRequestTemplate = readText('.github/pull_request_template.md');
+    const developmentGuide = readText('docs/development.md');
+    const commitlintConfig = readText('commitlint.config.mjs');
+
+    assert.match(workflow, /node scripts\/check-pr-title-language\.mjs/);
+    assert.match(commitlintConfig, /'subject-english-ascii': \[2, 'always'\]/);
+    assert.match(pullRequestTemplate, /PR 标题必须使用英文 Conventional Commits/);
+    assert.match(developmentGuide, /Issue 标题和正文允许使用中文或英文/);
+    assert.match(developmentGuide, /Pull Request 标题和 Git Commit 必须使用英文/);
+    assert.match(developmentGuide, /Issue 与 PR 正文不执行语言检测/);
+  });
+
   it('keeps issue closure and release acceptance semantics documented', () => {
     const developmentGuide = readText('docs/development.md');
     const releaseGuide = readText('docs/release-process.md');

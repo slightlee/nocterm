@@ -60,7 +60,9 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: echo "$PR_TITLE" | pnpm exec commitlint
+        run: |
+          printf '%s\n' "$PR_TITLE" | pnpm exec commitlint
+          node scripts/check-pr-title-language.mjs
       - name: Validate pushed commit
         if: github.event_name == 'push'
         env:

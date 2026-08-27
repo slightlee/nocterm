@@ -81,6 +81,16 @@ Pull Request 标题必须符合第 6 节的 Conventional Commits 规范，并作
 
 GitHub 必须通过 Ruleset 保护 `main`：所有变更必须经过 Pull Request，Required Checks 至少包含前端检查以及 macOS、Windows Rust 检查，并禁止强制推送和删除分支。单人维护阶段不强制批准人数，但必须解决 Review Conversation；增加协作者后再要求至少一名非作者批准。仓库设置应启用合并后自动删除分支。
 
+### 5.3 协作语言
+
+- Issue 标题和正文允许使用中文或英文，不因贡献者语言阻止问题提交；同一 Issue 内应尽量保持一种主要语言；
+- Pull Request 正文、Review 和讨论允许使用中文或英文，原则上跟随关联 Issue 或贡献者使用的语言；
+- Pull Request 标题和 Git Commit 必须使用英文 Conventional Commits。仓库使用 Squash merge，因此 PR 标题就是进入 `main` 的永久提交信息；
+- 分支名、代码标识、API、稳定错误码、GitHub Label、CI Job、Tag 和安装包名称使用英文；
+- 当前 README、开发文档、代码注释和用户界面以中文为主，第三方技术名词保留原文；未来需要国际化时通过独立英文文档或 i18n 资源实现，不在同一句文案中逐句混排。
+
+Commitlint 的本地 `commit-msg` Hook 和远程 CI 共同校验 Commit 与 PR 标题的 Conventional Commits 结构及英文 ASCII 字符。Issue 与 PR 正文不执行语言检测，避免限制外部贡献者表达；维护者在合并前只需要规范化 PR 标题。
+
 ## 6. Git 提交规范
 
 提交信息采用 Conventional Commits：
@@ -105,7 +115,7 @@ GitHub 必须通过 Ruleset 保护 `main`：所有变更必须经过 Pull Reques
 - `chore`：其他工程维护；
 - `revert`：回滚提交。
 
-主题必须简洁、明确，不超过 100 个字符。例如：
+主题必须使用英文 ASCII 字符，保持简洁、明确且不超过 100 个字符。例如：
 
 ```text
 feat: add local session lifecycle
