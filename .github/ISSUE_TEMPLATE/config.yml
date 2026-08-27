@@ -1,4 +1,4 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
   - name: 安全漏洞报告
     url: https://github.com/slightlee/nocterm/security/advisories/new

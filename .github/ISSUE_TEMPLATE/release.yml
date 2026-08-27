@@ -1,0 +1,82 @@
+name: 发布验收
+description: 跟踪候选版本的安装包、真实平台验收和最终发布决定
+title: '[Release]: '
+labels:
+  - release
+body:
+  - type: markdown
+    attributes:
+      value: |
+        本 Issue 只记录候选版本验收，不替代 Release Please PR、Git Tag 或发布授权。请勿填写 Token、凭据、测试服务器地址或未脱敏日志。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本与通道
+      description: 填写 SemVer 版本和发布通道。
+      placeholder: 例如：0.1.0-beta.1 / Beta
+    validations:
+      required: true
+
+  - type: textarea
+    id: provenance
+    attributes:
+      label: 构建来源
+      description: 记录 Git Tag、完整 Commit SHA、CI Run 链接和构建时间。
+      placeholder: |
+        Tag: v0.1.0-beta.1
+        Commit: <full sha>
+        CI Run: <url>
+        Build time: <ISO 8601>
+    validations:
+      required: true
+
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: 产物与校验值
+      description: 记录每个平台和架构的安装包名称、格式及 SHA-256。
+      placeholder: |
+        - macOS aarch64: <filename> / <sha256>
+        - macOS aarch64 checksum: <filename.sha256>
+        - macOS x86_64: <filename> / <sha256>
+        - macOS x86_64 checksum: <filename.sha256>
+        - Windows x86_64: <filename> / <sha256>
+        - Windows x86_64 checksum: <filename.sha256>
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: platform_acceptance
+    attributes:
+      label: 真实平台验收
+      description: 仅在对应最终安装包于目标系统真实运行并留有证据后勾选。
+      options:
+        - label: macOS aarch64 已完成安装、启动、退出和声明范围验收
+        - label: macOS x86_64 已完成安装、启动、退出和声明范围验收
+        - label: Windows x86_64 已完成安装、启动、退出和声明范围验收
+        - label: 安装包名称、版本、Commit 和 SHA-256 已相互核对
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 验收证据
+      description: 按平台记录系统版本、CPU 架构、测试范围、结果和脱敏后的证据链接。
+    validations:
+      required: true
+
+  - type: textarea
+    id: known_issues
+    attributes:
+      label: 已知问题与发布决定
+      description: 记录问题等级、接受或阻断理由、回滚方式，以及最终是否允许公开 Draft；没有已知问题时填写“无”。
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: 安全确认
+      options:
+        - label: 我已确认验收记录不包含密码、私钥、Token、测试服务器地址或其他敏感信息。
+          required: true
