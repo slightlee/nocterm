@@ -44,6 +44,10 @@ describe('release workflow contract', () => {
     assert.match(workflow, /Nocterm_\$\{RELEASE_VERSION\}_macos_aarch64\.dmg/);
     assert.match(workflow, /Nocterm_\$\{RELEASE_VERSION\}_macos_x86_64\.dmg/);
     assert.match(workflow, /Nocterm_\$\{env:RELEASE_VERSION\}_windows_x86_64-setup\.exe/);
+    assert.match(
+      workflow,
+      /verify-draft-release:[\s\S]*?permissions:\n {6}contents: write[\s\S]*?Verify draft release assets/
+    );
     assert.doesNotMatch(workflow, /gh release edit .*--draft=false/);
     assert.equal(tauriConfig.bundle.macOS.minimumSystemVersion, '14.0');
   });

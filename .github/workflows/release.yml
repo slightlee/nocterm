@@ -213,7 +213,7 @@ jobs:
     needs: [validate, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
