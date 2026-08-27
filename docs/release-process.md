@@ -201,6 +201,10 @@ corepack pnpm release:build:windows
 
 只有在目标系统真实运行后，才能更新能力矩阵中的平台验收状态。浏览器预览、单元测试、CI 或另一平台的结果不能代替目标安装包验收。
 
+每个准备分发的候选版本必须创建或维护一条“发布验收”Issue，集中记录 Git Tag、完整 Commit SHA、CI Run、全部安装包 SHA-256、逐平台真实运行结果、已知问题等级和最终发布决定。该 Issue 在 Draft 产物生成前可以先建立，但只有最终产物与证据齐全后才能完成验收。
+
+与候选版本相关、仍需合并后安装包验收的 Pull Request 只使用 `Refs #<issue>`，不得通过 `Closes` 或 `Fixes` 提前关闭发布验收 Issue。验收 Issue 的关闭不等同于公开发布 Draft；公开发布仍必须按第 10 节单独获得授权并执行。
+
 ## 10. Git 与最小发布流程
 
 当前阶段从受保护的 `main` 分支发布，不创建长期 `develop` 或 `release/*` 分支。需要修复时通过正常分支和 Pull Request 回到 `main`，以减少分支漂移。
@@ -221,9 +225,10 @@ corepack pnpm release:build:windows
 6. 创建与版本一致的 annotated Git Tag；
 7. 推送 Tag，自动触发 Tag CI 和 Release 工作流；后者从 Tag 对应提交生成双平台安装包、SHA-256 和 Draft Release，不使用本地旧构建代替；
 8. 等待两个工作流全部通过，核对 Draft 中版本、Tag、提交和六个发布资产一致；自动化失败时修复工作流或代码后重跑，不移动或重建 Tag；
-9. 下载 Draft 中的最终安装包，在 macOS、Windows 执行对应冒烟与业务验收；
-10. 验收通过并获得最终发布授权后，由仓库维护者公开 Draft；Alpha、Beta、RC 标记为 Pre-release，正式版不得标记为 Pre-release；
-11. 记录测试结果，并只按真实证据更新能力矩阵。
+9. 创建或更新本候选版本的“发布验收”Issue，记录 Tag、Commit、CI Run、六个资产名称与 SHA-256；
+10. 下载 Draft 中的最终安装包，在 macOS、Windows 执行对应冒烟与业务验收，并把真实结果和已知问题写入验收 Issue；
+11. 验收通过并获得最终发布授权后，由仓库维护者公开 Draft；Alpha、Beta、RC 标记为 Pre-release，正式版不得标记为 Pre-release；
+12. 记录发布决定，关闭验收 Issue，并只按真实证据更新能力矩阵。
 
 ### 10.1 候选版本失败与收敛
 

@@ -57,6 +57,7 @@ corepack pnpm cargo:check
 - 可复现的 Bug 原则上先创建 Issue，记录影响平台、复现步骤、预期行为、实际行为和脱敏后的证据；涉及凭据泄露、远程代码执行或数据损坏的安全问题必须使用 GitHub Private Security Advisory，不得创建公开 Issue；
 - 非平凡功能先通过 Issue 明确用户问题、范围、非目标和验收标准；拼写、纯格式等无需独立跟踪的小改动可以不创建 Issue，但 Pull Request 必须说明原因；
 - Issue 描述问题和验收边界，不预先锁死实现；一个 Issue 可以经过讨论后拆分为多个独立交付的 Pull Request。
+- 发布候选版本使用“发布验收”Issue 记录 Tag、Commit、CI Run、产物哈希、目标平台实测和最终发布决定；该 Issue 是验收记录，不替代 Release Please Pull Request、Git Tag 或发布授权。
 
 ### 5.2 分支与 Pull Request
 
@@ -69,7 +70,14 @@ corepack pnpm cargo:check
 
 分支名使用与 Conventional Commits 一致的类型前缀；有关联 Issue 时建议包含编号，例如 `feat/123-sftp-upload`、`fix/456-windows-keychain`、`docs/123-release-process` 或 `ci/123-release-validation`。分支合并后立即删除，不将已完成的任务分支演变为长期集成分支。
 
-Pull Request 标题必须符合第 6 节的 Conventional Commits 规范，并作为 Squash merge 后进入 `main` 的提交信息。关联 Issue 时在 Pull Request 描述中使用 `Closes #123` 或 `Fixes #123`，由合并动作自动关闭 Issue；不应为了关联 Issue 把编号塞入提交标题。仓库只允许 Squash merge，禁止 Merge Commit 和 Rebase merge，以保持一个 Pull Request 对应 `main` 上一个可回滚的逻辑提交。
+Pull Request 标题必须符合第 6 节的 Conventional Commits 规范，并作为 Squash merge 后进入 `main` 的提交信息。不应为了关联 Issue 把编号塞入提交标题。关联语义按以下规则选择：
+
+- 默认使用 `Refs #123`，表示变更与 Issue 相关，但合并时不自动关闭；
+- 只有 Pull Request 合并本身即可满足 Issue 全部验收标准时，才使用 `Closes #123` 或 `Fixes #123`；
+- 如果仍需合并后的目标平台、最终安装包或人工验收，必须使用 `Refs #123`，补齐证据后再手动关闭 Issue；
+- 一个 Issue 拆分为多个 Pull Request 时，前置 Pull Request 使用 `Refs`，仅最终完成全部验收标准的 Pull Request 可以使用 `Closes` 或 `Fixes`。
+
+仓库只允许 Squash merge，禁止 Merge Commit 和 Rebase merge，以保持一个 Pull Request 对应 `main` 上一个可回滚的逻辑提交。合并前应在 Pull Request 中分别记录已检查、已自动测试、已构建、已真实运行和未验证范围，不得用 CI 通过代替真实平台验收。
 
 GitHub 必须通过 Ruleset 保护 `main`：所有变更必须经过 Pull Request，Required Checks 至少包含前端检查以及 macOS、Windows Rust 检查，并禁止强制推送和删除分支。单人维护阶段不强制批准人数，但必须解决 Review Conversation；增加协作者后再要求至少一名非作者批准。仓库设置应启用合并后自动删除分支。
 

@@ -1,6 +1,8 @@
 name: Bug 报告
 description: 报告可复现的功能缺陷、回归或跨平台问题
 title: '[Bug]: '
+labels:
+  - bug
 body:
   - type: markdown
     attributes:

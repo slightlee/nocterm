@@ -1,6 +1,8 @@
 name: 功能建议
 description: 提议具有明确用户价值和验收标准的新能力
 title: '[Feature]: '
+labels:
+  - enhancement
 body:
   - type: textarea
     id: problem
