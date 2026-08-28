@@ -24,6 +24,15 @@ describe('release workflow contract', () => {
     assert.match(workflow, /RELEASE_TAG: \$\{\{ inputs\.release_tag \|\| github\.ref_name \}\}/);
   });
 
+  it('uses the Windows GUI subsystem for release builds', () => {
+    const desktopEntrypoint = readWorkflow('apps/desktop/src-tauri/src/main.rs');
+
+    assert.match(
+      desktopEntrypoint,
+      /^#!\[cfg_attr\(not\(debug_assertions\), windows_subsystem = "windows"\)\]$/m
+    );
+  });
+
   it('builds both desktop platforms from tags and only prepares a draft release', () => {
     const workflow = readWorkflow('.github/workflows/release.yml');
     const tauriConfig = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
