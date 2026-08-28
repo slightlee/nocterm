@@ -52,6 +52,14 @@ describe('release workflow contract', () => {
     }
   });
 
+  it('localizes the Windows installer from the operating system language', () => {
+    const tauriConfig = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+    const nsisConfig = tauriConfig.bundle.windows.nsis;
+
+    assert.deepEqual(nsisConfig.languages, ['English', 'SimpChinese']);
+    assert.equal(nsisConfig.displayLanguageSelector, false);
+  });
+
   it('builds both desktop platforms from tags and only prepares a draft release', () => {
     const workflow = readWorkflow('.github/workflows/release.yml');
     const tauriConfig = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
