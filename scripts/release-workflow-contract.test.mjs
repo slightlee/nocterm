@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 const readWorkflow = (path) => readFileSync(path, 'utf8').replaceAll('\r\n', '\n');
@@ -31,6 +31,24 @@ describe('release workflow contract', () => {
       desktopEntrypoint,
       /^#!\[cfg_attr\(not\(debug_assertions\), windows_subsystem = "windows"\)\]$/m
     );
+  });
+
+  it('bundles the required desktop application icons', () => {
+    const tauriConfig = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+    const desktopIcons = [
+      'icons/32x32.png',
+      'icons/128x128.png',
+      'icons/128x128@2x.png',
+      'icons/icon.icns',
+      'icons/icon.ico',
+    ];
+
+    assert.deepEqual(tauriConfig.bundle.icon, desktopIcons);
+    for (const icon of desktopIcons) {
+      const path = `apps/desktop/src-tauri/${icon}`;
+      assert.equal(existsSync(path), true, `Missing desktop icon: ${path}`);
+      assert.ok(statSync(path).size > 0, `Desktop icon is empty: ${path}`);
+    }
   });
 
   it('builds both desktop platforms from tags and only prepares a draft release', () => {
