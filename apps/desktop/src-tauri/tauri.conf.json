@@ -47,7 +47,9 @@
     },
     "windows": {
       "nsis": {
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": false
       }
     }
   }
