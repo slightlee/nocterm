@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0-beta.2](https://github.com/slightlee/nocterm/compare/v0.1.0-beta.1...v0.1.0-beta.2) (2026-08-28)
+
+
+### Bug Fixes
+
+* allow verification of draft release assets ([#6](https://github.com/slightlee/nocterm/issues/6)) ([e5ba828](https://github.com/slightlee/nocterm/commit/e5ba82803e453ab479d4ac245f4abc5a0a60db74)), closes [#4](https://github.com/slightlee/nocterm/issues/4)
+* build macOS installers for both architectures ([#5](https://github.com/slightlee/nocterm/issues/5)) ([f86e467](https://github.com/slightlee/nocterm/commit/f86e46756b8b69264a73d303c17e32e052627035)), closes [#4](https://github.com/slightlee/nocterm/issues/4)
+* bundle desktop application icons ([#14](https://github.com/slightlee/nocterm/issues/14)) ([7fca53b](https://github.com/slightlee/nocterm/commit/7fca53b6a628ad967fd0786d106d910b99ef84d3)), closes [#12](https://github.com/slightlee/nocterm/issues/12)
+* hide console window in Windows release builds ([eabdd3d](https://github.com/slightlee/nocterm/commit/eabdd3d922b71b1fdb89ce4be8e467e338ad502a))
+* localize Windows installer ([#16](https://github.com/slightlee/nocterm/issues/16)) ([be71c5c](https://github.com/slightlee/nocterm/commit/be71c5c6dda96272bec4fda74ef029b968ca6c8e)), closes [#15](https://github.com/slightlee/nocterm/issues/15)
+* prevent controls from triggering window drag ([e1b4a20](https://github.com/slightlee/nocterm/commit/e1b4a2006ed5f726620f13ce9d9f3a65f912dd8c)), closes [#9](https://github.com/slightlee/nocterm/issues/9)
+
 ## [0.1.0-beta.1](https://github.com/slightlee/nocterm/compare/b9a9270161c7fce3d33d0ef72ba678fe8899223c...v0.1.0-beta.1) (2026-08-27)
 
 
