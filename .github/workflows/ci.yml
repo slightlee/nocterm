@@ -22,7 +22,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ inputs.release_tag || github.ref }}
+          # 手动重验从受保护 main 获取最新门禁；Tag push 仍检出事件对应的不可变源码。
+          ref: ${{ github.ref }}
       # actions/checkout 可能把本地 Tag 引用保留为解引用后的提交。
       # 显式取回远端 Tag 对象，确保 annotated tag 门禁检查真实发布证据。
       - name: Fetch annotated release tag
@@ -55,7 +56,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         env:
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-        run: node scripts/check-release-version.mjs --tag "$RELEASE_TAG"
+        run: |
+          RELEASE_SHA="$(git rev-list -n 1 "$RELEASE_TAG")"
+          node scripts/check-release-version.mjs --tag "$RELEASE_TAG" --head "$RELEASE_SHA"
       - name: Validate pull request title
         if: github.event_name == 'pull_request'
         env:

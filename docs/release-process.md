@@ -73,6 +73,10 @@ Release Please 生成的发布提交使用：
 chore: prepare v0.1.0-beta.1
 ```
 
+GitHub Squash merge 会在该标题后自动追加 Pull Request 编号，例如
+`chore: prepare v0.1.0-beta.1 (#17)`。发布门禁只把这一标准后缀视为等价形式；其他附加文本、
+零值编号、前导零编号或非标准括号格式仍会被拒绝，避免放宽发布提交与版本的一一对应约束。
+
 仓库通过 `pnpm release:check` 校验版本格式、唯一版本源配置、版本递增、发布提交和 Tag。修改 `package.json` 的产品版本时必须使用上述发布提交；本地 `commit-msg` Hook 和远程 CI 会分别校验，不能依赖 Hook 作为唯一门禁。
 
 ## 5. 变更等级与发布决策
@@ -221,8 +225,8 @@ corepack pnpm release:build:windows
 2. 在 `main` 上完成本轮代码稳定化，运行前端、Rust 和双平台 CI，并完成能在发布提交前执行的真实环境预验证；临时构建必须记录 Git Commit 与哈希，不得对外宣称为可分发版本；
 3. 由仓库维护者手动运行 Release Please，审查其提议的版本、变更日志、提交范围和 CI；未收敛的发布 Pull Request 保持打开，不以合并代替验收；
 4. 确认候选范围已稳定后，使用 Squash merge 合并发布 Pull Request；合并本身不自动生成下一版本 Pull Request；
-5. 确认发布提交仍为 `chore: prepare v<version>`，且本次变更日志不包含未发布候选的重复内容或失效 Tag 比较链接；
-6. 创建与版本一致的 annotated Git Tag；
+5. 等待发布提交对应的 `main` push CI 全部通过，确认发布提交仍为 `chore: prepare v<version>` 或 GitHub Squash 等价形式，且本次变更日志不包含未发布候选的重复内容或失效 Tag 比较链接；任何失败、取消或仍在运行的检查都会阻止创建 Tag；
+6. 只为上述已通过 `main` CI 的提交创建与版本一致的 annotated Git Tag；
 7. 推送 Tag，自动触发 Tag CI 和 Release 工作流；后者从 Tag 对应提交生成双平台安装包、SHA-256 和 Draft Release，不使用本地旧构建代替；
 8. 等待两个工作流全部通过，核对 Draft 中版本、Tag、提交和六个发布资产一致；自动化失败时修复工作流或代码后重跑，不移动或重建 Tag；
 9. 创建或更新本候选版本的“发布验收”Issue，记录 Tag、Commit、CI Run、六个资产名称与 SHA-256；
@@ -279,7 +283,9 @@ Git Commit 与安装包 SHA-256
 
 Tag 推送会同时运行版本门禁和发布工作流。若 CI 平台检出的本地引用丢失 annotated tag 对象，工作流必须从远端显式取回同名 Tag 后再校验。发布工作流先锁定 Tag 解引用后的提交，再让所有构建 Job 从该提交检出源码；只有发布准备 Job 和平台上传 Job 获得最小 `contents: write` 权限。它可以自动创建 Draft Release 和覆盖同一 Draft 的同名资产，但不得公开发布、覆盖已发布 Release 或移动 Tag。
 
-修复工作流后重验已有不可变 Tag 时，维护者从 `main` 手动运行 CI 和 Release 工作流，并传入 `release_tag`；例如：
+发布工作流还会强制确认 Tag 提交可从远端 `main` 到达，并查询 GitHub Actions，要求该提交已经存在成功的 `main` push CI；因此即使维护者误把 Tag 提前推送，工作流也不会创建 Draft 或开始平台构建。手动事故恢复不能绕过门禁：用于启动恢复任务的最新 `main` 提交也必须先通过对应的 push CI。
+
+修复工作流后重验已有不可变 Tag 时，维护者从 `main` 手动运行 CI 和 Release 工作流，并传入 `release_tag`；手动任务使用受保护 `main` 上的最新校验工具读取并校验 Tag 指向的版本和提交，但平台构建仍固定检出该 Tag 解引用后的 Commit SHA。例如：
 
 ```bash
 gh workflow run ci.yml --ref main -f release_tag=v0.1.0-beta.2
