@@ -16,12 +16,16 @@ describe('release workflow contract', () => {
     const workflow = readWorkflow('.github/workflows/ci.yml');
 
     assert.match(workflow, /^ {2}workflow_dispatch:\n {4}inputs:\n {6}release_tag:/m);
-    assert.match(workflow, /ref: \$\{\{ inputs\.release_tag \|\| github\.ref \}\}/);
+    assert.match(workflow, /ref: \$\{\{ github\.ref \}\}/);
     assert.match(
       workflow,
       /git fetch --force origin "refs\/tags\/\$RELEASE_TAG:refs\/tags\/\$RELEASE_TAG"/
     );
     assert.match(workflow, /RELEASE_TAG: \$\{\{ inputs\.release_tag \|\| github\.ref_name \}\}/);
+    assert.match(
+      workflow,
+      /check-release-version\.mjs --tag "\$RELEASE_TAG" --head "\$RELEASE_SHA"/
+    );
   });
 
   it('uses the Windows GUI subsystem for release builds', () => {
@@ -66,8 +70,27 @@ describe('release workflow contract', () => {
 
     assert.match(workflow, /^ {2}push:\n {4}tags: \['v\*'\]/m);
     assert.match(workflow, /^ {2}workflow_dispatch:\n {4}inputs:\n {6}release_tag:/m);
+    assert.match(workflow, /^permissions:\n {2}actions: read\n {2}contents: read$/m);
     assert.match(workflow, /release_sha: \$\{\{ steps\.release\.outputs\.release_sha \}\}/);
+    assert.match(workflow, /ref: \$\{\{ github\.ref \}\}/);
     assert.match(workflow, /ref: \$\{\{ needs\.validate\.outputs\.release_sha \}\}/);
+    assert.match(
+      workflow,
+      /check-release-version\.mjs --tag "\$RELEASE_TAG" --head "\$RELEASE_SHA"/
+    );
+    assert.match(
+      workflow,
+      /"\$GITHUB_EVENT_NAME" = "workflow_dispatch"[\s\S]*?"\$GITHUB_REF" != "refs\/heads\/main"/
+    );
+    assert.match(
+      workflow,
+      /git merge-base --is-ancestor "\$RELEASE_SHA" "refs\/remotes\/origin\/main"/
+    );
+    assert.match(
+      workflow,
+      /actions\/workflows\/ci\.yml\/runs[\s\S]*?-f branch=main[\s\S]*?-f event=push[\s\S]*?-f head_sha="\$REQUIRED_CI_SHA"[\s\S]*?-f status=success/
+    );
+    assert.match(workflow, /if \[ "\$SUCCESSFUL_MAIN_RUNS" -lt 1 \]; then/);
     assert.match(workflow, /runner: macos-15\n {12}target: aarch64-apple-darwin/);
     assert.match(workflow, /runner: macos-15-intel\n {12}target: x86_64-apple-darwin/);
     assert.match(workflow, /MACOSX_DEPLOYMENT_TARGET: '14\.0'/);

@@ -111,6 +111,10 @@ describe('release version rules', () => {
       validateReleaseCommit('chore: prepare v0.1.0-beta.1', VERSION_FILES, '0.1.0-beta.1'),
       []
     );
+    assert.deepEqual(
+      validateReleaseCommit('chore: prepare v0.1.0-beta.1 (#17)', VERSION_FILES, '0.1.0-beta.1'),
+      []
+    );
     assert.match(
       validateReleaseCommit('chore: bump version', VERSION_FILES, '0.1.0-beta.1')[0],
       /提交信息必须/
@@ -127,6 +131,59 @@ describe('release version rules', () => {
       )[0],
       /提交信息必须/
     );
+    for (const subject of [
+      'chore: prepare v0.1.0-beta.1 (#0)',
+      'chore: prepare v0.1.0-beta.1 (#017)',
+      'chore: prepare v0.1.0-beta.1 (PR #17)',
+      'chore: prepare v0.1.0-beta.1 extra',
+    ]) {
+      assert.match(
+        validateReleaseCommit(subject, VERSION_FILES, '0.1.0-beta.1')[0],
+        /提交信息必须/
+      );
+    }
+  });
+
+  it('validates an immutable tag with the latest checker from another ref', () => {
+    const repository = mkdtempSync(join(tmpdir(), 'nocterm-release-tag-check-'));
+
+    try {
+      mkdirSync(join(repository, 'apps/desktop/src-tauri'), { recursive: true });
+      writeJson(join(repository, 'package.json'), {
+        name: 'nocterm',
+        version: '0.1.0-beta.2',
+      });
+      writeJson(join(repository, 'apps/desktop/package.json'), {
+        name: '@nocterm/desktop',
+        private: true,
+      });
+      writeJson(join(repository, 'apps/desktop/src-tauri/tauri.conf.json'), {
+        version: '../../../package.json',
+      });
+
+      runGit(repository, ['init', '--initial-branch=main']);
+      runGit(repository, ['config', 'user.name', 'Nocterm Test']);
+      runGit(repository, ['config', 'user.email', 'test@nocterm.local']);
+      runGit(repository, ['add', '.']);
+      runGit(repository, ['commit', '-m', 'chore: prepare v0.1.0-beta.2 (#17)']);
+      const releaseCommit = runGit(repository, ['rev-parse', 'HEAD']);
+      runGit(repository, ['tag', '-a', 'v0.1.0-beta.2', '-m', 'Release v0.1.0-beta.2']);
+
+      writeFileSync(join(repository, 'README.md'), 'latest validation tooling\n');
+      runGit(repository, ['add', 'README.md']);
+      runGit(repository, ['commit', '-m', 'ci: update release validation']);
+
+      const result = spawnSync(
+        process.execPath,
+        [RELEASE_CHECK_SCRIPT, '--tag', 'v0.1.0-beta.2', '--head', releaseCommit],
+        { cwd: repository, encoding: 'utf8' }
+      );
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Release version check passed: 0\.1\.0-beta\.2/);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
   });
 
   it('validates the pull request head instead of a synthetic merge commit', () => {

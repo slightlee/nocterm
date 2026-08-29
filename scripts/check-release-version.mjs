@@ -91,13 +91,22 @@ export function validateReleaseCommit(message, changedFiles, version) {
   const subject = message.split(/\r?\n/, 1)[0];
   const expected = `chore: prepare v${version}`;
   const touchesVersion = changedFiles.some((file) => VERSION_FILES.includes(file));
-  if (touchesVersion && subject !== expected) {
-    return [`版本变更提交信息必须为“${expected}”，当前为“${subject}”`];
+  if (touchesVersion && !isReleaseCommitSubject(subject, expected)) {
+    return [
+      `版本变更提交信息必须为“${expected}”或其 GitHub Squash 形式“${expected} (#<PR>)”，当前为“${subject}”`,
+    ];
   }
   if (!touchesVersion && subject.startsWith('chore: prepare v')) {
     return ['发布提交必须实际修改产品版本'];
   }
   return [];
+}
+
+/** GitHub Squash merge 会在 PR 标题后追加编号；仅接受其标准正整数格式。 */
+function isReleaseCommitSubject(subject, expected) {
+  if (subject === expected) return true;
+  const escapedExpected = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escapedExpected} \\(#[1-9]\\d*\\)$`).test(subject);
 }
 
 function readVersionFromContent(file, content) {
@@ -194,8 +203,8 @@ function validateAgainstBase(baseRef, headRef, errors) {
   validateReleaseHistory(baseRef, headRef, currentVersion, errors);
 }
 
-function validateTag(tag, errors) {
-  const version = assertValidEntries(readGitEntries('HEAD'), errors);
+function validateTag(tag, releaseRef, errors) {
+  const version = assertValidEntries(readGitEntries(releaseRef), errors);
   const expectedTag = `v${version}`;
   if (tag !== expectedTag) errors.push(`Git Tag 必须为 ${expectedTag}，当前为 ${tag}`);
 
@@ -206,18 +215,27 @@ function validateTag(tag, errors) {
     errors.push('发布 Tag 校验需要完整 Git 历史与 Tag，请取消浅克隆后重试');
   }
 
+  let tagCommit = null;
   try {
     const tagType = runGit(['cat-file', '-t', `refs/tags/${tag}`]);
     if (tagType !== 'tag')
       errors.push(`Git Tag ${tag} 必须是 annotated tag，当前类型为 ${tagType}`);
+    tagCommit = runGit(['rev-list', '-n', '1', `refs/tags/${tag}`]);
   } catch {
     errors.push(`无法读取 Git Tag ${tag}`);
   }
 
-  const subject = runGit(['show', '-s', '--format=%s', 'HEAD']);
+  const releaseCommit = runGit(['rev-parse', `${releaseRef}^{commit}`]);
+  if (tagCommit && tagCommit !== releaseCommit) {
+    errors.push(`Git Tag ${tag} 未指向待校验提交 ${releaseCommit}`);
+  }
+
+  const subject = runGit(['show', '-s', '--format=%s', releaseCommit]);
   const expectedSubject = `chore: prepare ${expectedTag}`;
-  if (subject !== expectedSubject) {
-    errors.push(`Tag 必须指向发布提交“${expectedSubject}”，当前提交为“${subject}”`);
+  if (!isReleaseCommitSubject(subject, expectedSubject)) {
+    errors.push(
+      `Tag 必须指向发布提交“${expectedSubject}”或其 GitHub Squash 形式“${expectedSubject} (#<PR>)”，当前提交为“${subject}”`
+    );
   }
 }
 
@@ -236,21 +254,22 @@ export function main(args = process.argv.slice(2)) {
   const headRef = optionValue(args, '--head') ?? 'HEAD';
   const tag = optionValue(args, '--tag');
 
+  const readsGitRef = Boolean(baseRef || tag);
   const readContent = commitMessageFile
     ? (file) => runGit(['show', `:${file}`])
-    : baseRef
+    : readsGitRef
       ? (file) => runGit(['show', `${headRef}:${file}`])
       : (file) => readFileSync(file, 'utf8');
   errors.push(...validateVersionSourceConfiguration(readContent));
   const entries = commitMessageFile
     ? readGitEntries('')
-    : baseRef
+    : readsGitRef
       ? readGitEntries(headRef)
       : readWorkingTreeEntries();
   const currentVersion = assertValidEntries(entries, errors);
   if (commitMessageFile) validateStagedCommit(commitMessageFile, errors);
   if (baseRef) validateAgainstBase(baseRef, headRef, errors);
-  if (tag) validateTag(tag, errors);
+  if (tag) validateTag(tag, headRef, errors);
 
   if (errors.length > 0) throw new Error(errors.map((error) => `- ${error}`).join('\n'));
   console.log(`Release version check passed: ${currentVersion}`);
