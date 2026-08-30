@@ -1,0 +1,95 @@
+name: Create Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: New annotated release tag to create from main
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: create-release-tag-main
+  cancel-in-progress: false
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require release automation token
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_PLEASE_TOKEN" ]; then
+            echo "Repository secret RELEASE_PLEASE_TOKEN is required." >&2
+            exit 1
+          fi
+      # 写权限工作流固定所有第三方 Action，避免可变标签改变发布边界。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate main release commit and create annotated tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Release tags must be created from main, current ref is $GITHUB_REF." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.[1-9][0-9]*)?$ ]]; then
+            echo "Release tag $RELEASE_TAG does not match the supported version format." >&2
+            exit 1
+          fi
+
+          git fetch --force origin "refs/heads/main:refs/remotes/origin/main"
+          MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+          RELEASE_SHA="$(git rev-parse HEAD)"
+          if [ "$RELEASE_SHA" != "$MAIN_SHA" ]; then
+            echo "Release commit $RELEASE_SHA is not the current remote main commit $MAIN_SHA." >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release tag $RELEASE_TAG already exists on origin." >&2
+            exit 1
+          else
+            LS_REMOTE_STATUS=$?
+            if [ "$LS_REMOTE_STATUS" -ne 2 ]; then
+              echo "Unable to verify whether release tag $RELEASE_TAG already exists." >&2
+              exit 1
+            fi
+          fi
+
+          SUCCESSFUL_MAIN_RUNS="$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f branch=main \
+            -f event=push \
+            -f head_sha="$RELEASE_SHA" \
+            -f status=success \
+            -f per_page=1 \
+            --jq '.total_count')"
+          if [ "$SUCCESSFUL_MAIN_RUNS" -lt 1 ]; then
+            echo "A successful main push CI run is required for commit $RELEASE_SHA before tag creation." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Release $RELEASE_TAG"
+          node scripts/check-release-version.mjs --tag "$RELEASE_TAG" --head "$RELEASE_SHA"
+          git push origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"

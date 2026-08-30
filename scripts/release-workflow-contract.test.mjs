@@ -12,6 +12,30 @@ describe('release workflow contract', () => {
     assert.doesNotMatch(workflow, /^ {2}push:/m);
   });
 
+  it('creates release tags only through a CI-gated main workflow', () => {
+    const workflow = readWorkflow('.github/workflows/create-release-tag.yml');
+
+    assert.match(workflow, /^on:\n {2}workflow_dispatch:\n {4}inputs:\n {6}release_tag:/m);
+    assert.doesNotMatch(workflow, /^ {2}push:/m);
+    assert.match(workflow, /^permissions:\n {2}actions: read\n {2}contents: read$/m);
+    assert.match(workflow, /token: \$\{\{ secrets\.RELEASE_PLEASE_TOKEN \}\}/);
+    assert.match(workflow, /if \[ "\$GITHUB_REF" != "refs\/heads\/main" \]; then/);
+    assert.match(workflow, /RELEASE_SHA="\$\(git rev-parse HEAD\)"/);
+    assert.match(workflow, /if \[ "\$RELEASE_SHA" != "\$MAIN_SHA" \]; then/);
+    assert.match(workflow, /git ls-remote --exit-code --tags origin "refs\/tags\/\$RELEASE_TAG"/);
+    assert.match(
+      workflow,
+      /actions\/workflows\/ci\.yml\/runs[\s\S]*?-f branch=main[\s\S]*?-f event=push[\s\S]*?-f head_sha="\$RELEASE_SHA"[\s\S]*?-f status=success/
+    );
+    assert.match(workflow, /git tag -a "\$RELEASE_TAG" "\$RELEASE_SHA"/);
+    assert.match(
+      workflow,
+      /check-release-version\.mjs --tag "\$RELEASE_TAG" --head "\$RELEASE_SHA"/
+    );
+    assert.match(workflow, /git push origin "refs\/tags\/\$RELEASE_TAG:refs\/tags\/\$RELEASE_TAG"/);
+    assert.doesNotMatch(workflow, /gh release (create|edit)/);
+  });
+
   it('restores annotated tag objects and supports validating an existing tag', () => {
     const workflow = readWorkflow('.github/workflows/ci.yml');
 
