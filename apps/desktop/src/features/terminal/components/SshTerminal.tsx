@@ -1,7 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import type { ITheme } from '@xterm/xterm';
 import { useEffect, useRef } from 'react';
 
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
@@ -22,6 +21,13 @@ import {
   reducePasswordPrompt,
 } from '../model/password-prompt';
 import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
+import {
+  applyTerminalAppearance,
+  observeTerminalAppearance,
+  readTerminalFontSize,
+  readTerminalTheme,
+  TERMINAL_FONT_FAMILY,
+} from '../model/terminal-appearance';
 import { useTerminalStore } from '../model/terminal-store';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
@@ -30,38 +36,6 @@ import styles from './SshTerminal.module.css';
 interface SshTerminalProps {
   connection: ConnectionProfile;
   active?: boolean;
-}
-
-function readCssVariable(styles: CSSStyleDeclaration, name: string, fallback: string): string {
-  return styles.getPropertyValue(name).trim() || fallback;
-}
-
-function resolveTerminalTheme(container: HTMLElement): ITheme {
-  const variables = getComputedStyle(container);
-  const foreground = readCssVariable(variables, '--term-text', '#c9d1d9');
-  const background = readCssVariable(variables, '--term', '#0d1117');
-  const cursor = readCssVariable(variables, '--term-blue', '#58a6ff');
-  const selectionBackground = readCssVariable(variables, '--term-selection', '#264f78');
-  const red = readCssVariable(variables, '--term-red', '#f87171');
-  const green = readCssVariable(variables, '--term-green', '#4ade80');
-  const yellow = readCssVariable(variables, '--term-yellow', '#fbbf24');
-
-  return {
-    background,
-    foreground,
-    cursor,
-    selectionBackground,
-    selectionForeground: foreground,
-    black: foreground,
-    red,
-    green,
-    yellow,
-    blue: cursor,
-    brightRed: red,
-    brightGreen: green,
-    brightYellow: yellow,
-    brightBlue: cursor,
-  };
 }
 
 export function SshTerminal({ connection, active = true }: SshTerminalProps) {
@@ -80,10 +54,10 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
 
     const terminal = new Terminal({
       cursorBlink: true,
-      fontFamily: "'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace",
-      fontSize: 13,
+      fontFamily: TERMINAL_FONT_FAMILY,
+      fontSize: readTerminalFontSize(),
       scrollback: 10_000,
-      theme: resolveTerminalTheme(container),
+      theme: readTerminalTheme(container),
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -186,17 +160,16 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       })
     );
     const observer = new ResizeObserver(() => {
+      // 从设置页返回时隐藏容器会恢复尺寸，此处重新读取色板，不能只做 fit。
+      applyTerminalAppearance(terminal, container);
       fitAddon.fit();
       if (terminalId) void resizeSshTerminal(terminalId, terminal.cols, terminal.rows);
     });
     observer.observe(container);
 
-    const themeObserver = new MutationObserver(() => {
-      terminal.options.theme = resolveTerminalTheme(container);
-    });
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme'],
+    const stopObservingAppearance = observeTerminalAppearance(terminal, container, () => {
+      fitAddon.fit();
+      if (terminalId) void resizeSshTerminal(terminalId, terminal.cols, terminal.rows);
     });
 
     /**
@@ -300,7 +273,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       settlePrompt(null);
       detachPaste();
       observer.disconnect();
-      themeObserver.disconnect();
+      stopObservingAppearance();
       input.dispose();
       outputUnlisten?.();
       exitUnlisten?.();

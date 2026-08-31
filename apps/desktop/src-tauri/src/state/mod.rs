@@ -3,6 +3,7 @@ pub mod session_password;
 use nocterm_application::{
     connection::ConnectionService,
     health::HealthService,
+    settings::SettingsService,
     terminal::{LocalTerminalService, TerminalService},
 };
 use nocterm_infrastructure::{
@@ -16,6 +17,7 @@ use self::session_password::SessionPasswords;
 pub struct AppState {
     health_service: HealthService,
     connection_service: ConnectionService,
+    settings_service: SettingsService,
     terminal_service: TerminalService,
     local_terminal_service: LocalTerminalService,
     /// 进程内 SFTP 会话管理器：与终端共用 russh 后端，承载远程文件浏览与传输。
@@ -26,10 +28,15 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(health_service: HealthService, connection_service: ConnectionService) -> Self {
+    pub fn new(
+        health_service: HealthService,
+        connection_service: ConnectionService,
+        settings_service: SettingsService,
+    ) -> Self {
         Self {
             health_service,
             connection_service,
+            settings_service,
             terminal_service: TerminalService::new(Arc::new(SshTerminalManager::default())),
             local_terminal_service: LocalTerminalService::new(Arc::new(
                 LocalTerminalManager::default(),
@@ -45,6 +52,10 @@ impl AppState {
 
     pub fn connection_service(&self) -> &ConnectionService {
         &self.connection_service
+    }
+
+    pub fn settings_service(&self) -> &SettingsService {
+        &self.settings_service
     }
 
     pub fn terminal_service(&self) -> &TerminalService {

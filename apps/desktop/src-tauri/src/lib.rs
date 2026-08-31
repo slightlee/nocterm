@@ -5,7 +5,9 @@ mod state;
 use std::sync::Arc;
 
 use commands::sftp::{SftpTransferState, shutdown_sftp};
-use nocterm_application::{connection::ConnectionService, health::HealthService};
+use nocterm_application::{
+    connection::ConnectionService, health::HealthService, settings::SettingsService,
+};
 use nocterm_infrastructure::{
     credential::SystemCredentialStore, persistence::SqliteConnectionRepository,
     platform::SystemPlatformProbe,
@@ -26,13 +28,18 @@ pub fn run() {
             let credential_store = Arc::new(SystemCredentialStore::default());
             let connection_service =
                 ConnectionService::with_credential_store(repository.clone(), credential_store);
+            let settings_service = SettingsService::new(repository.clone());
             // 产品版本由 Tauri 配置解析根 package.json；Cargo crate 版本仅描述内部包。
             let health_service = HealthService::new(
                 Arc::new(SystemPlatformProbe),
                 app.package_info().version.to_string(),
             );
 
-            app.manage(AppState::new(health_service, connection_service));
+            app.manage(AppState::new(
+                health_service,
+                connection_service,
+                settings_service,
+            ));
             app.manage(SftpTransferState::default());
             Ok(())
         })
@@ -53,6 +60,10 @@ pub fn run() {
             commands::credential::credential_store,
             commands::credential::credential_delete,
             commands::credential::connection_bind_private_key,
+            commands::settings::settings_app_theme_get,
+            commands::settings::settings_app_theme_set,
+            commands::settings::settings_terminal_appearance_get,
+            commands::settings::settings_terminal_appearance_set,
             commands::local_terminal::local_terminal_open,
             commands::local_terminal::local_terminal_write,
             commands::local_terminal::local_terminal_resize,
