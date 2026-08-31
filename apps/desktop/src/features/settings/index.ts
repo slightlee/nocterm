@@ -1,3 +1,4 @@
+export { AboutSettingsPage } from './components/AboutSettingsPage';
 export { AppearanceSettingsPage } from './components/AppearanceSettingsPage';
 export { SettingsPage } from './components/SettingsPage';
 export { SettingsProvider } from './model/SettingsProvider';

@@ -2,6 +2,8 @@
 
 Nocterm 是一个本地优先、面向 macOS 和 Windows 的桌面终端客户端，用于管理本地终端、SSH 连接、SFTP 文件和本地连接配置。
 
+本项目采用 [MIT License](LICENSE)。
+
 ## 技术栈
 
 - Tauri 2 + React + TypeScript + Vite；

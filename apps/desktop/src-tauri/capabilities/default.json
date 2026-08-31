@@ -7,6 +7,7 @@
     "core:default",
     "core:app:allow-set-app-theme",
     "core:window:allow-start-dragging",
-    "dialog:default"
+    "dialog:default",
+    "opener:default"
   ]
 }

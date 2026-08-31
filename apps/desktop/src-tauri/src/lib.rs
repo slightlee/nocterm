@@ -19,6 +19,7 @@ use tauri::Manager;
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let database_path = app.path().app_data_dir()?.join("nocterm.db");
             let repository = Arc::new(

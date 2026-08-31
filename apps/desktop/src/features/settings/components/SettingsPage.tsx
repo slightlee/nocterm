@@ -20,6 +20,14 @@ export function SettingsPage() {
           >
             <span>外观</span>
           </NavLink>
+          <NavLink
+            className={({ isActive }) =>
+              `${styles.navigationItem} ${isActive ? styles.active : ''}`
+            }
+            to="/settings/about"
+          >
+            <span>关于</span>
+          </NavLink>
         </nav>
       </aside>
       <div className={styles.content}>

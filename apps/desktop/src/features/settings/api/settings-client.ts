@@ -1,5 +1,6 @@
 import { setTheme as setTauriTheme } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 
 import type {
   AppTheme,
@@ -47,4 +48,9 @@ export function getTerminalAppearance(): Promise<TerminalAppearance> {
 
 export function setTerminalAppearance(request: TerminalAppearance): Promise<TerminalAppearance> {
   return invoke<TerminalAppearance>('settings_terminal_appearance_set', { request });
+}
+
+/** 外部地址统一交给系统默认浏览器，避免在桌面 WebView 内导航离开应用。 */
+export function openExternalUrl(url: string): Promise<void> {
+  return openUrl(url);
 }
