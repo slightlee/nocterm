@@ -5,9 +5,12 @@ use nocterm_domain::connection::{
     ConnectionProfile, ConnectionRepository, ConnectionRepositoryError, ImportedConnection,
     NewConnectionGroup, NewConnectionProfile,
 };
+use nocterm_domain::settings::{
+    AppTheme, SettingsRepository, SettingsRepositoryError, TerminalColorScheme,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// 列顺序即 `map_profile` 的下标契约：新增列只能追加在末尾，避免改动既有下标。
 const PROFILE_COLUMNS: &str = "connection_profiles.id, connection_profiles.name, connection_profiles.host, connection_profiles.port, connection_profiles.username, connection_profiles.authentication, connection_profiles.created_at, connection_profiles.updated_at,
@@ -427,6 +430,90 @@ impl ConnectionRepository for SqliteConnectionRepository {
     }
 }
 
+impl SettingsRepository for SqliteConnectionRepository {
+    fn app_theme(&self) -> Result<Option<AppTheme>, SettingsRepositoryError> {
+        self.setting_value("app_theme")?
+            .map(|value| AppTheme::parse(&value).map_err(settings_error))
+            .transpose()
+    }
+
+    fn set_app_theme(&self, theme: AppTheme) -> Result<(), SettingsRepositoryError> {
+        self.set_setting_value("app_theme", theme.as_str())
+    }
+
+    fn terminal_font_size(&self) -> Result<Option<u8>, SettingsRepositoryError> {
+        self.setting_value("terminal_font_size")?
+            .map(|value| value.parse::<u8>().map_err(settings_error))
+            .transpose()
+    }
+
+    fn terminal_color_scheme(
+        &self,
+    ) -> Result<Option<TerminalColorScheme>, SettingsRepositoryError> {
+        self.setting_value("terminal_color_scheme")?
+            .map(|value| TerminalColorScheme::parse(&value).map_err(settings_error))
+            .transpose()
+    }
+
+    fn set_terminal_appearance(
+        &self,
+        font_size: u8,
+        color_scheme: TerminalColorScheme,
+    ) -> Result<(), SettingsRepositoryError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| settings_error("database lock poisoned"))?;
+        let transaction = connection.transaction().map_err(settings_error)?;
+        for (key, value) in [
+            ("terminal_font_size", font_size.to_string()),
+            ("terminal_color_scheme", color_scheme.as_str().to_string()),
+        ] {
+            transaction
+                .execute(
+                    "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()",
+                    params![key, value],
+                )
+                .map_err(settings_error)?;
+        }
+        transaction.commit().map_err(settings_error)
+    }
+}
+
+impl SqliteConnectionRepository {
+    /// 通用键值表的 SQL 只保留一份，领域仓储仍以类型安全方法对外暴露。
+    fn setting_value(&self, key: &str) -> Result<Option<String>, SettingsRepositoryError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| settings_error("database lock poisoned"))?;
+        connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                [key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(settings_error)
+    }
+
+    fn set_setting_value(&self, key: &str, value: &str) -> Result<(), SettingsRepositoryError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| settings_error("database lock poisoned"))?;
+        connection
+            .execute(
+                "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()",
+                params![key, value],
+            )
+            .map_err(settings_error)?;
+        Ok(())
+    }
+}
+
 fn configure_connection(connection: &Connection) -> Result<(), ConnectionRepositoryError> {
     // 所有连接统一启用约束和等待策略，避免 Repository 各自形成不同数据库语义。
     connection
@@ -531,6 +618,21 @@ fn migrate(connection: &mut Connection) -> Result<(), ConnectionRepositoryError>
             .map_err(repository_error)?;
     }
 
+    if current_version < 5 {
+        // 设置采用稳定键值保存：新增外观选项不应继续改变连接资料表结构。
+        // 值仍由 Domain/Application 解析和校验，SQLite 不承载展示文案。
+        transaction
+            .execute_batch(
+                "CREATE TABLE app_settings (
+                     key TEXT PRIMARY KEY NOT NULL CHECK (length(trim(key)) > 0),
+                     value TEXT NOT NULL,
+                     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                 );
+                 INSERT INTO schema_migrations (version) VALUES (5);",
+            )
+            .map_err(repository_error)?;
+    }
+
     transaction.commit().map_err(repository_error)
 }
 
@@ -566,6 +668,10 @@ fn map_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConnectionProfile> {
 fn repository_error(error: impl std::fmt::Display) -> ConnectionRepositoryError {
     // 诊断信息只停留在基础设施边界；Application 会转换成面向 UI 的稳定错误。
     ConnectionRepositoryError::new(error.to_string())
+}
+
+fn settings_error(error: impl std::fmt::Display) -> SettingsRepositoryError {
+    SettingsRepositoryError::new(error.to_string())
 }
 
 #[cfg(test)]
@@ -655,6 +761,35 @@ mod tests {
             })
             .expect("read schema version");
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn persists_application_theme_without_materializing_the_default() {
+        let repository = SqliteConnectionRepository::open_in_memory().expect("open database");
+
+        assert_eq!(repository.app_theme().expect("read default"), None);
+        repository
+            .set_app_theme(AppTheme::Dark)
+            .expect("save application theme");
+        assert_eq!(
+            repository.app_theme().expect("read saved theme"),
+            Some(AppTheme::Dark)
+        );
+
+        assert_eq!(repository.terminal_font_size().expect("read font"), None);
+        repository
+            .set_terminal_appearance(16, TerminalColorScheme::NoctermDark)
+            .expect("save terminal appearance");
+        assert_eq!(
+            repository.terminal_font_size().expect("read saved font"),
+            Some(16)
+        );
+        assert_eq!(
+            repository
+                .terminal_color_scheme()
+                .expect("read saved color scheme"),
+            Some(TerminalColorScheme::NoctermDark)
+        );
     }
 
     #[test]
@@ -844,5 +979,14 @@ mod tests {
             .expect("read migrated column");
         // 老连接迁移后路径为空，由 resolve_private_key 回落到凭据库里的遗留密钥。
         assert_eq!(path, None);
+
+        let settings_table: String = connection
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated settings table");
+        assert_eq!(settings_table, "app_settings");
     }
 }

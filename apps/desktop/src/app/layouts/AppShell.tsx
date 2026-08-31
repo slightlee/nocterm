@@ -35,17 +35,6 @@ export function AppShell() {
     return () => window.removeEventListener('resize', collapseWhenNeeded);
   }, []);
 
-  useEffect(() => {
-    // 设置页尚未迁移时仍跟随系统主题，保持旧版默认的 system 语义。
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const syncTheme = () => {
-      document.documentElement.dataset.theme = mediaQuery.matches ? 'dark' : 'light';
-    };
-    syncTheme();
-    mediaQuery.addEventListener('change', syncTheme);
-    return () => mediaQuery.removeEventListener('change', syncTheme);
-  }, []);
-
   return (
     <div
       className={styles.app}

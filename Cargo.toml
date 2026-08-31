@@ -10,7 +10,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
+license = "MIT"
 rust-version = "1.94"
 
 [workspace.dependencies]
@@ -20,6 +20,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2" }
 tauri-plugin-dialog = "2.7.1"
+tauri-plugin-opener = "2"
 thiserror = "2"
 # 进程内 SSH/SFTP：russh + russh-sftp 纯 Rust 实现，规避 Windows OpenSSH 的密码注入
 # 与 ControlMaster 多路复用限制。使用 ring 加密后端而非默认 aws-lc-rs，

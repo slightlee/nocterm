@@ -66,7 +66,7 @@ export function TerminalWorkspace({ sidebarCollapsed, onToggleSidebar }: Termina
   };
 
   return (
-    <div className={styles.container}>
+    <div className={`${styles.container} nocterm-terminal-surface`}>
       <header className={styles.tabBar}>
         <button
           aria-label={sidebarCollapsed ? '显示连接面板' : '隐藏连接面板'}
