@@ -131,7 +131,7 @@ export function AiComposer({
           aria-label="输入 AI 请求"
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={onComposerKeyDown}
-          placeholder={`询问 ${provider.name}…`}
+          placeholder="输入问题或直接告诉我想做什么…"
           rows={3}
           ref={composerRef}
           value={draft}

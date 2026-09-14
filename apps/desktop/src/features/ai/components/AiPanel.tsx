@@ -539,9 +539,7 @@ export function AiPanel({ visible }: AiPanelProps) {
     <aside className={styles.panel} aria-label="AI 工作台">
       <header className={styles.header}>
         <div className={styles.titleGroup}>
-          <div className={styles.titleCopy}>
-            <h2>智能助手</h2>
-          </div>
+          <h2>AI 助手</h2>
         </div>
         <div className={styles.headerActions}>
           <button
@@ -648,13 +646,25 @@ export function AiPanel({ visible }: AiPanelProps) {
       ) : null}
 
       <div className={styles.contextBar}>
-        <span className={styles.contextStatusDot} />
+        <span
+          className={`${styles.contextStatusDot} ${
+            activeSessionStatus === 'connected'
+              ? styles.contextStatusConnected
+              : activeSessionStatus === 'connecting'
+                ? styles.contextStatusConnecting
+                : activeSessionStatus === 'error'
+                  ? styles.contextStatusError
+                  : styles.contextStatusInactive
+          }`}
+        />
         <span>
           {activeSession && activeSessionStatus === 'connected'
             ? `已连接 ${activeSession.name}，可分析命令、日志与报错`
             : activeSessionStatus === 'connecting'
               ? '终端连接中，连接完成后可分析命令、日志与报错'
-              : '连接终端后，可分析命令、日志与报错'}
+              : activeSessionStatus === 'error'
+                ? '终端连接异常，请先恢复连接后再让 AI 执行操作'
+                : '连接终端后，可分析命令、日志与报错'}
         </span>
       </div>
 
@@ -667,7 +677,6 @@ export function AiPanel({ visible }: AiPanelProps) {
           notice={notice}
           onResolveApproval={resolveApproval}
           onRetry={retryLastQuestion}
-          onSuggestion={(prompt) => submit(undefined, prompt)}
           pendingApproval={pendingApproval}
           providerName={selectedProvider.name}
           runParts={runParts}

@@ -1,4 +1,5 @@
 .panel {
+  container-type: inline-size;
   position: relative;
   width: var(--layout-ai-panel);
   min-width: var(--layout-ai-panel-min);
@@ -33,15 +34,7 @@
 }
 
 .titleGroup {
-  gap: 8px;
   min-width: 0;
-}
-
-.titleCopy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0;
 }
 
 h2,
@@ -51,9 +44,10 @@ p {
 }
 
 .titleGroup h2 {
+  white-space: nowrap;
   color: var(--term-text);
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
@@ -90,53 +84,55 @@ p {
   stroke-width: 1.8;
 }
 
-/* 折叠手柄是无边框的幽灵按钮：默认只显示半透明箭头，悬停才出现淡底，避免在面板边缘形成突兀方框 */
+/* 折叠手柄持续可见，作为面板边界控件；hover 只增强对比度，不负责让控件显形。 */
 .collapseButton {
   position: absolute;
   top: 50%;
-  left: -10px;
+  left: -12px;
   z-index: var(--z-sticky);
   display: inline-flex;
-  width: 20px;
+  width: 24px;
   height: 56px;
   align-items: center;
   justify-content: center;
   padding: 0;
   color: var(--term-muted);
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
+  background: var(--bg-hover);
+  border: 1px solid var(--term-border);
+  border-radius: 12px;
   cursor: pointer;
-  opacity: 0.55;
   transform: translateY(-50%);
   transition:
     color var(--dur-fast),
     background var(--dur-fast),
-    opacity var(--dur-fast);
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast);
+  box-shadow: var(--shadow-sm);
 }
 
 .collapseButton:hover {
   color: var(--term-text);
   background: var(--bg-hover);
-  opacity: 1;
+  border-color: color-mix(in srgb, var(--term-text) 22%, var(--term-border));
+  box-shadow: var(--shadow-md);
 }
 
 .collapseButton:focus-visible {
   color: var(--term-text);
   background: var(--bg-hover);
-  opacity: 1;
+  border-color: var(--accent-blue);
   outline: 2px solid var(--accent-blue);
   outline-offset: 1px;
 }
 
 .collapseButton svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   fill: none;
   stroke: currentcolor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.8;
+  stroke-width: 2.1;
 }
 
 .providerDot,
@@ -155,7 +151,23 @@ p {
 .contextStatusDot {
   width: 8px;
   height: 8px;
+  background: var(--term-muted);
+}
+
+.contextStatusConnected {
   background: var(--term-green);
+}
+
+.contextStatusConnecting {
+  background: var(--term-yellow);
+}
+
+.contextStatusError {
+  background: var(--term-red);
+}
+
+.contextStatusInactive {
+  background: var(--term-muted);
 }
 
 .providerMenu {
@@ -509,90 +521,16 @@ p {
   display: flex;
   min-height: 100%;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 0 0 12px;
+  padding: 0 10px 12px;
+  text-align: center;
 }
 
 .emptyState h3 {
   color: var(--term-text);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.taskGrid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px 8px;
-  width: 100%;
-  margin-top: 12px;
-}
-
-.taskCard {
-  position: relative;
-  display: flex;
-  width: calc(50% - 4px);
-  min-height: 76px;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 11px 10px;
-  color: var(--term-text);
-  font: inherit;
-  font-size: 11px;
-  text-align: left;
-  background: var(--term-panel);
-  border: 1px solid var(--term-border);
-  border-radius: 9px;
-  cursor: pointer;
-  transition:
-    color var(--dur-fast),
-    border-color var(--dur-fast),
-    background var(--dur-fast),
-    transform var(--dur-fast);
-}
-
-.taskCard:hover {
-  background: var(--accent-blue-soft);
-  border-color: var(--term-blue);
-  transform: translateY(-1px);
-}
-
-.taskIcon {
-  display: inline-flex;
-  width: 18px;
-  height: 18px;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  color: var(--term-blue);
-}
-
-.taskIcon svg {
-  width: 17px;
-  height: 17px;
-  flex: none;
-  fill: none;
-  stroke: currentcolor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
-}
-
-.taskCopy {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.taskCopy strong {
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.taskCopy small {
-  color: var(--term-muted);
-  font-size: 10px;
-  line-height: 1.4;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .messageList {
@@ -619,31 +557,8 @@ p {
 
 .assistantMessage {
   align-items: flex-start;
-  gap: 8px;
-  padding: 0 1px;
-}
-
-.assistantAvatar {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  color: var(--term-blue);
-  background: var(--accent-blue-soft);
-  border: 1px solid color-mix(in srgb, var(--term-blue) 24%, transparent);
-  border-radius: 7px;
-}
-
-.assistantAvatar svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentcolor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
+  padding: 0 0 0 10px;
+  border-left: 2px solid color-mix(in srgb, var(--term-blue) 68%, var(--term-border));
 }
 
 .messageBody {
@@ -1027,6 +942,7 @@ p {
 
 /* 输入框底部工具行：Provider、执行权限和附件均使用主题化胶囊控件。 */
 .composerFooter {
+  gap: 12px;
   justify-content: space-between;
   padding: 6px 8px 8px;
 }
@@ -1198,6 +1114,7 @@ p {
   display: inline-flex;
   width: 30px;
   height: 30px;
+  flex: none;
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -1209,6 +1126,38 @@ p {
   transition:
     background var(--dur-fast),
     opacity var(--dur-fast);
+}
+
+@container (max-width: 330px) {
+  .composerFooter {
+    gap: 8px;
+  }
+
+  .composerTools {
+    gap: 4px;
+  }
+
+  .composerProviderButton {
+    min-width: 0;
+    max-width: 86px;
+    padding: 0 7px;
+  }
+
+  .providerLabel > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .attachmentButton {
+    width: 30px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .attachmentButton > span {
+    display: none;
+  }
 }
 
 .sendButton:disabled {

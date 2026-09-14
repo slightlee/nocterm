@@ -4,33 +4,6 @@ import type { AiMessage, AiMessagePart, AiToolApprovalEvent } from '../model/ai-
 import { AiMarkdown } from './AiMarkdown';
 import styles from './AiPanel.module.css';
 
-const SUGGESTIONS = [
-  {
-    title: '解释终端报错',
-    description: '分析错误原因并提供解决方案',
-    prompt: '解释当前终端里的错误，并给出处理建议',
-    icon: 'spark',
-  },
-  {
-    title: '检查部署状态',
-    description: '检查服务与容器运行状态',
-    prompt: '检查当前服务器的部署状态',
-    icon: 'server',
-  },
-  {
-    title: '分析日志',
-    description: '快速提取关键错误与告警',
-    prompt: '分析当前终端中的运行日志，找出关键错误和告警',
-    icon: 'document',
-  },
-  {
-    title: '生成运维命令',
-    description: '生成安全的诊断或修复命令',
-    prompt: '根据当前问题生成安全、可审阅的运维命令',
-    icon: 'command',
-  },
-] as const;
-
 interface AiConversationViewProps {
   messages: AiMessage[];
   providerName: string;
@@ -42,21 +15,8 @@ interface AiConversationViewProps {
   approvalSubmitting: boolean;
   notice: string | null;
   lastUserMessageId?: string;
-  onSuggestion: (prompt: string) => void;
   onRetry: () => void;
   onResolveApproval: (approved: boolean) => void;
-}
-
-/** 中性终端助手头像统一用于历史回复与流式输出，避免用装饰性星星表达身份。 */
-function AssistantAvatar() {
-  return (
-    <span className={styles.assistantAvatar} aria-hidden="true">
-      <svg viewBox="0 0 24 24">
-        <path d="M9 4h6M12 4V2M6 7h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z" />
-        <path d="M8 12h1M15 12h1M9 16h6" />
-      </svg>
-    </span>
-  );
 }
 
 /** 已完成与流式消息共用同一渲染器，工具活动不会在任务结束时改变位置或消失。 */
@@ -86,42 +46,13 @@ export function AiConversationView({
   approvalSubmitting,
   notice,
   lastUserMessageId,
-  onSuggestion,
   onRetry,
   onResolveApproval,
 }: AiConversationViewProps) {
   if (messages.length === 0) {
     return (
       <div className={styles.emptyState}>
-        <h3>让助手协助你处理当前终端任务</h3>
-        <div className={styles.taskGrid}>
-          {SUGGESTIONS.map((suggestion) => (
-            <button
-              className={styles.taskCard}
-              key={suggestion.title}
-              onClick={() => onSuggestion(suggestion.prompt)}
-              type="button"
-            >
-              <span className={styles.taskIcon} aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  {suggestion.icon === 'spark' ? (
-                    <path d="m12 3 1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6L12 3ZM19 16l.7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z" />
-                  ) : suggestion.icon === 'server' ? (
-                    <path d="M4 5h16v6H4zM4 13h16v6H4zM7 8h.01M7 16h.01M11 8h6M11 16h6" />
-                  ) : suggestion.icon === 'document' ? (
-                    <path d="M6 3h9l3 3v15H6zM9 11h6M9 15h6M9 7h3" />
-                  ) : (
-                    <path d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h8" />
-                  )}
-                </svg>
-              </span>
-              <span className={styles.taskCopy}>
-                <strong>{suggestion.title}</strong>
-                <small>{suggestion.description}</small>
-              </span>
-            </button>
-          ))}
-        </div>
+        <h3>我能帮你做什么？</h3>
       </div>
     );
   }
@@ -133,7 +64,6 @@ export function AiConversationView({
           <article
             className={`${styles.message} ${message.role === 'user' ? styles.userMessage : styles.assistantMessage}`}
           >
-            {message.role === 'assistant' ? <AssistantAvatar /> : null}
             <div className={styles.messageBody}>
               <span className={styles.messageRole}>
                 {message.role === 'user' ? '你' : providerName}
@@ -162,7 +92,6 @@ export function AiConversationView({
       ))}
       {running || streamText ? (
         <article className={`${styles.message} ${styles.assistantMessage}`}>
-          <AssistantAvatar />
           <div className={styles.messageBody}>
             <span className={styles.messageRole}>
               {providerName}

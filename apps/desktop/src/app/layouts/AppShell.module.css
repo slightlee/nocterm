@@ -23,53 +23,58 @@
   overflow: hidden;
 }
 
-/* AI 面板收起后的展开手柄：与面板侧折叠手柄同款幽灵样式，默认半透明、悬停显形 */
+/* AI 面板收起后的展开手柄：与面板侧折叠手柄保持同款持续可见的胶囊形态。 */
 .aiReveal {
   position: absolute;
   top: 50%;
-  right: 0;
+
+  /* 保持与展开态同一尺寸，向右移出一半后由工作区边界裁掉右半胶囊。 */
+  right: -12px;
   z-index: var(--z-sticky);
   display: inline-flex;
-  width: 20px;
+  width: 24px;
   height: 56px;
   align-items: center;
   justify-content: center;
   padding: 0;
   color: var(--term-muted);
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
+  background: var(--bg-hover);
+  border: 1px solid var(--term-border);
+  border-radius: 12px;
   cursor: pointer;
-  opacity: 0.55;
   transform: translateY(-50%);
   transition:
     color var(--dur-fast),
     background var(--dur-fast),
-    opacity var(--dur-fast);
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast);
+  box-shadow: var(--shadow-sm);
 }
 
 .aiReveal:hover {
   color: var(--term-text);
   background: var(--bg-hover);
-  opacity: 1;
+  border-color: color-mix(in srgb, var(--term-text) 22%, var(--term-border));
+  box-shadow: var(--shadow-md);
 }
 
 .aiReveal:focus-visible {
   color: var(--term-text);
   background: var(--bg-hover);
-  opacity: 1;
+  border-color: var(--accent-blue);
   outline: 2px solid var(--accent-blue);
   outline-offset: 1px;
 }
 
 .aiReveal svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
+  transform: translateX(-6px);
   fill: none;
   stroke: currentcolor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.8;
+  stroke-width: 2.1;
 }
 
 .terminalWorkspace {
