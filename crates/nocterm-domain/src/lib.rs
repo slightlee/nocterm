@@ -1,3 +1,4 @@
+pub mod ai_audit;
 pub mod connection;
 pub mod credential;
 pub mod platform;

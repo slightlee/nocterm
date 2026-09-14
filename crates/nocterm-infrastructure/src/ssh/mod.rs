@@ -18,15 +18,15 @@ use std::{
     io::{self, Read},
     net::SocketAddr,
     sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use nocterm_domain::{
     connection::{AuthenticationMethod, ConnectionProfile},
-    terminal::{OpenedTerminal, SshTerminalPort},
+    terminal::{OpenedSshExecution, OpenedTerminal, SshExecutionCompletion, SshTerminalPort},
 };
 use russh::{
     ChannelMsg, Disconnect,
@@ -39,7 +39,7 @@ use russh::{
 use tokio::{
     net::TcpStream,
     runtime::Runtime,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     time::{Instant, timeout},
 };
 
@@ -61,6 +61,9 @@ const CONNECT_READY_TIMEOUT: Duration = Duration::from_secs(90);
 /// 主动关闭后等待会话任务自行收尾的宽限期，超过即中止任务。
 /// 礼貌断开只需一个 RTT，3 秒足够；再长会让退出应用时的清理明显变慢。
 const CLOSE_GRACE_TIMEOUT: Duration = Duration::from_secs(3);
+/// 独立 exec channel 从排队到远端接受命令的上限；同步调用方按同一预算等待。
+const EXEC_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const EXEC_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// SSH 基础设施错误保留底层上下文，由 Application 边界转换为稳定错误码。
 #[derive(Debug)]
@@ -80,8 +83,21 @@ enum TerminalCommand {
     Data(Vec<u8>),
     /// 终端尺寸调整，映射为 SSH 的 window-change 请求。
     Resize { cols: u16, rows: u16 },
+    /// 在同一条已认证 SSH 连接上开启独立 exec channel。
+    /// 输出不会进入用户当前可见的交互式 Shell 通道。
+    Exec(ExecChannelRequest),
     /// 主动关闭：结束事件循环并礼貌断开连接。
     Close,
+}
+
+/// 一次独立 exec 的所有权载荷；聚合后可作为单元在会话任务与 channel 任务间转交。
+struct ExecChannelRequest {
+    execution_id: String,
+    command: Vec<u8>,
+    output_tx: std::sync::mpsc::Sender<Vec<u8>>,
+    completion_tx: std::sync::mpsc::Sender<SshExecutionCompletion>,
+    ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
+    cancel_rx: oneshot::Receiver<()>,
 }
 
 /// 主机密钥校验期间可能产生的领域级失败，供 russh 的 Handler 向上传播。
@@ -117,6 +133,96 @@ struct TerminalHandle {
     connection_id: i64,
     command_tx: mpsc::UnboundedSender<TerminalCommand>,
     task: tokio::task::JoinHandle<()>,
+}
+
+/// AI exec channel 的取消表。终端任务结束时会按 owner 一次性清理，避免关闭可见
+/// PTY 后还有后台命令继续占用远端资源。
+struct ExecutionHandle {
+    owner_terminal_id: String,
+    cancel: oneshot::Sender<()>,
+}
+
+#[derive(Default)]
+struct ExecutionRegistry {
+    handles: Mutex<HashMap<String, ExecutionHandle>>,
+}
+
+impl ExecutionRegistry {
+    fn insert(
+        &self,
+        execution_id: String,
+        owner_terminal_id: String,
+        cancel: oneshot::Sender<()>,
+    ) -> Result<(), SshError> {
+        let mut handles = self
+            .handles
+            .lock()
+            .map_err(|_| SshError("SSH exec 取消状态锁已损坏".to_string()))?;
+        if handles.contains_key(&execution_id) {
+            return Err(SshError("SSH exec 执行标识冲突".to_string()));
+        }
+        handles.insert(
+            execution_id,
+            ExecutionHandle {
+                owner_terminal_id,
+                cancel,
+            },
+        );
+        Ok(())
+    }
+
+    fn remove(&self, execution_id: &str) {
+        if let Ok(mut handles) = self.handles.lock() {
+            handles.remove(execution_id);
+        }
+    }
+
+    fn cancel(&self, execution_id: &str) -> bool {
+        let handle = self
+            .handles
+            .lock()
+            .ok()
+            .and_then(|mut handles| handles.remove(execution_id));
+        handle.is_some_and(|handle| handle.cancel.send(()).is_ok())
+    }
+
+    fn cancel_owned(&self, owner_terminal_id: &str) {
+        let handles = self
+            .handles
+            .lock()
+            .ok()
+            .map(|mut handles| {
+                let ids = handles
+                    .iter()
+                    .filter(|(_, handle)| handle.owner_terminal_id == owner_terminal_id)
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>();
+                ids.into_iter()
+                    .filter_map(|id| handles.remove(&id))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for handle in handles {
+            let _ = handle.cancel.send(());
+        }
+    }
+
+    fn cancel_all(&self) {
+        let handles = self
+            .handles
+            .lock()
+            .ok()
+            .map(|mut handles| {
+                handles
+                    .drain()
+                    .map(|(_, handle)| handle)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for handle in handles {
+            let _ = handle.cancel.send(());
+        }
+    }
 }
 
 /// russh 客户端回调：目前仅覆盖主机密钥校验，其余沿用默认实现。
@@ -175,6 +281,8 @@ pub struct SshTerminalManager {
     runtime: Runtime,
     terminals: Mutex<HashMap<String, TerminalHandle>>,
     next_id: AtomicU64,
+    next_execution_id: AtomicU64,
+    executions: Arc<ExecutionRegistry>,
 }
 
 impl Default for SshTerminalManager {
@@ -188,6 +296,8 @@ impl Default for SshTerminalManager {
             runtime,
             terminals: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(0),
+            next_execution_id: AtomicU64::new(0),
+            executions: Arc::new(ExecutionRegistry::default()),
         }
     }
 }
@@ -227,6 +337,8 @@ impl SshTerminalManager {
             output_tx,
             command_rx,
             ready_tx,
+            terminal_id.clone(),
+            Arc::clone(&self.executions),
         ));
 
         // 各建连阶段自带精确超时，这里只做兜底：会话任务被意外中止或运行时僵死时，
@@ -268,6 +380,100 @@ impl SshTerminalManager {
                 position: 0,
             }),
         ))
+    }
+
+    /// 在已有终端所属的认证连接上建立独立 exec channel。
+    ///
+    /// 终端没有活跃会话时返回 `Ok(None)`；一旦找到活跃会话，私钥/密码不会再次
+    /// 从凭据层读取，也不会向可见 PTY 写入命令。
+    pub fn exec_existing(
+        &self,
+        connection_id: i64,
+        command: &str,
+        cancellation: &AtomicBool,
+    ) -> Result<Option<OpenedSshExecution>, SshError> {
+        if cancellation.load(Ordering::Acquire) {
+            return Err(SshError("AI 任务已停止，远程命令未执行".to_string()));
+        }
+        let (owner_terminal_id, command_tx) = {
+            let mut terminals = self
+                .terminals
+                .lock()
+                .map_err(|_| SshError("SSH 终端状态锁已损坏".to_string()))?;
+            // 远端 EOF 与 UI 清理之间存在短窗口，先剔除已结束或已关闭的句柄。
+            terminals.retain(|_, terminal| {
+                !terminal.task.is_finished() && !terminal.command_tx.is_closed()
+            });
+            let Some((terminal_id, terminal)) = terminals
+                .iter()
+                .filter(|(_, terminal)| terminal.connection_id == connection_id)
+                .min_by(|(left, _), (right, _)| left.cmp(right))
+            else {
+                return Ok(None);
+            };
+            (terminal_id.clone(), terminal.command_tx.clone())
+        };
+        let execution_id = format!(
+            "ssh-exec-{}",
+            self.next_execution_id.fetch_add(1, Ordering::Relaxed) + 1
+        );
+        let (output_tx, output_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let (completion_tx, completion) = std::sync::mpsc::channel();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        self.executions
+            .insert(execution_id.clone(), owner_terminal_id, cancel_tx)?;
+        if command_tx
+            .send(TerminalCommand::Exec(ExecChannelRequest {
+                execution_id: execution_id.clone(),
+                command: command.as_bytes().to_vec(),
+                output_tx,
+                completion_tx,
+                ready_tx,
+                cancel_rx,
+            }))
+            .is_err()
+        {
+            self.executions.cancel(&execution_id);
+            return Err(SshError("当前 SSH 连接已停止接收 AI 命令".to_string()));
+        }
+        let deadline = std::time::Instant::now() + EXEC_READY_TIMEOUT;
+        loop {
+            if cancellation.load(Ordering::Acquire) {
+                self.executions.cancel(&execution_id);
+                return Err(SshError("AI 任务已停止，远程命令未执行".to_string()));
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                self.executions.cancel(&execution_id);
+                return Err(SshError(
+                    "在当前 SSH 连接上打开 AI 执行通道超时".to_string(),
+                ));
+            }
+            match ready_rx.recv_timeout(remaining.min(EXEC_CANCEL_POLL_INTERVAL)) {
+                Ok(Ok(())) => {
+                    if cancellation.load(Ordering::Acquire) {
+                        self.executions.cancel(&execution_id);
+                        return Err(SshError("AI 任务已停止，远程命令未执行".to_string()));
+                    }
+                    return Ok(Some(OpenedSshExecution {
+                        id: execution_id,
+                        reader: Box::new(ChannelReader {
+                            rx: output_rx,
+                            buffer: Vec::new(),
+                            position: 0,
+                        }),
+                        completion,
+                    }));
+                }
+                Ok(Err(message)) => return Err(SshError(message)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    self.executions.cancel(&execution_id);
+                    return Err(SshError("SSH exec 通道在启动完成前意外关闭".to_string()));
+                }
+            }
+        }
     }
 
     pub fn write(&self, terminal_id: &str, data: &str) -> Result<(), SshError> {
@@ -316,6 +522,9 @@ impl SshTerminalManager {
                     task.abort();
                 }
             });
+        } else {
+            // AI exec channel 使用同一个 close 入口，超时或取消时不会误关用户可见 PTY。
+            self.executions.cancel(terminal_id);
         }
         Ok(())
     }
@@ -343,6 +552,7 @@ impl SshTerminalManager {
 impl Drop for SshTerminalManager {
     fn drop(&mut self) {
         // 进程退出或管理器销毁时中止全部会话任务，避免悬挂的网络连接。
+        self.executions.cancel_all();
         if let Ok(mut terminals) = self.terminals.lock() {
             for (_, handle) in terminals.drain() {
                 handle.task.abort();
@@ -380,6 +590,16 @@ impl SshTerminalPort for SshTerminalManager {
 
     fn close_connection(&self, connection_id: i64) -> Result<(), String> {
         SshTerminalManager::close_connection(self, connection_id).map_err(|error| error.to_string())
+    }
+
+    fn exec_existing(
+        &self,
+        connection_id: i64,
+        command: &str,
+        cancellation: &AtomicBool,
+    ) -> Result<Option<OpenedSshExecution>, String> {
+        SshTerminalManager::exec_existing(self, connection_id, command, cancellation)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -471,6 +691,8 @@ async fn run_session(
     output_tx: std::sync::mpsc::Sender<Vec<u8>>,
     mut command_rx: mpsc::UnboundedReceiver<TerminalCommand>,
     ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
+    terminal_id: String,
+    executions: Arc<ExecutionRegistry>,
 ) {
     // 建连与认证阶段的结果先回传给同步 open()，再进入长期事件循环。
     let (handle, mut read_half, write_half) =
@@ -484,6 +706,10 @@ async fn run_session(
                 return;
             }
         };
+    // russh 的 Handle 本身不可 Clone；用异步互斥封装后，AI exec channel 可以在
+    // 保持可见 Shell 读写循环运行的同时复用同一条已认证 SSH 连接。
+    let handle = Arc::new(tokio::sync::Mutex::new(handle));
+    let mut execution_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // 若配置了远程初始目录，开壳后立即切换，等价旧实现的 `cd` 行为。
     if let Some(path) = initial_path {
@@ -492,6 +718,9 @@ async fn run_session(
     }
 
     loop {
+        // 已完成的 AI 通道只留下极短的 JoinHandle；持续对话不会因为历史执行次数
+        // 无限增长内存占用。
+        execution_tasks.retain(|task| !task.is_finished());
         tokio::select! {
             message = read_half.wait() => match message {
                 // 标准输出与扩展输出（stderr）都回传给前端渲染。
@@ -518,15 +747,109 @@ async fn run_session(
                         .window_change(u32::from(cols), u32::from(rows), 0, 0)
                         .await;
                 }
+                Some(TerminalCommand::Exec(request)) => {
+                    let task = tokio::spawn(run_exec_channel(
+                        Arc::clone(&handle),
+                        request,
+                        Arc::clone(&executions),
+                    ));
+                    execution_tasks.push(task);
+                }
                 // 显式关闭或发送端全部释放：结束循环。
                 Some(TerminalCommand::Close) | None => break,
             },
         }
     }
 
+    // 先通知所有独立 exec channel，再中止其任务；否则关闭可见 Shell 后，
+    // AI 任务可能继续占用同一 SSH 连接直到远端命令自然结束。
+    executions.cancel_owned(&terminal_id);
+    for task in execution_tasks {
+        task.abort();
+    }
     // 尽力礼貌关闭通道并断开连接，忽略此时已不可达的错误。
     let _ = write_half.close().await;
+    let handle = handle.lock().await;
     let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
+}
+
+/// 在已认证 Handle 上执行一次远程命令。该 channel 没有 PTY，输出只回传给
+/// AI 调用方，天然与用户正在看的交互式 Shell 隔离。
+async fn run_exec_channel(
+    handle: Arc<tokio::sync::Mutex<Handle<ClientHandler>>>,
+    request: ExecChannelRequest,
+    executions: Arc<ExecutionRegistry>,
+) {
+    let ExecChannelRequest {
+        execution_id,
+        command,
+        output_tx,
+        completion_tx,
+        ready_tx,
+        mut cancel_rx,
+    } = request;
+    let channel = tokio::select! {
+        _ = &mut cancel_rx => {
+            executions.remove(&execution_id);
+            return;
+        }
+        result = async {
+            let handle = handle.lock().await;
+            handle.channel_open_session().await
+        } => {
+            match result {
+            Ok(channel) => channel,
+            Err(error) => {
+                executions.remove(&execution_id);
+                let _ = ready_tx.send(Err(format!("打开 SSH exec 通道失败：{error}")));
+                return;
+            }
+        }
+        }
+    };
+    let exec_result = tokio::select! {
+        _ = &mut cancel_rx => {
+            executions.remove(&execution_id);
+            let _ = channel.close().await;
+            return;
+        }
+        result = channel.exec(true, command) => result,
+    };
+    if let Err(error) = exec_result {
+        executions.remove(&execution_id);
+        let _ = ready_tx.send(Err(format!("启动远程命令失败：{error}")));
+        return;
+    }
+    let (mut read_half, write_half) = channel.split();
+    if ready_tx.send(Ok(())).is_err() {
+        executions.remove(&execution_id);
+        let _ = write_half.close().await;
+        return;
+    }
+    let mut exit_code = None;
+    loop {
+        tokio::select! {
+            message = read_half.wait() => match message {
+                Some(russh::ChannelMsg::Data { data })
+                | Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
+                    if output_tx.send(data.to_vec()).is_err() {
+                        break;
+                    }
+                }
+                // EOF 只表示远端不再发送数据，exit-status 仍可能随后到达；等 Close 再收尾。
+                Some(russh::ChannelMsg::Eof) => {}
+                Some(russh::ChannelMsg::Close) | None => break,
+                Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = Some(exit_status);
+                }
+                Some(_) => {}
+            },
+            _ = &mut cancel_rx => break,
+        }
+    }
+    let _ = completion_tx.send(SshExecutionCompletion { exit_code });
+    executions.remove(&execution_id);
+    let _ = write_half.close().await;
 }
 
 /// 建立 TCP 连接、完成认证、开启带 PTY 的交互式 shell 通道。
@@ -1021,6 +1344,40 @@ mod tests {
             Ok(_) => panic!("missing key must fail"),
             Err(error) => assert_eq!(error.to_string(), "缺少用于登录的 SSH 私钥"),
         }
+    }
+
+    #[test]
+    fn reports_no_active_session_without_attempting_hidden_reauthentication() {
+        let manager = SshTerminalManager::default();
+        let result = manager
+            .exec_existing(7, "docker ps", &AtomicBool::new(false))
+            .expect("session lookup should not fail");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn cancelled_exec_is_rejected_before_session_lookup_or_remote_start() {
+        let manager = SshTerminalManager::default();
+        let cancellation = AtomicBool::new(true);
+
+        let error = match manager.exec_existing(7, "docker ps", &cancellation) {
+            Ok(_) => panic!("cancelled command must not open an exec channel"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("未执行"));
+    }
+
+    #[test]
+    fn execution_registry_can_cancel_before_channel_task_starts() {
+        let registry = ExecutionRegistry::default();
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        registry
+            .insert("exec-early".into(), "terminal-1".into(), cancel_tx)
+            .expect("register before dispatch");
+
+        assert!(registry.cancel("exec-early"));
+        assert!(Runtime::new().unwrap().block_on(cancel_rx).is_ok());
     }
 
     #[test]

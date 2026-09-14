@@ -24,8 +24,11 @@ pub fn local_terminal_open(
         .open(cols, rows)
         .map_err(ErrorResponse::from)?;
     let terminal_id = opened.id;
+    let local_terminals = state.local_terminals().clone();
+    local_terminals.bind(session_id.clone(), terminal_id.clone());
     let mut reader = opened.reader;
     let reader_terminal_id = terminal_id.clone();
+    let reader_registry = local_terminals.clone();
 
     // 本地 Shell 输出可能长期阻塞，读取和资源回收都必须离开 IPC 线程。
     thread::spawn(move || {
@@ -41,18 +44,24 @@ pub fn local_terminal_open(
                         // 整块都是某个字符的前半截，等下一块补齐再发，避免前端收到空事件。
                         continue;
                     }
-                    let _ = app.emit(
-                        "local-terminal-output",
-                        LocalTerminalOutput {
-                            terminal_id: reader_terminal_id.clone(),
-                            session_id: session_id.clone(),
-                            data,
-                        },
-                    );
+                    let visible_data = reader_registry.visible_output(&reader_terminal_id, &data);
+                    // 先推进过滤状态，再唤醒 AI 执行线程，避免清理竞态让内部标记泄漏到 UI。
+                    reader_registry.publish(&reader_terminal_id, &data);
+                    if !visible_data.is_empty() {
+                        let _ = app.emit(
+                            "local-terminal-output",
+                            LocalTerminalOutput {
+                                terminal_id: reader_terminal_id.clone(),
+                                session_id: session_id.clone(),
+                                data: visible_data,
+                            },
+                        );
+                    }
                 }
             }
         }
         let _ = terminal_service.close(&reader_terminal_id);
+        reader_registry.unbind(&session_id, &reader_terminal_id);
         let _ = app.emit(
             "local-terminal-exit",
             LocalTerminalExit {
@@ -95,8 +104,10 @@ pub fn local_terminal_close(
     state: State<'_, AppState>,
     terminal_id: String,
 ) -> Result<(), ErrorResponse> {
-    state
+    let result = state
         .local_terminal_service()
         .close(&terminal_id)
-        .map_err(ErrorResponse::from)
+        .map_err(ErrorResponse::from);
+    state.local_terminals().unbind_terminal(&terminal_id);
+    result
 }

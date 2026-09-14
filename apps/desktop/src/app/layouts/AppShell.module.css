@@ -14,12 +14,62 @@
 
 /* ---- 主工作区 ---- */
 .workspace {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--term);
   overflow: hidden;
+}
+
+/* AI 面板收起后的展开手柄：与面板侧折叠手柄同款幽灵样式，默认半透明、悬停显形 */
+.aiReveal {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: var(--z-sticky);
+  display: inline-flex;
+  width: 20px;
+  height: 56px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--term-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  opacity: 0.55;
+  transform: translateY(-50%);
+  transition:
+    color var(--dur-fast),
+    background var(--dur-fast),
+    opacity var(--dur-fast);
+}
+
+.aiReveal:hover {
+  color: var(--term-text);
+  background: var(--bg-hover);
+  opacity: 1;
+}
+
+.aiReveal:focus-visible {
+  color: var(--term-text);
+  background: var(--bg-hover);
+  opacity: 1;
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.aiReveal svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .terminalWorkspace {
@@ -36,8 +86,8 @@
 
 .aiPanelFallback {
   flex: 0 0 auto;
-  min-width: 340px;
-  max-width: 600px;
+  min-width: var(--layout-ai-panel-min);
+  max-width: var(--layout-ai-panel-max);
   display: flex;
   align-items: center;
   justify-content: center;

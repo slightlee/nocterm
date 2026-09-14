@@ -14,7 +14,7 @@ use portable_pty::{Child, MasterPty, PtySize, native_pty_system};
 /// 由 `portable-pty` 抹平差异，因此下面的代码不含任何平台 `cfg`。
 mod shell;
 
-use shell::local_shell_command;
+use shell::{LocalShellKind, completion_command, local_shell_command};
 
 /// PTY 基础设施错误保留底层上下文，由 Application 边界转换为稳定错误码。
 #[derive(Debug)]
@@ -32,6 +32,7 @@ struct LocalTerminal {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     master: Box<dyn MasterPty + Send>,
+    shell_kind: LocalShellKind,
 }
 
 /// 本地终端管理器只负责默认 Shell 的 PTY 资源，不读取连接或凭据资料。
@@ -56,9 +57,10 @@ impl LocalTerminalManager {
                 pixel_height: 0,
             })
             .map_err(error("创建本地 PTY 失败"))?;
+        let (shell_command, shell_kind) = local_shell_command();
         let mut child = pair
             .slave
-            .spawn_command(local_shell_command())
+            .spawn_command(shell_command)
             .map_err(error("启动本地 Shell 失败"))?;
         let writer = match pair.master.take_writer() {
             Ok(writer) => writer,
@@ -87,6 +89,7 @@ impl LocalTerminalManager {
                 writer,
                 child,
                 master: pair.master,
+                shell_kind,
             },
         );
         Ok((terminal_id, reader))
@@ -105,6 +108,21 @@ impl LocalTerminalManager {
             .write_all(data.as_bytes())
             .and_then(|_| terminal.writer.flush())
             .map_err(error("写入本地终端失败"))
+    }
+
+    pub fn completion_command(
+        &self,
+        terminal_id: &str,
+        marker: &str,
+    ) -> Result<String, TerminalError> {
+        let terminals = self
+            .terminals
+            .lock()
+            .map_err(|_| TerminalError("本地终端状态锁已损坏".to_string()))?;
+        let terminal = terminals
+            .get(terminal_id)
+            .ok_or_else(|| TerminalError("本地终端不存在或已关闭".to_string()))?;
+        Ok(completion_command(terminal.shell_kind, marker))
     }
 
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), TerminalError> {
@@ -162,6 +180,11 @@ impl LocalTerminalPort for LocalTerminalManager {
 
     fn write(&self, terminal_id: &str, data: &str) -> Result<(), String> {
         LocalTerminalManager::write(self, terminal_id, data).map_err(|error| error.to_string())
+    }
+
+    fn completion_command(&self, terminal_id: &str, marker: &str) -> Result<String, String> {
+        LocalTerminalManager::completion_command(self, terminal_id, marker)
+            .map_err(|error| error.to_string())
     }
 
     fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), String> {

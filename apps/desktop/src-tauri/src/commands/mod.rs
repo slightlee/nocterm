@@ -1,3 +1,16 @@
+pub mod ai;
+pub mod ai_bridge;
+pub mod ai_policy;
+pub mod ai_process;
+pub mod ai_provider;
+pub mod ai_ssh_exec;
+pub mod ai_stream;
+pub mod ai_terminal;
+pub mod ai_tool_approval;
+pub mod ai_tool_audit;
+pub mod ai_tool_gateway;
+pub mod ai_tools;
+pub mod codex_app_server;
 pub mod connection;
 pub mod credential;
 pub mod health;

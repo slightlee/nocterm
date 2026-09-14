@@ -11,23 +11,102 @@
 
 use portable_pty::CommandBuilder;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LocalShellKind {
+    Posix,
+    Fish,
+    PowerShell,
+    Cmd,
+}
+
 /// Windows 的系统默认 Shell 通常是 CMD，但 PowerShell 更适合作为客户端默认终端。
 /// 候选按现代 PowerShell、系统 PowerShell、用户配置和最后兜底的顺序选择。
-pub(super) fn local_shell_command() -> CommandBuilder {
+pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     #[cfg(windows)]
     {
         for shell in windows_shell_candidates(std::env::var("COMSPEC").ok()).iter() {
             if windows_command_available(shell) {
-                return CommandBuilder::new(shell);
+                return (CommandBuilder::new(shell), detect_shell_kind(shell));
             }
         }
-        CommandBuilder::new("cmd.exe")
+        (CommandBuilder::new("cmd.exe"), LocalShellKind::Cmd)
     }
 
     // macOS 与其它 Unix 走 portable-pty 的默认程序解析（读 `SHELL`，回落到 passwd 项）。
     #[cfg(not(windows))]
     {
-        CommandBuilder::new_default_prog()
+        let command = CommandBuilder::new_default_prog();
+        let kind = detect_shell_kind(&command.get_shell());
+        (command, kind)
+    }
+}
+
+fn detect_shell_kind(program: &str) -> LocalShellKind {
+    // 同一构建也要能识别另一平台的路径文本，不能依赖宿主 `Path` 的分隔符规则。
+    let name = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    match name {
+        "fish" => LocalShellKind::Fish,
+        "powershell" | "pwsh" => LocalShellKind::PowerShell,
+        "cmd" => LocalShellKind::Cmd,
+        _ => LocalShellKind::Posix,
+    }
+}
+
+/// 标记只由 Nocterm 生成且仅含 ASCII 字母、数字和下划线，可安全嵌入各 Shell。
+pub(super) fn completion_command(kind: LocalShellKind, marker: &str) -> String {
+    match kind {
+        LocalShellKind::Posix => format!("printf '\\n{marker}%s\\n' \"$?\""),
+        LocalShellKind::Fish => format!("printf '\\n{marker}%s\\n' $status"),
+        LocalShellKind::PowerShell => format!(
+            "$__nocterm_ok = $?; $__nocterm_code = if ($__nocterm_ok) {{ 0 }} elseif ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }}; Write-Output \"{marker}$__nocterm_code\""
+        ),
+        LocalShellKind::Cmd => format!("echo {marker}%ERRORLEVEL%"),
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::{LocalShellKind, completion_command, detect_shell_kind};
+
+    const MARKER: &str = "__NOCTERM_LOCAL_AI_DONE_test__";
+
+    #[test]
+    fn emits_status_probe_for_each_supported_shell_family() {
+        assert_eq!(
+            completion_command(LocalShellKind::Posix, MARKER),
+            format!("printf '\\n{MARKER}%s\\n' \"$?\"")
+        );
+        assert_eq!(
+            completion_command(LocalShellKind::Fish, MARKER),
+            format!("printf '\\n{MARKER}%s\\n' $status")
+        );
+        assert!(
+            completion_command(LocalShellKind::PowerShell, MARKER)
+                .contains(&format!("Write-Output \"{MARKER}$__nocterm_code\""))
+        );
+        assert_eq!(
+            completion_command(LocalShellKind::Cmd, MARKER),
+            format!("echo {MARKER}%ERRORLEVEL%")
+        );
+    }
+
+    #[test]
+    fn detects_shell_family_from_executable_name() {
+        assert_eq!(detect_shell_kind("/bin/zsh"), LocalShellKind::Posix);
+        assert_eq!(
+            detect_shell_kind("/opt/homebrew/bin/fish"),
+            LocalShellKind::Fish
+        );
+        assert_eq!(detect_shell_kind("pwsh.exe"), LocalShellKind::PowerShell);
+        assert_eq!(
+            detect_shell_kind(r"C:\\Windows\\System32\\cmd.exe"),
+            LocalShellKind::Cmd
+        );
     }
 }
 

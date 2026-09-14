@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use nocterm_application::connection::CredentialInput;
+use nocterm_application::connection::{ConnectionService, CredentialInput};
 use nocterm_domain::connection::ConnectionProfile;
 use tauri::State;
 
@@ -88,6 +88,15 @@ pub fn resolve_private_key(
     state: &AppState,
     profile: &ConnectionProfile,
 ) -> Result<String, ErrorResponse> {
+    resolve_private_key_from_service(state.connection_service(), profile)
+}
+
+/// 通过已有的连接用例解析私钥，供 SSH 终端、SFTP 与 AI Bridge 共用。
+/// 路径引用是当前写入方式；凭据库回退只兼容迁移前保存的遗留密钥。
+pub fn resolve_private_key_from_service(
+    connection_service: &ConnectionService,
+    profile: &ConnectionProfile,
+) -> Result<String, ErrorResponse> {
     if let Some(path) = profile
         .private_key_path
         .as_deref()
@@ -96,13 +105,15 @@ pub fn resolve_private_key(
     {
         return read_private_key_file(path);
     }
-    read_secret(state, &profile.id.to_string(), "private_key").map_err(|_| {
-        error(
-            "PRIVATE_KEY_REQUIRED",
-            "该连接尚未绑定私钥文件，请编辑连接重新选择私钥",
-            false,
-        )
-    })
+    connection_service
+        .read_credential(profile.id, "private_key")
+        .map_err(|_| {
+            error(
+                "PRIVATE_KEY_REQUIRED",
+                "该连接尚未绑定私钥文件，请编辑连接重新选择私钥",
+                false,
+            )
+        })
 }
 
 /// 路径只在 Tauri 边界读取，私钥明文随后立即交给 Application 用例且不会回传前端。

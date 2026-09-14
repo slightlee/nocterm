@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use commands::sftp::{SftpTransferState, shutdown_sftp};
 use nocterm_application::{
-    connection::ConnectionService, health::HealthService, settings::SettingsService,
+    ai_audit::AiAuditService, connection::ConnectionService, health::HealthService,
+    settings::SettingsService,
 };
 use nocterm_infrastructure::{
     credential::SystemCredentialStore, persistence::SqliteConnectionRepository,
@@ -17,6 +18,9 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Some(endpoint) = mcp_stdio_args() {
+        std::process::exit(commands::ai_bridge::run_stdio(&endpoint));
+    }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -30,6 +34,7 @@ pub fn run() {
             let connection_service =
                 ConnectionService::with_credential_store(repository.clone(), credential_store);
             let settings_service = SettingsService::new(repository.clone());
+            let ai_audit_service = AiAuditService::new(repository.clone());
             // 产品版本由 Tauri 配置解析根 package.json；Cargo crate 版本仅描述内部包。
             let health_service = HealthService::new(
                 Arc::new(SystemPlatformProbe),
@@ -40,12 +45,23 @@ pub fn run() {
                 health_service,
                 connection_service,
                 settings_service,
+                ai_audit_service,
             ));
+            if let Some(state) = app.try_state::<AppState>() {
+                commands::ai_bridge::start_gateway(app.handle().clone(), &state);
+            }
             app.manage(SftpTransferState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::health::health_check,
+            commands::ai::ai_provider_status,
+            commands::ai::ai_session_start,
+            commands::ai::ai_session_stop,
+            commands::ai::ai_conversation_reset,
+            commands::ai::ai_tool_approval_resolve,
+            commands::ai_ssh_exec::ai_ssh_exec_readonly,
+            commands::ai_ssh_exec::ai_ssh_exec_stop,
             commands::connection::connection_list,
             commands::connection::connection_create,
             commands::connection::connection_update,
@@ -95,4 +111,18 @@ pub fn run() {
             shutdown_sftp(app_handle);
         }
     });
+}
+
+fn mcp_stdio_args() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    if args.next()?.as_str() != "mcp-stdio" {
+        return None;
+    }
+    let mut endpoint = None;
+    while let Some(arg) = args.next() {
+        if arg == "--endpoint" {
+            endpoint = args.next();
+        }
+    }
+    endpoint
 }

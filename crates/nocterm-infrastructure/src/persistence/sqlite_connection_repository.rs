@@ -10,7 +10,7 @@ use nocterm_domain::settings::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// 列顺序即 `map_profile` 的下标契约：新增列只能追加在末尾，避免改动既有下标。
 const PROFILE_COLUMNS: &str = "connection_profiles.id, connection_profiles.name, connection_profiles.host, connection_profiles.port, connection_profiles.username, connection_profiles.authentication, connection_profiles.created_at, connection_profiles.updated_at,
@@ -22,7 +22,7 @@ const PROFILE_COLUMNS: &str = "connection_profiles.id, connection_profiles.name,
 
 /// 单进程桌面应用通过互斥连接串行访问 SQLite，避免把连接对象泄露给上层。
 pub struct SqliteConnectionRepository {
-    connection: Mutex<Connection>,
+    pub(super) connection: Mutex<Connection>,
 }
 
 impl SqliteConnectionRepository {
@@ -83,7 +83,7 @@ impl SqliteConnectionRepository {
     }
 
     #[cfg(test)]
-    fn open_in_memory() -> Result<Self, ConnectionRepositoryError> {
+    pub(super) fn open_in_memory() -> Result<Self, ConnectionRepositoryError> {
         let mut connection = Connection::open_in_memory().map_err(repository_error)?;
         configure_connection(&connection)?;
         migrate(&mut connection)?;
@@ -633,6 +633,41 @@ fn migrate(connection: &mut Connection) -> Result<(), ConnectionRepositoryError>
             .map_err(repository_error)?;
     }
 
+    if current_version < 6 {
+        // AI 审计是脱敏的不可变事件流：不保存命令、参数、输出、Token、主机或账号。
+        // connection_id 不设外键，连接资料删除后仍需保留既有安全审计记录。
+        transaction
+            .execute_batch(
+                "CREATE TABLE ai_tool_audit_events (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     occurred_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     provider TEXT NOT NULL CHECK (length(provider) BETWEEN 1 AND 64),
+                     session_id TEXT NOT NULL CHECK (length(session_id) BETWEEN 1 AND 64),
+                     target_kind TEXT NOT NULL CHECK (target_kind IN ('ssh', 'local')),
+                     connection_id INTEGER,
+                     tool_name TEXT NOT NULL CHECK (length(tool_name) BETWEEN 1 AND 64),
+                     approval_state TEXT NOT NULL CHECK (
+                         approval_state IN ('not_requested', 'not_required', 'requested', 'approved', 'rejected', 'timed_out')
+                     ),
+                     outcome TEXT NOT NULL CHECK (
+                         outcome IN ('pending', 'succeeded', 'failed', 'denied')
+                     ),
+                     duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+                     error_code TEXT CHECK (error_code IS NULL OR length(error_code) BETWEEN 1 AND 64),
+                     CHECK (
+                         (target_kind = 'ssh' AND connection_id IS NOT NULL AND connection_id > 0)
+                         OR (target_kind = 'local' AND connection_id IS NULL)
+                     )
+                 );
+                 CREATE INDEX idx_ai_tool_audit_occurred_at
+                     ON ai_tool_audit_events (occurred_at);
+                 CREATE INDEX idx_ai_tool_audit_connection_time
+                     ON ai_tool_audit_events (connection_id, occurred_at);
+                 INSERT INTO schema_migrations (version) VALUES (6);",
+            )
+            .map_err(repository_error)?;
+    }
+
     transaction.commit().map_err(repository_error)
 }
 
@@ -761,6 +796,61 @@ mod tests {
             })
             .expect("read schema version");
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn fresh_database_creates_the_ai_audit_schema() {
+        let repository = SqliteConnectionRepository::open_in_memory().expect("open database");
+        let connection = repository.connection.lock().expect("database lock");
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("read schema version");
+        let table: String = connection
+            .query_row(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name = 'ai_tool_audit_events'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read audit table");
+
+        assert_eq!(version, 6);
+        assert_eq!(table, "ai_tool_audit_events");
+    }
+
+    #[test]
+    fn upgrades_a_v5_database_with_the_ai_audit_schema() {
+        let mut connection = Connection::open_in_memory().expect("open database");
+        configure_connection(&connection).expect("configure");
+        // 先由正式迁移生成完整结构，再移除 v6 增量，避免只伪造版本号而漏掉旧表共存问题。
+        migrate(&mut connection).expect("create current schema");
+        connection
+            .execute_batch(
+                "DROP TABLE ai_tool_audit_events;
+                 DELETE FROM schema_migrations WHERE version = 6;",
+            )
+            .expect("restore complete v5 schema");
+
+        migrate(&mut connection).expect("migrate v5 database");
+
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("read schema version");
+        let table: String = connection
+            .query_row(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name = 'ai_tool_audit_events'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read audit table");
+
+        assert_eq!(version, 6);
+        assert_eq!(table, "ai_tool_audit_events");
     }
 
     #[test]
