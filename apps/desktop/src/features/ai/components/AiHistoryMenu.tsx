@@ -1,5 +1,5 @@
 import type { AiConversation } from '../model/ai-store';
-import styles from './AiPanel.module.css';
+import styles from './AiHistoryMenu.module.css';
 
 interface AiHistoryMenuProps {
   conversations: AiConversation[];

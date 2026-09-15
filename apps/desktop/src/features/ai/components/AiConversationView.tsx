@@ -2,7 +2,7 @@ import { Fragment } from 'react';
 
 import type { AiMessage, AiMessagePart, AiToolApprovalEvent } from '../model/ai-types';
 import { AiMarkdown } from './AiMarkdown';
-import styles from './AiPanel.module.css';
+import styles from './AiConversationView.module.css';
 
 interface AiConversationViewProps {
   messages: AiMessage[];

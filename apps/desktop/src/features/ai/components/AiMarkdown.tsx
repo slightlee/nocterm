@@ -2,7 +2,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { openAiExternalLink } from '../api/ai-client';
-import styles from './AiPanel.module.css';
+import styles from './AiMarkdown.module.css';
 
 const markdownComponents: Components = {
   // 链接统一拦截走系统浏览器，桌面端 WebView 不做站内导航。

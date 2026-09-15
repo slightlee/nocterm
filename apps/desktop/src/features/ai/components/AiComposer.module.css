@@ -1,0 +1,118 @@
+.composerArea {
+  padding: 0 10px 10px;
+}
+
+.bridgeNotice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  color: var(--term-muted);
+  font-size: 10px;
+}
+
+.bridgeDot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--term-yellow);
+  border-radius: 50%;
+}
+
+.composer {
+  /* Provider 菜单向上弹出，输入器不能裁剪子控件。 */
+  background: var(--term-panel);
+  border: 1px solid var(--term-border);
+  border-radius: 11px;
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+
+.composer:focus-within {
+  border-color: var(--term-blue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--term-blue) 16%, transparent);
+}
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 10px 2px;
+  resize: none;
+  color: var(--term-text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.composer textarea::placeholder {
+  color: var(--term-muted);
+}
+
+.composerFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 8px;
+}
+
+.composerTools {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sendButton {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--term);
+  background: var(--term-blue);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast),
+    opacity var(--dur-fast);
+}
+
+.sendButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.sendButton:hover:not(:disabled) {
+  background: var(--accent-blue-hover);
+}
+
+.sendButton svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+@container (max-width: 330px) {
+  .composerFooter {
+    gap: 8px;
+  }
+
+  .composerTools {
+    gap: 4px;
+  }
+}

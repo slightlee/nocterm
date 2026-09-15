@@ -1,5 +1,5 @@
 import { AI_PROVIDERS, type AiProvider, type AiProviderId } from '../model/ai-types';
-import styles from './AiPanel.module.css';
+import styles from './AiComposerControls.module.css';
 
 interface AiProviderSelectorProps {
   provider: AiProvider;

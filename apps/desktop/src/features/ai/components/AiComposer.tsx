@@ -11,7 +11,7 @@ import type { AiCommandPolicy, AiProvider, AiProviderId } from '../model/ai-type
 import { AiAttachmentControl } from './AiAttachmentControl';
 import { AiCommandPolicySelector } from './AiCommandPolicySelector';
 import { AiProviderSelector } from './AiProviderSelector';
-import styles from './AiPanel.module.css';
+import styles from './AiComposer.module.css';
 
 interface AiComposerProps {
   provider: AiProvider;
@@ -115,7 +115,7 @@ export function AiComposer({
           {runningSessionId ? (
             <button
               aria-label="停止 AI 会话"
-              className={`${styles.sendButton} ${styles.stopButton}`}
+              className={styles.sendButton}
               onClick={onStop}
               title="停止 AI 会话"
               type="button"

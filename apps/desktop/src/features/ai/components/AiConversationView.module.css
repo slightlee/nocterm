@@ -1,0 +1,283 @@
+/* 空态提示在会话区垂直居中；发出首条消息后整块移除。 */
+.emptyState {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px 12px;
+  text-align: center;
+}
+
+.emptyState h3 {
+  color: var(--term-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.messageList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.message {
+  display: flex;
+  align-self: flex-start;
+  max-width: 94%;
+  padding: 0;
+  background: transparent;
+}
+
+.userMessage {
+  align-self: flex-end;
+  max-width: 86%;
+  padding: 9px 11px;
+  background: var(--accent-blue-soft);
+  border-radius: 12px 12px 4px;
+}
+
+.assistantMessage {
+  align-items: flex-start;
+  padding: 0 0 0 10px;
+  border-left: 2px solid color-mix(in srgb, var(--term-blue) 68%, var(--term-border));
+}
+
+.messageBody {
+  min-width: 0;
+}
+
+.messageRole {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--term-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.userMessage .messageRole {
+  margin-bottom: 3px;
+  text-align: right;
+}
+
+.message p {
+  color: var(--term-text);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.executionStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-start;
+  color: var(--term-muted);
+  font-size: 10px;
+}
+
+.executionDot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--term-yellow);
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+/* 等待期过程流只陪伴本次运行，不写入历史消息。 */
+.activityList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.activityLine {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--term-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.activityKind {
+  flex: none;
+  padding: 0 5px;
+  font-size: 10px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+
+/* 命令审批是终端写操作的安全边界，目标与原始命令必须同时完整可见。 */
+.approvalCard {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  color: var(--term-text);
+  background: var(--term-panel);
+  border: 1px solid var(--term-border);
+  border-left: 2px solid color-mix(in srgb, var(--term-blue) 72%, var(--term-border));
+  border-radius: 7px;
+}
+
+.approvalHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.approvalTarget {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--term-muted);
+  font-size: 10px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approvalCommand {
+  max-height: 136px;
+  padding: 9px;
+  overflow: auto;
+  color: var(--term-text);
+  font: 11px/1.55 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--term);
+  border: 1px solid var(--term-border);
+  border-radius: 6px;
+}
+
+.approvalCard p {
+  margin: 0;
+  color: var(--term-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.approvalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.approvalActions button {
+  height: 26px;
+  padding: 0 10px;
+  color: var(--term-muted);
+  font: inherit;
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--term-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast),
+    background var(--dur-fast),
+    border-color var(--dur-fast);
+}
+
+.approvalActions button:focus-visible {
+  outline: 2px solid var(--term-blue);
+  outline-offset: 2px;
+}
+
+.approvalActions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.approvalActions button:hover:not(:disabled) {
+  color: var(--term-text);
+  background: color-mix(in srgb, var(--term-text) 6%, transparent);
+  border-color: color-mix(in srgb, var(--term-text) 24%, var(--term-border));
+}
+
+.approvalActions .approveButton {
+  color: var(--term);
+  background: var(--term-blue);
+  border-color: var(--term-blue);
+}
+
+.approvalActions .approveButton:hover:not(:disabled) {
+  color: var(--term);
+  background: color-mix(in srgb, var(--term-blue) 86%, var(--term-text));
+  border-color: color-mix(in srgb, var(--term-blue) 86%, var(--term-text));
+}
+
+.approvalActions .approveButton:active:not(:disabled) {
+  background: color-mix(in srgb, var(--term-blue) 76%, var(--term-text));
+  border-color: color-mix(in srgb, var(--term-blue) 76%, var(--term-text));
+}
+
+/* 失败提示跟随用户消息右对齐，重试动作与被重发内容保持视觉绑定。 */
+.noticeRow {
+  display: flex;
+  align-self: flex-end;
+  align-items: center;
+  gap: 8px;
+  max-width: 86%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.notice {
+  padding: 0;
+  color: var(--term-yellow);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.retryButton {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  color: var(--term-blue);
+  font: inherit;
+  font-size: 10px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.retryButton:hover {
+  background: var(--accent-blue-soft);
+}
+
+.retryButton:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.retryButton svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}

@@ -1,5 +1,5 @@
 import type { AiCommandPolicy } from '../model/ai-types';
-import styles from './AiPanel.module.css';
+import styles from './AiComposerControls.module.css';
 
 const COMMAND_POLICY_OPTIONS: ReadonlyArray<{
   id: AiCommandPolicy;

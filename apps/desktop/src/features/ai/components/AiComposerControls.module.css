@@ -1,0 +1,372 @@
+.providerMenu {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.providerButton {
+  display: inline-flex;
+  min-width: 82px;
+  height: 25px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 7px;
+  color: var(--term-text);
+  font: inherit;
+  font-size: 11px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.providerButton:hover {
+  color: var(--term-text);
+  background: var(--bg-hover);
+}
+
+.providerButton svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+/* 菜单向输入器上方展开，避免遮挡输入和发送操作。 */
+.providerOptions {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-dropdown);
+  width: 208px;
+  padding: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+}
+
+.providerOption,
+.providerOptionActive {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.providerOption:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.providerOptionActive {
+  color: var(--accent-blue);
+  background: var(--accent-blue-soft);
+}
+
+.providerOption:focus-visible,
+.providerOptionActive:focus-visible {
+  outline: 2px solid var(--term-blue);
+  outline-offset: -2px;
+}
+
+.providerOption small,
+.providerOptionActive small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.commandPolicyOptions {
+  left: 50%;
+  width: 276px;
+  padding: 7px;
+  transform: translateX(-50%);
+}
+
+.commandPolicyOption {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 16px;
+  min-height: 58px;
+  align-items: start;
+  gap: 9px;
+  padding: 9px;
+}
+
+.commandPolicyIcon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: var(--term-muted);
+}
+
+.commandPolicyIcon svg,
+.commandPolicySelected {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.commandPolicyCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.commandPolicyCopy > span {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: inherit;
+  font-weight: 550;
+}
+
+.commandPolicyCopy em {
+  color: var(--term-blue);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.commandPolicySelected {
+  width: 14px;
+  height: 14px;
+  margin-top: 4px;
+  color: var(--term-blue);
+}
+
+.commandPolicyOptionDanger .commandPolicyIcon {
+  color: var(--term-red);
+}
+
+.commandPolicyOptionDanger.providerOptionActive {
+  color: var(--term-red);
+  background: color-mix(in srgb, var(--term-red) 10%, transparent);
+}
+
+.commandPolicyOptionDanger.providerOptionActive .commandPolicySelected {
+  color: var(--term-red);
+}
+
+.commandPolicyHint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 3px 0;
+  padding: 9px 7px 4px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+  border-top: 1px solid var(--border-primary);
+}
+
+.commandPolicyHint svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  margin-top: 1px;
+  fill: none;
+  stroke: var(--term-muted);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.composerProviderButton {
+  display: inline-flex;
+  min-width: 92px;
+  height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 10px;
+  color: var(--term-text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--term);
+  border: 1px solid var(--term-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.composerProviderButton:hover {
+  color: var(--term-text);
+  border-color: var(--term-blue);
+}
+
+.composerProviderButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.providerLabel {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.providerButton .providerIcon {
+  width: 14px;
+  height: 14px;
+  color: var(--term-blue);
+}
+
+/* 高权限状态在菜单收起后仍显示危险色。 */
+.providerButton .commandPolicyButtonDanger {
+  color: var(--term-red);
+}
+
+.providerButton .providerChevron {
+  width: 12px;
+  height: 12px;
+  color: var(--term-muted);
+}
+
+.fileInput {
+  display: none;
+}
+
+.attachmentButton,
+.attachmentChip {
+  display: inline-flex;
+  min-width: 0;
+  height: 30px;
+  align-items: center;
+  color: var(--term-muted);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--term);
+  border: 1px solid var(--term-border);
+  border-radius: 8px;
+}
+
+.attachmentButton {
+  gap: 6px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.attachmentChip {
+  max-width: 118px;
+  padding-left: 7px;
+}
+
+.attachmentButton:hover,
+.attachmentChip:hover {
+  color: var(--term-text);
+  border-color: var(--term-blue);
+}
+
+.attachmentButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.attachmentButton svg,
+.attachmentName svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.attachmentName {
+  display: inline-flex;
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.attachmentName span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentRemove {
+  display: inline-flex;
+  width: 24px;
+  height: 100%;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--term-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.attachmentRemove:hover {
+  color: var(--term-red);
+}
+
+.attachmentRemove svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+@container (max-width: 330px) {
+  .composerProviderButton {
+    min-width: 0;
+    max-width: 86px;
+    padding: 0 7px;
+  }
+
+  .providerLabel > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .attachmentButton {
+    width: 30px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .attachmentButton > span {
+    display: none;
+  }
+}

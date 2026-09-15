@@ -1,7 +1,7 @@
 import type { ChangeEvent, RefObject } from 'react';
 
 import type { AiAttachment } from '../model/ai-attachment';
-import styles from './AiPanel.module.css';
+import styles from './AiComposerControls.module.css';
 
 interface AiAttachmentControlProps {
   attachment: AiAttachment | null;
