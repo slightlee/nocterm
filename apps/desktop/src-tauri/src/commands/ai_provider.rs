@@ -3,10 +3,13 @@
 
 use std::{
     ffi::OsString,
-    fs::{self, DirBuilder, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
 };
+
+mod claude_code;
+mod codex;
+mod grok;
 
 pub struct ProviderBridge<'a> {
     pub executable: &'a str,
@@ -31,7 +34,7 @@ pub struct PreparedHeadlessLaunch {
 }
 
 impl PreparedHeadlessLaunch {
-    fn new(
+    pub(super) fn new(
         args: Vec<String>,
         stdin_payload: Option<String>,
         environment: Vec<(OsString, OsString)>,
@@ -121,209 +124,6 @@ fn find_provider_executable_in(
     })
 }
 
-struct CodexAdapter;
-struct ClaudeCodeAdapter;
-struct GrokAdapter;
-
-impl ProviderAdapter for CodexAdapter {
-    fn id(&self) -> &'static str {
-        "codex"
-    }
-    fn command(&self) -> &'static str {
-        "codex"
-    }
-    fn prepare_launch(&self, _launch: ProviderLaunch<'_>) -> Result<ProviderLaunchPlan, String> {
-        Ok(ProviderLaunchPlan::CodexAppServer)
-    }
-}
-
-impl ProviderAdapter for ClaudeCodeAdapter {
-    fn id(&self) -> &'static str {
-        "claude-code"
-    }
-    fn command(&self) -> &'static str {
-        "claude"
-    }
-    fn prepare_launch(&self, launch: ProviderLaunch<'_>) -> Result<ProviderLaunchPlan, String> {
-        let mut args = vec![
-            "-p".into(),
-            "--output-format".into(),
-            "stream-json".into(),
-            "--verbose".into(),
-            "--include-partial-messages".into(),
-            "--input-format".into(),
-            "text".into(),
-            "--no-session-persistence".into(),
-            "--permission-mode".into(),
-            "manual".into(),
-            "--tools".into(),
-            "".into(),
-            "--strict-mcp-config".into(),
-        ];
-        let mcp_config = launch.bridge.map_or_else(
-            || serde_json::json!({"mcpServers":{}}).to_string(),
-            |bridge| crate::commands::ai_bridge::mcp_config(bridge.executable, bridge.endpoint),
-        );
-        args.extend(["--mcp-config".into(), mcp_config]);
-        Ok(ProviderLaunchPlan::Headless(PreparedHeadlessLaunch::new(
-            args,
-            Some(launch.prompt.to_string()),
-            Vec::new(),
-            None,
-            Vec::new(),
-        )))
-    }
-}
-
-impl ProviderAdapter for GrokAdapter {
-    fn id(&self) -> &'static str {
-        "grok"
-    }
-    fn command(&self) -> &'static str {
-        "grok"
-    }
-    fn prepare_launch(&self, launch: ProviderLaunch<'_>) -> Result<ProviderLaunchPlan, String> {
-        let runtime_directory = create_grok_runtime_directory(launch.timestamp, launch.sequence)?;
-        let prepared = prepare_isolated_grok_launch(&runtime_directory, launch);
-        if prepared.is_err() {
-            cleanup_paths(std::slice::from_ref(&runtime_directory));
-        }
-        prepared
-    }
-}
-
-/// Grok 缺少 Claude `--strict-mcp-config` 等价参数，因此把 HOME 与 cwd 都切到任务级目录。
-/// MCP 元工具只能发现 Agent Profile 注入的 Nocterm Server，用户 Hook、MCP 和会话也不会旁路。
-fn prepare_isolated_grok_launch(
-    runtime_directory: &Path,
-    launch: ProviderLaunch<'_>,
-) -> Result<ProviderLaunchPlan, String> {
-    create_grok_runtime_config(runtime_directory)?;
-    link_grok_authentication(runtime_directory)?;
-    let prompt_file = create_grok_prompt_file(runtime_directory, launch.prompt)?;
-    let mut args = vec![
-        "--prompt-file".into(),
-        prompt_file.to_string_lossy().into_owned(),
-        "--output-format".into(),
-        "streaming-json".into(),
-        "--no-memory".into(),
-        "--no-subagents".into(),
-        "--disable-web-search".into(),
-        "--no-auto-update".into(),
-        "--tools".into(),
-        "".into(),
-    ];
-    if let Some(bridge) = launch.bridge {
-        let profile =
-            create_grok_agent_profile(runtime_directory, bridge.executable, bridge.endpoint)?;
-        args.splice(
-            0..0,
-            ["--agent".into(), profile.to_string_lossy().into_owned()],
-        );
-    }
-    let environment = vec![
-        (
-            OsString::from("GROK_HOME"),
-            runtime_directory.as_os_str().to_owned(),
-        ),
-        (
-            OsString::from("GROK_CLAUDE_MCPS_ENABLED"),
-            OsString::from("false"),
-        ),
-        (
-            OsString::from("GROK_CURSOR_MCPS_ENABLED"),
-            OsString::from("false"),
-        ),
-    ];
-    Ok(ProviderLaunchPlan::Headless(PreparedHeadlessLaunch::new(
-        args,
-        None,
-        environment,
-        Some(runtime_directory.to_path_buf()),
-        vec![runtime_directory.to_path_buf()],
-    )))
-}
-
-/// Grok headless 暂不支持从 stdin 读取 prompt；使用任务级 0600 文件避免内容进入 argv，
-/// 文件所有权在进程退出或启动失败时由 PreparedHeadlessLaunch/AiProcess 统一清理。
-fn create_grok_prompt_file(runtime_directory: &Path, prompt: &str) -> Result<PathBuf, String> {
-    let path = runtime_directory.join("prompt.txt");
-    write_private_file(&path, prompt.as_bytes(), "Grok 任务输入")?;
-    Ok(path)
-}
-
-/// Grok 没有单次 `--mcp-config` 参数，因此使用不含 token 的任务级 Agent Profile。
-fn create_grok_agent_profile(
-    runtime_directory: &Path,
-    executable: &str,
-    endpoint: &str,
-) -> Result<PathBuf, String> {
-    let path = runtime_directory.join("agent.md");
-    let executable = serde_json::to_string(executable).map_err(|error| error.to_string())?;
-    let endpoint = serde_json::to_string(endpoint).map_err(|error| error.to_string())?;
-    let contents = format!(
-        "---\nname: nocterm-task\ndescription: Nocterm task-scoped terminal agent.\nprompt_mode: full\nmodel: inherit\npermission_mode: default\nagents_md: true\nmcpServers:\n  - name: nocterm\n    command: {executable}\n    args: [\"mcp-stdio\", \"--endpoint\", {endpoint}]\n---\n\nUse the Nocterm MCP tools for all terminal operations.\n"
-    );
-    write_private_file(&path, contents.as_bytes(), "Grok 任务配置")?;
-    Ok(path)
-}
-
-fn create_grok_runtime_directory(timestamp: u128, sequence: u64) -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!(
-        "nocterm-grok-runtime-{}-{timestamp}-{sequence}",
-        std::process::id()
-    ));
-    let mut builder = DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(&path)
-        .map_err(|error| format!("创建 Grok 隔离目录失败：{error}"))?;
-    Ok(path)
-}
-
-/// 显式关闭兼容层，防止 Grok 从 ~/.claude、~/.cursor 载入 MCP、Hook 或指令。
-fn create_grok_runtime_config(runtime_directory: &Path) -> Result<(), String> {
-    const CONFIG: &str = "[cli]\nauto_update = false\n\n[features]\ntelemetry = false\nfeedback = false\n\n[compat.cursor]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n\n[compat.claude]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n\n[compat.codex]\nsessions = false\n";
-    write_private_file(
-        &runtime_directory.join("config.toml"),
-        CONFIG.as_bytes(),
-        "Grok 隔离配置",
-    )
-}
-
-/// OAuth 凭据不复制到临时文件：Unix 使用符号链接，Windows 使用同卷硬链接。
-/// 使用 XAI_API_KEY 的用户不需要该文件。
-fn link_grok_authentication(runtime_directory: &Path) -> Result<(), String> {
-    let Some(source_home) = original_grok_home() else {
-        return Ok(());
-    };
-    let source = source_home.join("auth.json");
-    if !source.is_file() {
-        return Ok(());
-    }
-    let destination = runtime_directory.join("auth.json");
-    #[cfg(unix)]
-    let result = std::os::unix::fs::symlink(&source, &destination);
-    #[cfg(windows)]
-    let result = fs::hard_link(&source, &destination);
-    result.map_err(|error| format!("隔离 Grok 登录凭据失败：{error}"))
-}
-
-fn original_grok_home() -> Option<PathBuf> {
-    std::env::var_os("GROK_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(PathBuf::from)
-                .map(|home| home.join(".grok"))
-        })
-}
-
 /// 只删除当前启动计划创建的精确路径；符号链接按文件移除，不跟随到认证源。
 pub fn cleanup_paths(paths: &[PathBuf]) {
     for path in paths {
@@ -336,31 +136,8 @@ pub fn cleanup_paths(paths: &[PathBuf]) {
     }
 }
 
-/// create_new 防止链接替换；Unix 显式使用 0600，Windows 继承当前用户临时目录 ACL。
-fn write_private_file(path: &Path, contents: &[u8], label: &str) -> Result<(), String> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let result = options
-        .open(path)
-        .and_then(|mut file| file.write_all(contents));
-    if let Err(error) = result {
-        let _ = fs::remove_file(path);
-        return Err(format!("创建 {label}失败：{error}"));
-    }
-    Ok(())
-}
-
-static CODEX: CodexAdapter = CodexAdapter;
-static CLAUDE_CODE: ClaudeCodeAdapter = ClaudeCodeAdapter;
-static GROK: GrokAdapter = GrokAdapter;
-
 pub fn provider_adapters() -> [&'static dyn ProviderAdapter; 3] {
-    [&CODEX, &CLAUDE_CODE, &GROK]
+    [codex::ADAPTER, claude_code::ADAPTER, grok::ADAPTER]
 }
 
 pub fn provider_adapter(id: &str) -> Option<&'static dyn ProviderAdapter> {
