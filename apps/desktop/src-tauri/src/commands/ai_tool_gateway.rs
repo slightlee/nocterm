@@ -28,6 +28,24 @@ use crate::{
 
 use self::catalog::{execution_tool_name, tools_for_target};
 
+/// 工具结果显式携带执行通道语义，Provider 无需从命令或输出猜测目标环境。
+pub(super) fn execution_context(target: &AiTarget) -> Value {
+    match target {
+        AiTarget::Ssh { .. } => json!({
+            "mode":"current_authenticated_ssh_connection",
+            "visibleTerminalStateInherited":false,
+            "workingDirectoryScope":"remote_command_process",
+            "description":"命令通过当前已认证的 Nocterm SSH 连接在同一远程服务器执行；这不是新的连接、服务器或独立环境，也不继承可见交互终端中临时的 cd、export 或虚拟环境状态"
+        }),
+        AiTarget::Local { .. } => json!({
+            "mode":"visible_local_terminal",
+            "visibleTerminalStateInherited":true,
+            "workingDirectoryScope":"visible_terminal",
+            "description":"命令直接写入当前可见本地终端，并继承该终端当前的目录和 Shell 环境"
+        }),
+    }
+}
+
 /// 工具路由只依赖现有应用服务，不拥有 SSH、凭据或 Provider 生命周期。
 pub(crate) struct GatewayServices {
     pub(super) app: AppHandle,
@@ -158,4 +176,29 @@ impl GatewayServices {
 
 pub(super) fn tool_error(message: &str) -> Value {
     json!({"isError":true,"content":[{"type":"text","text":message}]})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execution_context;
+    use crate::state::AiTarget;
+
+    #[test]
+    fn execution_context_distinguishes_visible_terminal_state_from_ssh_exec_state() {
+        let ssh = execution_context(&AiTarget::Ssh { connection_id: 7 });
+        assert_eq!(ssh["mode"], "current_authenticated_ssh_connection");
+        assert_eq!(ssh["visibleTerminalStateInherited"], false);
+        assert!(
+            ssh["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("不是新的连接"))
+        );
+
+        let local = execution_context(&AiTarget::Local {
+            session_id: "local-one".into(),
+            terminal_id: "terminal-one".into(),
+        });
+        assert_eq!(local["mode"], "visible_local_terminal");
+        assert_eq!(local["visibleTerminalStateInherited"], true);
+    }
 }

@@ -184,6 +184,26 @@ function summarizeNoctermTool(tool: string, input: Record<string, unknown>): str
   return truncateActivity(labels[tool] ?? `使用 Nocterm 工具：${tool}`);
 }
 
+/** Grok 只暴露两个聚合工具；优先从 use_tool 输入还原实际 Nocterm 操作。 */
+function summarizeAcpToolCall(update: Record<string, unknown>): string {
+  const title = typeof update.title === 'string' ? update.title.trim() : '';
+  const normalizedTitle = title.toLowerCase();
+  const rawInput = isRecord(update.rawInput)
+    ? update.rawInput
+    : isRecord(update.raw_input)
+      ? update.raw_input
+      : {};
+  if (normalizedTitle.startsWith('search_tool')) return '查找可用终端能力';
+  if (normalizedTitle.startsWith('use_tool')) {
+    const tool = [rawInput.tool_name, rawInput.toolName, rawInput.name].find(
+      (value): value is string => typeof value === 'string' && value.trim().length > 0
+    );
+    const input = [rawInput.arguments, rawInput.input].find(isRecord) ?? {};
+    return tool ? summarizeNoctermTool(tool, input) : '执行终端操作';
+  }
+  return truncateActivity(title || '执行终端操作');
+}
+
 /** 提取等待期的过程信息（思考摘要、工具调用）；纯文本行或生命周期事件返回空数组。 */
 export function extractAiActivities(line: string): AiActivity[] {
   const trimmed = line.trim();
@@ -200,11 +220,7 @@ export function extractAiActivities(line: string): AiActivity[] {
   // Grok ACP：文本和思考走增量路径，工具开始事件固化为一条可读活动记录。
   const acpUpdate = getAcpUpdate(event);
   if (acpUpdate?.sessionUpdate === 'tool_call') {
-    const title =
-      typeof acpUpdate.title === 'string' && acpUpdate.title.trim()
-        ? acpUpdate.title
-        : '执行终端操作';
-    activities.push({ kind: 'tool', text: truncateActivity(title) });
+    activities.push({ kind: 'tool', text: summarizeAcpToolCall(acpUpdate) });
     return activities;
   }
 

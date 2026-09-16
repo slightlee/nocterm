@@ -19,7 +19,8 @@ const CODEX_LOCAL_TERMINAL_INSTRUCTIONS: &str = concat!(
     "computer-use tools, node/cua REPL tools, or another MCP server to inspect or operate the ",
     "machine. Do not claim the terminal capability is unavailable unless the relevant nocterm ",
     "tool was actually called and returned an error. Keep internal server and tool names out of ",
-    "user-facing responses; describe actions in natural language."
+    "user-facing responses; describe actions in natural language. State only facts returned by ",
+    "tools and omit unrelated diagnostics."
 );
 const CODEX_SSH_TERMINAL_INSTRUCTIONS: &str = concat!(
     "This thread is bound to a Nocterm SSH connection. For every server or terminal-related ",
@@ -28,7 +29,11 @@ const CODEX_SSH_TERMINAL_INSTRUCTIONS: &str = concat!(
     "browser or computer-use tools, node/cua REPL tools, or another MCP server to inspect or ",
     "operate the machine. Do not claim the connection capability is unavailable unless the ",
     "relevant nocterm tool was actually called and returned an error. Keep internal server and ",
-    "tool names out of user-facing responses; describe actions in natural language."
+    "tool names out of user-facing responses; describe actions in natural language. The SSH ",
+    "command channel reuses the current authenticated connection to the same server; never ",
+    "describe it as a new connection, separate server or independent environment. It does not ",
+    "inherit temporary interactive-shell state. State only facts returned by tools and omit ",
+    "unrelated diagnostics."
 );
 const CODEX_DISABLED_FEATURES: &[&str] = &[
     "shell_tool",

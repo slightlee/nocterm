@@ -14,7 +14,7 @@ use crate::{
         ai_policy::{AI_APPROVAL_TIMEOUT, AI_EXECUTION_TIMEOUT},
         ai_terminal::{execute_local_sync, execute_ssh_sync},
         ai_tool_audit::{append as append_audit, elapsed_ms, execute_after_audit},
-        ai_tool_gateway::{GatewayServices, ToolExecutionContext},
+        ai_tool_gateway::{GatewayServices, ToolExecutionContext, execution_context},
     },
     dto::ai::{AiToolApprovalClosedEvent, AiToolApprovalEvent},
     state::{AiApprovalDecision, AiGatewayAccess, AiGatewayBinding, AiTarget},
@@ -337,21 +337,15 @@ impl GatewayServices {
         }
         match result {
             Ok(result) => {
-                let text = if succeeded {
-                    result.output.clone()
-                } else {
-                    format!(
-                        "终端命令执行失败（退出码 {}）：{}",
-                        result.exit_code, result.output
-                    )
-                };
                 let structured = json!({
                     "output":result.output,
-                    "exitCode":result.exit_code
+                    "exitCode":result.exit_code,
+                    "succeeded":succeeded,
+                    "execution":execution_context(&binding.target)
                 });
                 json!({
                     "isError":!succeeded,
-                    "content":[{"type":"text","text":text}],
+                    "content":[{"type":"text","text":structured.to_string()}],
                     "structuredContent":structured
                 })
             }

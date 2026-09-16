@@ -17,7 +17,7 @@ use crate::{
     state::{AiGatewayBinding, AiTarget},
 };
 
-use super::{GatewayServices, ToolExecutionContext, tool_error};
+use super::{GatewayServices, ToolExecutionContext, execution_context, tool_error};
 
 impl GatewayServices {
     /// 结构化工具只对 SSH 目标开放，命令由后端计划器生成后复用当前认证连接。
@@ -163,7 +163,8 @@ impl GatewayServices {
                     "name":profile.name,
                     "host":profile.host,
                     "port":profile.port,
-                    "username":profile.username
+                    "username":profile.username,
+                    "execution":execution_context(&binding.target)
                 })
             }),
             AiTarget::Local {
@@ -178,7 +179,8 @@ impl GatewayServices {
                     Ok(json!({
                         "targetKind":"local",
                         "targetSessionId":session_id,
-                        "terminalId":terminal_id
+                        "terminalId":terminal_id,
+                        "execution":execution_context(&binding.target)
                     }))
                 } else {
                     Err(nocterm_application::error::AppError::new(

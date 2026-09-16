@@ -61,6 +61,24 @@ describe('extractAiActivities', () => {
     ).toEqual([{ kind: 'tool', text: '查看 Docker 容器' }]);
   });
 
+  it('maps Grok aggregation tools to user-facing activities', () => {
+    expect(
+      extractAiActivities(
+        '{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"search_tool query=terminal"}}}'
+      )
+    ).toEqual([{ kind: 'tool', text: '查找可用终端能力' }]);
+    expect(
+      extractAiActivities(
+        '{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"use_tool","raw_input":{"tool_name":"read_docker_logs","arguments":{"container":"new-api"}}}}}'
+      )
+    ).toEqual([{ kind: 'tool', text: '读取容器日志：new-api' }]);
+    expect(
+      extractAiActivities(
+        '{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"use_tool"}}}'
+      )
+    ).toEqual([{ kind: 'tool', text: '执行终端操作' }]);
+  });
+
   it('extracts Claude thinking and tool use as activity entries', () => {
     const activities = extractAiActivities(
       '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"先确认\\nDocker 状态"},{"type":"tool_use","name":"Bash","input":{"command":"docker ps"}}]}}'

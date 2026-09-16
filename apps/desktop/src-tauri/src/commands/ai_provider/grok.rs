@@ -28,7 +28,8 @@ tools: [search_tool, use_tool]
 
 Use only the connected Nocterm MCP server for terminal-related operations. Do not claim that
 terminal access is unavailable unless the relevant Nocterm tool returned an error. Keep MCP and
-internal tool names out of user-facing responses and describe actions in natural language.
+internal tool names out of user-facing responses and describe actions in natural language. State
+the target and execution environment only from tool results, and answer only the facts requested.
 "#;
 
 const RUNTIME_ENVIRONMENT_ALLOWLIST: [&str; 18] = [

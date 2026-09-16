@@ -16,7 +16,7 @@ pub(super) fn tools_for_target(target: &AiTarget) -> Value {
     }
     let execution_description = match target {
         AiTarget::Ssh { .. } => {
-            "在当前 Nocterm SSH 连接上执行通用命令；是否需要确认由当前会话权限决定。仅在结构化服务器检查无法完成任务时使用，不得改到本机执行"
+            "通过当前已认证的 Nocterm SSH 连接在同一远程服务器执行通用命令；这不是新的连接或独立环境，且不继承可见交互终端中临时的 cd、export 或虚拟环境状态。是否需要确认由当前会话权限决定；仅在结构化服务器检查无法完成任务时使用，不得改到本机执行"
         }
         AiTarget::Local { .. } => {
             "在当前 Nocterm 可见本地终端中执行命令，继承该终端的目录和环境。查询主机名、当前目录、文件、进程、端口、服务、日志、安装或部署时必须使用此能力，不得改用其他本机执行工具；是否需要确认由当前会话权限决定"
@@ -30,9 +30,21 @@ pub(super) fn tools_for_target(target: &AiTarget) -> Value {
             "type":"object",
             "properties":{
                 "output":{"type":"string"},
-                "exitCode":{"type":"integer"}
+                "exitCode":{"type":"integer"},
+                "succeeded":{"type":"boolean"},
+                "execution":{
+                    "type":"object",
+                    "properties":{
+                        "mode":{"type":"string","enum":["current_authenticated_ssh_connection","visible_local_terminal"]},
+                        "visibleTerminalStateInherited":{"type":"boolean"},
+                        "workingDirectoryScope":{"type":"string","enum":["remote_command_process","visible_terminal"]},
+                        "description":{"type":"string"}
+                    },
+                    "required":["mode","visibleTerminalStateInherited","workingDirectoryScope","description"],
+                    "additionalProperties":false
+                }
             },
-            "required":["output","exitCode"],
+            "required":["output","exitCode","succeeded","execution"],
             "additionalProperties":false
         },
         "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
@@ -64,6 +76,11 @@ mod tests {
         assert_eq!(
             ssh["tools"][12]["outputSchema"]["properties"]["exitCode"]["type"],
             "integer"
+        );
+        assert_eq!(
+            ssh["tools"][12]["outputSchema"]["properties"]["execution"]["properties"]["visibleTerminalStateInherited"]
+                ["type"],
+            "boolean"
         );
 
         let local = tools_for_target(&AiTarget::Local {
