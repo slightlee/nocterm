@@ -24,6 +24,7 @@ tauri = { version = "2" }
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-opener = "2"
 thiserror = "2"
+toml = "0.9.12"
 # 进程内 SSH/SFTP：russh + russh-sftp 纯 Rust 实现，规避 Windows OpenSSH 的密码注入
 # 与 ControlMaster 多路复用限制。使用 ring 加密后端而非默认 aws-lc-rs，
 # 避免 Windows 上额外的 NASM/CMake 原生构建依赖。

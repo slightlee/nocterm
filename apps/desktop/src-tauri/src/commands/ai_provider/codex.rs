@@ -16,6 +16,6 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     fn prepare_launch(&self, _launch: ProviderLaunch<'_>) -> Result<ProviderLaunchPlan, String> {
-        Ok(ProviderLaunchPlan::CodexAppServer)
+        Ok(ProviderLaunchPlan::Persistent)
     }
 }

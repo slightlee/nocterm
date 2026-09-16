@@ -1,13 +1,18 @@
-//! Codex app-server 会话注册表、Runtime 接入与复用策略。
+//! Grok ACP 会话注册表、Runtime 接入与按 UI 对话复用策略。
 
-use std::sync::Arc;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use tauri::AppHandle;
 
 use crate::{
     commands::{
         ai_persistent::{PersistentSessionRegistry, PersistentTurnRequest},
-        ai_provider::ProviderSessionIdentity,
         ai_runtime::{PersistentProviderLaunch, PersistentProviderRuntime},
     },
     state::AiGatewayState,
@@ -16,27 +21,25 @@ use crate::{
 mod protocol;
 mod session;
 
-use session::{CodexAppServer, CodexAppServerLaunch};
+use session::{GrokAcpServer, GrokAcpServerLaunch};
 
-/// Codex app-server 与一个 Nocterm 对话一一对应。目标变化时必须重建，防止旧 MCP token
-/// 被用于另一个终端；同一对话的连续 turn 则复用进程、配置和 Codex thread。
-pub type CodexSessionIdentity = ProviderSessionIdentity;
+static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
-pub struct CodexAppServerManager {
-    sessions: PersistentSessionRegistry<CodexAppServer>,
+pub struct GrokAcpServerManager {
+    sessions: PersistentSessionRegistry<GrokAcpServer>,
 }
 
-impl Default for CodexAppServerManager {
+impl Default for GrokAcpServerManager {
     fn default() -> Self {
         Self {
-            sessions: PersistentSessionRegistry::new("Codex"),
+            sessions: PersistentSessionRegistry::new("Grok"),
         }
     }
 }
 
-impl PersistentProviderRuntime for CodexAppServerManager {
+impl PersistentProviderRuntime for GrokAcpServerManager {
     fn id(&self) -> &'static str {
-        "codex"
+        "grok"
     }
 
     fn start_turn(
@@ -56,6 +59,11 @@ impl PersistentProviderRuntime for CodexAppServerManager {
             provider_executable,
             command_policy,
         } = launch;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or_default();
+        let sequence = NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed);
         self.sessions.start_turn(
             app.clone(),
             PersistentTurnRequest {
@@ -67,14 +75,16 @@ impl PersistentProviderRuntime for CodexAppServerManager {
                 command_policy,
             },
             move |startup_cancellation, termination| {
-                CodexAppServer::spawn(
+                GrokAcpServer::spawn(
                     app,
-                    CodexAppServerLaunch {
+                    GrokAcpServerLaunch {
                         identity,
                         bridge,
                         bridge_executable,
                         provider_executable,
                         gateway,
+                        timestamp,
+                        sequence,
                     },
                     startup_cancellation,
                     termination,
@@ -83,13 +93,33 @@ impl PersistentProviderRuntime for CodexAppServerManager {
         )
     }
 
-    /// 优先使用协议中断，保留已加载的 app-server 供下一轮复用。
+    /// ACP cancel 只停止当前 turn；超时未完成时回收进程，避免残留失控工具调用。
     fn stop_turn(&self, session_id: &str) -> Result<bool, String> {
         self.sessions.stop_turn(session_id)
     }
 
-    /// 清空、删除或切换 Provider 时同步销毁后台会话和会话级 Bridge token。
     fn reset_conversation(&self, conversation_id: &str) -> Result<bool, String> {
         self.sessions.reset_conversation(conversation_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::commands::ai_provider::ProviderSessionIdentity;
+
+    #[test]
+    fn persistent_identity_changes_when_the_terminal_target_changes() {
+        let local = ProviderSessionIdentity {
+            connection_id: None,
+            target_session_id: Some("local:one".into()),
+            working_directory: Some("/tmp".into()),
+        };
+        let remote = ProviderSessionIdentity {
+            connection_id: Some(7),
+            target_session_id: None,
+            working_directory: Some("/tmp".into()),
+        };
+        assert_ne!(local, remote);
+        assert_eq!(local, local.clone());
     }
 }

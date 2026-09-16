@@ -9,6 +9,14 @@ export function extractAiText(line: string): string | null {
     return line;
   }
   if (!isRecord(event)) return null;
+  const acpUpdate = getAcpUpdate(event);
+  if (
+    acpUpdate?.sessionUpdate === 'agent_message_chunk' &&
+    isRecord(acpUpdate.content) &&
+    typeof acpUpdate.content.text === 'string'
+  ) {
+    return acpUpdate.content.text;
+  }
   if (
     event.method === 'item/completed' &&
     isRecord(event.params) &&
@@ -61,6 +69,18 @@ export function extractAiStreamDelta(line: string): AiStreamDelta | null {
     return null;
   }
   if (!isRecord(event)) return null;
+  const acpUpdate = getAcpUpdate(event);
+  if (
+    (acpUpdate?.sessionUpdate === 'agent_message_chunk' ||
+      acpUpdate?.sessionUpdate === 'agent_thought_chunk') &&
+    isRecord(acpUpdate.content) &&
+    typeof acpUpdate.content.text === 'string' &&
+    acpUpdate.content.text
+  ) {
+    return acpUpdate.sessionUpdate === 'agent_message_chunk'
+      ? { answer: acpUpdate.content.text }
+      : { thinking: acpUpdate.content.text };
+  }
   if (
     (event.method === 'item/agentMessage/delta' ||
       event.method === 'item/reasoning/summaryTextDelta') &&
@@ -177,6 +197,17 @@ export function extractAiActivities(line: string): AiActivity[] {
   if (!isRecord(event)) return [];
   const activities: AiActivity[] = [];
 
+  // Grok ACP：文本和思考走增量路径，工具开始事件固化为一条可读活动记录。
+  const acpUpdate = getAcpUpdate(event);
+  if (acpUpdate?.sessionUpdate === 'tool_call') {
+    const title =
+      typeof acpUpdate.title === 'string' && acpUpdate.title.trim()
+        ? acpUpdate.title
+        : '执行终端操作';
+    activities.push({ kind: 'tool', text: truncateActivity(title) });
+    return activities;
+  }
+
   // Codex app-server：事件包在 JSON-RPC params 中，item 类型使用 camelCase。
   if (event.method === 'item/started' && isRecord(event.params) && isRecord(event.params.item)) {
     const item = event.params.item;
@@ -264,6 +295,11 @@ function textFromContent(content: unknown): string | null {
     .map((part) => part.text as string)
     .join('');
   return text || null;
+}
+
+function getAcpUpdate(event: Record<string, unknown>): Record<string, unknown> | null {
+  if (event.method !== 'session/update' || !isRecord(event.params)) return null;
+  return isRecord(event.params.update) ? event.params.update : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

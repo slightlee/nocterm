@@ -23,3 +23,7 @@ serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }

@@ -5,6 +5,23 @@ import { reduceAiRuntimeOutput, type AiRuntimeOutputSnapshot } from './ai-runtim
 const empty = (): AiRuntimeOutputSnapshot => ({ text: '', parts: [], answerStreamed: false });
 
 describe('reduceAiRuntimeOutput', () => {
+  it('streams Grok ACP output and records tool activity in arrival order', () => {
+    const tool = reduceAiRuntimeOutput(
+      '{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"读取服务器系统信息"}}}',
+      empty()
+    );
+    const answer = reduceAiRuntimeOutput(
+      '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"主机正常"}}}}',
+      tool
+    );
+
+    expect(answer.text).toBe('主机正常');
+    expect(answer.parts).toEqual([
+      { type: 'activity', kind: 'tool', content: '读取服务器系统信息' },
+      { type: 'text', content: '主机正常' },
+    ]);
+  });
+
   it('merges answer deltas and ignores the later full-text duplicate', () => {
     const first = reduceAiRuntimeOutput(
       '{"method":"item/agentMessage/delta","params":{"delta":"检查"}}',

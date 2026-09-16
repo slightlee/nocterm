@@ -20,6 +20,14 @@ describe('extractAiText', () => {
     ).toBe('持续会话完成');
   });
 
+  it('extracts Grok ACP message chunks', () => {
+    expect(
+      extractAiText(
+        '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"检查完成"}}}}'
+      )
+    ).toBe('检查完成');
+  });
+
   it('extracts Claude stream-json assistant content', () => {
     expect(
       extractAiText(
@@ -45,6 +53,14 @@ describe('extractAiText', () => {
 });
 
 describe('extractAiActivities', () => {
+  it('extracts Grok ACP tool calls without exposing protocol names', () => {
+    expect(
+      extractAiActivities(
+        '{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"查看 Docker 容器","kind":"other"}}}'
+      )
+    ).toEqual([{ kind: 'tool', text: '查看 Docker 容器' }]);
+  });
+
   it('extracts Claude thinking and tool use as activity entries', () => {
     const activities = extractAiActivities(
       '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"先确认\\nDocker 状态"},{"type":"tool_use","name":"Bash","input":{"command":"docker ps"}}]}}'
@@ -117,6 +133,19 @@ describe('extractAiActivities', () => {
 });
 
 describe('extractAiStreamDelta', () => {
+  it('extracts Grok ACP answer and thought chunks', () => {
+    expect(
+      extractAiStreamDelta(
+        '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"容器正常"}}}}'
+      )
+    ).toEqual({ answer: '容器正常' });
+    expect(
+      extractAiStreamDelta(
+        '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"读取状态"}}}}'
+      )
+    ).toEqual({ thinking: '读取状态' });
+  });
+
   it('extracts Claude text and thinking deltas', () => {
     expect(
       extractAiStreamDelta(

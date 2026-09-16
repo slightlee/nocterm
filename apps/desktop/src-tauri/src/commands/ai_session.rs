@@ -1,41 +1,23 @@
 //! AI 会话启动编排。
 //! 目标解析、Bridge 授权与 Provider 启动计划在此形成一个原子流程。
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::sync::Arc;
 
 use tauri::AppHandle;
 
 use crate::{
     commands::{
         ai_headless::{HeadlessSessionLaunch, start_headless_session},
-        ai_provider::{ProviderBridge, ProviderLaunch, ProviderLaunchPlan, provider_adapter},
+        ai_provider::{
+            ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
+            provider_adapter,
+        },
+        ai_runtime::PersistentProviderLaunch,
         ai_validation::{ValidatedAiSessionStart, validate_start_request},
-        codex_app_server::{CodexSessionIdentity, CodexTurnRequest},
     },
     dto::ai::{AiSessionStartRequest, AiSessionStartResponse},
     state::{AiCommandPolicy, AiGatewayBinding, AiTarget, AppState},
 };
-
-static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
-
-struct CodexSessionLaunch {
-    request: AiSessionStartRequest,
-    session_id: String,
-    conversation_id: String,
-    local_session_id: Option<String>,
-    working_directory: Option<String>,
-    connection_id: Option<i64>,
-    command_policy: AiCommandPolicy,
-    bridge: Option<(String, String)>,
-    bridge_executable: String,
-    provider_executable: std::path::PathBuf,
-}
 
 /// 完成所有准备和授权后启动一种互斥的 Provider 生命周期。
 pub(super) fn start_session(
@@ -78,16 +60,9 @@ pub(super) fn start_session(
         executable: &bridge_executable,
         endpoint,
     });
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_nanos())
-        .unwrap_or_default();
-    let sequence = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     let launch_plan = match adapter.prepare_launch(ProviderLaunch {
         prompt: &request.prompt,
         bridge: provider_bridge,
-        timestamp,
-        sequence,
     }) {
         Ok(plan) => plan,
         Err(error) => {
@@ -97,22 +72,41 @@ pub(super) fn start_session(
     };
 
     match launch_plan {
-        ProviderLaunchPlan::CodexAppServer => start_codex_session(
-            app,
-            state,
-            CodexSessionLaunch {
-                request,
-                session_id,
-                conversation_id,
-                local_session_id,
-                working_directory,
-                connection_id,
-                command_policy,
-                bridge,
-                bridge_executable,
-                provider_executable,
-            },
-        ),
+        ProviderLaunchPlan::Persistent => {
+            let started = state.ai_provider_runtimes().start_turn(
+                provider_id,
+                app,
+                PersistentProviderLaunch {
+                    conversation_id,
+                    session_id: session_id.clone(),
+                    identity: ProviderSessionIdentity {
+                        connection_id,
+                        target_session_id: local_session_id,
+                        working_directory,
+                    },
+                    initial_prompt: request.prompt,
+                    continuation_prompt: request.continuation_prompt,
+                    bridge: bridge.clone(),
+                    bridge_executable,
+                    provider_executable,
+                    command_policy,
+                },
+                Arc::clone(state.ai_gateway()),
+            );
+            match started {
+                Ok(is_new) => {
+                    // 复用服务器时，新候选 token 未进入子进程，必须立即撤销。
+                    if !is_new {
+                        revoke_bridge(state, bridge.as_ref());
+                    }
+                    Ok(AiSessionStartResponse { session_id })
+                }
+                Err(error) => {
+                    revoke_bridge(state, bridge.as_ref());
+                    Err(error)
+                }
+            }
+        }
         ProviderLaunchPlan::Headless(prepared) => {
             if let Some((_, token)) = bridge.as_ref()
                 && let Err(error) =
@@ -191,57 +185,6 @@ fn bind_bridge(
         },
     )?;
     Ok(Some((endpoint, token)))
-}
-
-fn start_codex_session(
-    app: AppHandle,
-    state: &AppState,
-    launch: CodexSessionLaunch,
-) -> Result<AiSessionStartResponse, String> {
-    let CodexSessionLaunch {
-        request,
-        session_id,
-        conversation_id,
-        local_session_id,
-        working_directory,
-        connection_id,
-        command_policy,
-        bridge,
-        bridge_executable,
-        provider_executable,
-    } = launch;
-    let started = state.ai_codex_servers().start_turn(
-        app,
-        CodexTurnRequest {
-            conversation_id,
-            session_id: session_id.clone(),
-            identity: CodexSessionIdentity {
-                connection_id,
-                target_session_id: local_session_id,
-                working_directory,
-            },
-            initial_prompt: request.prompt,
-            continuation_prompt: request.continuation_prompt,
-            bridge: bridge.clone(),
-            bridge_executable,
-            provider_executable,
-            command_policy,
-        },
-        Arc::clone(state.ai_gateway()),
-    );
-    match started {
-        Ok(is_new) => {
-            // 复用服务器时，新候选 token 未进入子进程，必须立即撤销。
-            if !is_new {
-                revoke_bridge(state, bridge.as_ref());
-            }
-            Ok(AiSessionStartResponse { session_id })
-        }
-        Err(error) => {
-            revoke_bridge(state, bridge.as_ref());
-            Err(error)
-        }
-    }
 }
 
 fn revoke_bridge(state: &AppState, bridge: Option<&(String, String)>) {

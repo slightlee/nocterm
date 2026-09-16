@@ -4,7 +4,9 @@ pub mod session_password;
 pub use local_terminal::LocalTerminalRegistry;
 pub(crate) use local_terminal::local_completion_status;
 
-use crate::commands::{ai_process::AiProcessManager, codex_app_server::CodexAppServerManager};
+use crate::commands::{
+    ai_process::AiProcessManager, ai_runtime::PersistentProviderRuntimeRegistry,
+};
 
 use nocterm_application::{
     ai_audit::AiAuditService,
@@ -40,7 +42,7 @@ pub struct AppState {
     /// 用 `Arc` 是为了让终端的输出线程能持有一份句柄，在会话收尾时归还租约。
     session_passwords: Arc<SessionPasswords>,
     ai_processes: Arc<AiProcessManager>,
-    ai_codex_servers: Arc<CodexAppServerManager>,
+    ai_provider_runtimes: Arc<PersistentProviderRuntimeRegistry>,
     ai_gateway: Arc<AiGatewayState>,
     local_terminals: Arc<LocalTerminalRegistry>,
 }
@@ -356,7 +358,7 @@ impl AppState {
             sftp_manager: Arc::new(SftpManager::default()),
             session_passwords: Arc::new(SessionPasswords::default()),
             ai_processes: Arc::new(AiProcessManager::default()),
-            ai_codex_servers: Arc::new(CodexAppServerManager::default()),
+            ai_provider_runtimes: Arc::new(PersistentProviderRuntimeRegistry::default()),
             ai_gateway: Arc::new(AiGatewayState::default()),
             local_terminals: Arc::new(LocalTerminalRegistry::default()),
         }
@@ -401,8 +403,8 @@ impl AppState {
         &self.ai_processes
     }
 
-    pub fn ai_codex_servers(&self) -> &Arc<CodexAppServerManager> {
-        &self.ai_codex_servers
+    pub fn ai_provider_runtimes(&self) -> &Arc<PersistentProviderRuntimeRegistry> {
+        &self.ai_provider_runtimes
     }
 
     pub fn ai_gateway(&self) -> &Arc<AiGatewayState> {

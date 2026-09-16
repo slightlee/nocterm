@@ -11,6 +11,8 @@ mod claude_code;
 mod codex;
 mod grok;
 
+pub(crate) use grok::{PreparedGrokAcpLaunch, prepare_grok_acp_launch};
+
 pub struct ProviderBridge<'a> {
     pub executable: &'a str,
     pub endpoint: &'a str,
@@ -20,8 +22,6 @@ pub struct ProviderBridge<'a> {
 pub struct ProviderLaunch<'a> {
     pub prompt: &'a str,
     pub bridge: Option<ProviderBridge<'a>>,
-    pub timestamp: u128,
-    pub sequence: u64,
 }
 
 /// 启动结果持有任务级临时文件；若进程启动失败，Drop 会立即清理。
@@ -69,8 +69,16 @@ impl Drop for PreparedHeadlessLaunch {
 
 /// 使用枚举表达互斥的 Provider 生命周期，避免“执行模式”和可选启动参数不一致。
 pub enum ProviderLaunchPlan {
-    CodexAppServer,
+    Persistent,
     Headless(PreparedHeadlessLaunch),
+}
+
+/// 持久 Provider 的复用身份由宿主确定，不能从模型消息或 Provider 会话状态推断。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderSessionIdentity {
+    pub connection_id: Option<i64>,
+    pub target_session_id: Option<String>,
+    pub working_directory: Option<String>,
 }
 
 /// Adapter 隔离厂商 CLI 差异，不把 Provider 私有协议带入 Domain/Application。
@@ -148,10 +156,7 @@ pub fn provider_adapter(id: &str) -> Option<&'static dyn ProviderAdapter> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
-
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
 
     use super::{
         ProviderBridge, ProviderLaunch, ProviderLaunchPlan, find_provider_executable_in,
@@ -159,12 +164,7 @@ mod tests {
     };
 
     fn launch<'a>(prompt: &'a str, bridge: Option<ProviderBridge<'a>>) -> ProviderLaunch<'a> {
-        ProviderLaunch {
-            prompt,
-            bridge,
-            timestamp: 42,
-            sequence: 7,
-        }
+        ProviderLaunch { prompt, bridge }
     }
 
     #[test]
@@ -224,36 +224,11 @@ mod tests {
         assert!(claude.args.contains(&"--strict-mcp-config".to_string()));
         assert!(claude.args.windows(2).any(|pair| pair == ["--tools", ""]));
 
-        let ProviderLaunchPlan::Headless(grok) = provider_adapter("grok")
+        let grok = provider_adapter("grok")
             .unwrap()
             .prepare_launch(launch("inspect", Some(bridge())))
-            .unwrap()
-        else {
-            panic!("Grok should use a headless launch");
-        };
-        assert!(grok.args.contains(&"streaming-json".to_string()));
-        assert!(!grok.args.iter().any(|argument| argument == "inspect"));
-        assert!(grok.args.windows(2).any(|pair| pair == ["--tools", ""]));
-        let runtime = grok.cleanup_paths.first().unwrap();
-        assert_eq!(grok.current_directory.as_deref(), Some(runtime.as_path()));
-        assert!(
-            grok.environment
-                .iter()
-                .any(|(key, value)| { key == "GROK_HOME" && value == runtime.as_os_str() })
-        );
-        let prompt = runtime.join("prompt.txt");
-        assert_eq!(fs::read_to_string(&prompt).unwrap(), "inspect");
-        #[cfg(unix)]
-        assert_eq!(
-            fs::metadata(&prompt).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        let contents = fs::read_to_string(runtime.join("agent.md")).unwrap();
-        assert!(contents.contains("mcpServers:"));
-        assert!(contents.contains("127.0.0.1:4567"));
-        assert!(!contents.contains("NOCTERM_MCP_TOKEN"));
-        let config = fs::read_to_string(runtime.join("config.toml")).unwrap();
-        assert!(config.contains("mcps = false"));
+            .unwrap();
+        assert!(matches!(grok, ProviderLaunchPlan::Persistent));
     }
 
     #[test]
@@ -262,6 +237,6 @@ mod tests {
             .unwrap()
             .prepare_launch(launch("inspect", None))
             .unwrap();
-        assert!(matches!(prepared, ProviderLaunchPlan::CodexAppServer));
+        assert!(matches!(prepared, ProviderLaunchPlan::Persistent));
     }
 }

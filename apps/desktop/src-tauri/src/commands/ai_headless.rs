@@ -5,7 +5,10 @@ use std::{
     io::Write,
     path::PathBuf,
     process::{Command, Stdio},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -14,8 +17,12 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     commands::{
-        ai_process::AiProcessPoll, ai_provider::PreparedHeadlessLaunch,
-        ai_stream::read_bounded_lines,
+        ai_process::AiProcessPoll,
+        ai_provider::PreparedHeadlessLaunch,
+        ai_stream::{
+            PROVIDER_TURN_OUTPUT_LIMIT_MESSAGE, read_bounded_lines, redact_token,
+            reserve_turn_output,
+        },
     },
     dto::ai::{AiExitEvent, AiOutputEvent},
     state::AppState,
@@ -29,6 +36,54 @@ pub(super) struct HeadlessSessionLaunch {
     pub working_directory: Option<String>,
     pub connection_id: Option<i64>,
     pub bridge_token: Option<String>,
+}
+
+#[derive(Default)]
+struct HeadlessOutputBudget {
+    bytes: Mutex<usize>,
+    limit_reached: AtomicBool,
+}
+
+struct HeadlessOutputContext<'a> {
+    app: &'a AppHandle,
+    session_id: &'a str,
+    connection_id: Option<i64>,
+    bridge_token: Option<&'a str>,
+    budget: &'a HeadlessOutputBudget,
+    failed: &'a AtomicBool,
+}
+
+enum OutputReservation {
+    Accepted,
+    FirstRejection,
+    Rejected,
+}
+
+impl HeadlessOutputBudget {
+    /// stdout 与 stderr 共用一个预算；只有首个超限线程负责向界面报告错误。
+    fn reserve(&self, bytes: usize) -> OutputReservation {
+        if self.limit_reached.load(Ordering::Acquire) {
+            return OutputReservation::Rejected;
+        }
+        let Ok(mut total) = self.bytes.lock() else {
+            return if !self.limit_reached.swap(true, Ordering::AcqRel) {
+                OutputReservation::FirstRejection
+            } else {
+                OutputReservation::Rejected
+            };
+        };
+        // 另一个读取线程可能在当前线程等待预算锁时先触发超限。
+        if self.limit_reached.load(Ordering::Acquire) {
+            return OutputReservation::Rejected;
+        }
+        if reserve_turn_output(&mut total, bytes) {
+            OutputReservation::Accepted
+        } else if !self.limit_reached.swap(true, Ordering::AcqRel) {
+            OutputReservation::FirstRejection
+        } else {
+            OutputReservation::Rejected
+        }
+    }
 }
 
 /// 启动并登记进程后异步回收输出线程，退出事件始终在全部输出之后发送。
@@ -117,20 +172,75 @@ pub(super) fn start_headless_session(
     let manager = Arc::clone(state.ai_processes());
     let gateway = Arc::clone(state.ai_gateway());
     let reader_id = session_id.clone();
+    let output_budget = Arc::new(HeadlessOutputBudget::default());
+    let output_failed = Arc::new(AtomicBool::new(false));
     // 两个管道必须并发消费；任一缓冲区写满都会阻塞 Provider 退出。
     let stdout_thread = stdout.map(|stdout| {
         let app = app.clone();
         let session_id = session_id.clone();
-        thread::spawn(move || emit_lines(&app, &session_id, connection_id, "stdout", stdout))
+        let bridge_token = bridge_token.clone();
+        let output_budget = Arc::clone(&output_budget);
+        let output_failed = Arc::clone(&output_failed);
+        thread::spawn(move || {
+            let context = HeadlessOutputContext {
+                app: &app,
+                session_id: &session_id,
+                connection_id,
+                bridge_token: bridge_token.as_deref(),
+                budget: &output_budget,
+                failed: &output_failed,
+            };
+            emit_lines("stdout", stdout, &context)
+        })
     });
     let stderr_thread = stderr.map(|stderr| {
         let app = app.clone();
         let session_id = session_id.clone();
-        thread::spawn(move || emit_lines(&app, &session_id, connection_id, "stderr", stderr))
+        let bridge_token = bridge_token.clone();
+        let output_budget = Arc::clone(&output_budget);
+        let output_failed = Arc::clone(&output_failed);
+        thread::spawn(move || {
+            let context = HeadlessOutputContext {
+                app: &app,
+                session_id: &session_id,
+                connection_id,
+                bridge_token: bridge_token.as_deref(),
+                budget: &output_budget,
+                failed: &output_failed,
+            };
+            emit_lines("stderr", stderr, &context)
+        })
     });
     let exit_app = app.clone();
     thread::spawn(move || {
         let (code, cancelled) = loop {
+            // 协议输出损坏或累计超限后主动终止，不能等待仍在运行的 Provider 自行退出。
+            if output_failed.load(Ordering::Acquire) {
+                match manager.remove(&reader_id) {
+                    Ok(Some(mut process)) => {
+                        debug_assert_eq!(process.connection_id, connection_id);
+                        if let Some(token) = process.bridge_token.as_deref() {
+                            gateway.revoke(token);
+                        }
+                        let _ = process.child.kill();
+                        let _ = process.child.wait();
+                        break (Some(1), false);
+                    }
+                    Ok(None) => break (Some(1), false),
+                    Err(error) => {
+                        let _ = exit_app.emit(
+                            "nocterm://ai-output",
+                            AiOutputEvent {
+                                session_id: reader_id.clone(),
+                                connection_id,
+                                stream: "stderr".into(),
+                                data: error,
+                            },
+                        );
+                        break (Some(1), false);
+                    }
+                }
+            }
             match manager.poll(&reader_id) {
                 AiProcessPoll::Running => thread::sleep(Duration::from_millis(25)),
                 AiProcessPoll::Finished(mut process) => {
@@ -191,35 +301,84 @@ fn revoke_bridge(state: &AppState, token: Option<&str>) {
 }
 
 fn emit_lines<R: std::io::Read>(
-    app: &AppHandle,
-    session_id: &str,
-    connection_id: Option<i64>,
     stream: &str,
     reader: R,
+    context: &HeadlessOutputContext<'_>,
 ) -> bool {
     let result = read_bounded_lines(reader, |line| {
-        let _ = app.emit(
+        match context.budget.reserve(line.len()) {
+            OutputReservation::Accepted => {}
+            OutputReservation::FirstRejection => {
+                context.failed.store(true, Ordering::Release);
+                let _ = context.app.emit(
+                    "nocterm://ai-output",
+                    AiOutputEvent {
+                        session_id: context.session_id.into(),
+                        connection_id: context.connection_id,
+                        stream: "stderr".into(),
+                        data: PROVIDER_TURN_OUTPUT_LIMIT_MESSAGE.into(),
+                    },
+                );
+                return false;
+            }
+            OutputReservation::Rejected => {
+                context.failed.store(true, Ordering::Release);
+                return false;
+            }
+        }
+        let _ = context.app.emit(
             "nocterm://ai-output",
             AiOutputEvent {
-                session_id: session_id.into(),
-                connection_id,
+                session_id: context.session_id.into(),
+                connection_id: context.connection_id,
                 stream: stream.into(),
-                data: line,
+                data: redact_token(line, context.bridge_token),
             },
         );
         true
     });
     if let Err(error) = result {
-        let _ = app.emit(
+        context.failed.store(true, Ordering::Release);
+        let _ = context.app.emit(
             "nocterm://ai-output",
             AiOutputEvent {
-                session_id: session_id.into(),
-                connection_id,
+                session_id: context.session_id.into(),
+                connection_id: context.connection_id,
                 stream: "stderr".into(),
-                data: error,
+                data: redact_token(error, context.bridge_token),
             },
         );
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HeadlessOutputBudget, OutputReservation};
+    use crate::commands::ai_stream::{MAX_PROVIDER_TURN_OUTPUT_BYTES, redact_token};
+
+    #[test]
+    fn bridge_tokens_never_leave_headless_output() {
+        assert_eq!(
+            redact_token("provider token=secret-123".into(), Some("secret-123")),
+            "provider token=[REDACTED]"
+        );
+        assert_eq!(redact_token("plain".into(), None), "plain");
+    }
+
+    #[test]
+    fn stdout_and_stderr_share_one_headless_output_budget() {
+        let budget = HeadlessOutputBudget::default();
+        assert!(matches!(
+            budget.reserve(MAX_PROVIDER_TURN_OUTPUT_BYTES - 1),
+            OutputReservation::Accepted
+        ));
+        assert!(matches!(budget.reserve(1), OutputReservation::Accepted));
+        assert!(matches!(
+            budget.reserve(1),
+            OutputReservation::FirstRejection
+        ));
+        assert!(matches!(budget.reserve(1), OutputReservation::Rejected));
+    }
 }

@@ -32,22 +32,41 @@ pub fn ai_session_start(
 
 #[tauri::command]
 pub fn ai_session_stop(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
-    // 先关闭 turn 级授权，确保停止请求与 Provider 中断并发时不会再启动新工具调用。
-    state.ai_gateway().deactivate_session(&session_id)?;
-    if state.ai_codex_servers().stop_turn(&session_id)? {
-        return Ok(());
+    let mut handled = false;
+    let mut errors = Vec::new();
+
+    // 每一步都尽力执行：某个状态锁异常不能阻止后续 Provider 和子进程回收。
+    match state.ai_gateway().deactivate_session(&session_id) {
+        Ok(deactivated) => handled |= deactivated,
+        Err(error) => errors.push(error),
     }
-    let mut process = state
-        .ai_processes()
-        .remove(&session_id)
-        .map_err(|error| format!("停止 AI 会话失败：{error}"))?
-        .ok_or_else(|| "AI 会话不存在".to_string())?;
-    // 先取得 kill 结果，再无条件撤销 Bridge；即使进程刚好自然退出，token 也不能继续有效。
-    let kill_result = process.child.kill();
-    if let Some(token) = process.bridge_token.as_deref() {
-        state.ai_gateway().revoke(token);
+    match state.ai_provider_runtimes().stop_turn(&session_id) {
+        Ok(stopped) => handled |= stopped,
+        Err(error) => errors.push(error),
     }
-    kill_result.map_err(|error| format!("停止 AI 会话失败：{error}"))
+    match state.ai_processes().remove(&session_id) {
+        Ok(Some(mut process)) => {
+            handled = true;
+            // 即使 kill 失败或进程刚好退出，Bridge token 也必须立即失效。
+            let kill_result = process.child.kill();
+            if let Some(token) = process.bridge_token.as_deref() {
+                state.ai_gateway().revoke(token);
+            }
+            if let Err(error) = kill_result {
+                errors.push(format!("停止 AI Provider 进程失败：{error}"));
+            }
+        }
+        Ok(None) => {}
+        Err(error) => errors.push(error),
+    }
+
+    if !errors.is_empty() {
+        return Err(format!("停止 AI 会话失败：{}", errors.join("；")));
+    }
+    if !handled {
+        return Err("AI 会话不存在".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -57,8 +76,8 @@ pub fn ai_conversation_reset(
 ) -> Result<(), String> {
     let conversation_id = validate_conversation_id(&conversation_id)?;
     state
-        .ai_codex_servers()
-        .reset_conversation(&conversation_id);
+        .ai_provider_runtimes()
+        .reset_conversation(&conversation_id)?;
     Ok(())
 }
 

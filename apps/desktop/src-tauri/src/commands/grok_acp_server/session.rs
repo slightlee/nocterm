@@ -1,4 +1,4 @@
-//! 单个 Codex app-server 子进程与 turn 生命周期。
+//! 单个 Grok ACP 子进程、协议会话与 turn 生命周期。
 
 use std::{
     path::PathBuf,
@@ -15,30 +15,28 @@ use std::{
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Runtime};
 
-use super::{
-    CodexSessionIdentity,
-    protocol::{
-        codex_config_read_request, codex_feature_list_request, codex_provider_config,
-        codex_thread_start_request, configured_mcp_server_names, terminate_child,
-        validate_disabled_features, validate_thread_security, wait_for_response, write_message,
-    },
+use super::protocol::{
+    BootstrapMessages, cancel_notification, close_request, initialize_request,
+    is_renderable_update, prompt_completion, prompt_request, response_error, session_new_request,
+    terminate_child, wait_for_mcp_ready, wait_for_response_collect, write_message,
 };
 use crate::{
     commands::{
         ai_persistent::{PersistentProviderSession, SessionTermination},
         ai_process::{ManagedChild, StreamCompletion},
+        ai_provider::{PreparedGrokAcpLaunch, ProviderSessionIdentity, prepare_grok_acp_launch},
         ai_stream::{
             PROVIDER_TURN_OUTPUT_LIMIT_MESSAGE, ProviderStderrRelay, append_startup_diagnostics,
-            provider_event_channel, read_bounded_lines, redact_token, reserve_turn_output,
+            provider_event_channel, read_bounded_lines, reserve_turn_output,
         },
     },
     dto::ai::{AiExitEvent, AiOutputEvent},
     state::{AiCommandPolicy, AiGatewayState},
 };
 
-pub(super) struct CodexAppServer {
-    identity: CodexSessionIdentity,
-    thread_id: String,
+pub(super) struct GrokAcpServer {
+    identity: ProviderSessionIdentity,
+    acp_session_id: String,
     stdin: Mutex<ChildStdin>,
     child: ManagedChild,
     active_turn: Mutex<Option<ActiveTurn>>,
@@ -46,57 +44,63 @@ pub(super) struct CodexAppServer {
     alive: AtomicBool,
     bridge_token: Option<String>,
     gateway: Arc<AiGatewayState>,
+    prepared: PreparedGrokAcpLaunch,
     termination: SessionTermination,
     stderr_completion: StreamCompletion,
 }
 
-/// 创建 app-server 所需的 Provider 专属依赖；公共注册表只传递取消和终止钩子。
-pub(super) struct CodexAppServerLaunch {
-    pub identity: CodexSessionIdentity,
+/// ACP 进程创建参数属于 Grok Adapter，不进入跨 Provider 生命周期接口。
+pub(super) struct GrokAcpServerLaunch {
+    pub identity: ProviderSessionIdentity,
     pub bridge: Option<(String, String)>,
     pub bridge_executable: String,
     pub provider_executable: PathBuf,
     pub gateway: Arc<AiGatewayState>,
+    pub timestamp: u128,
+    pub sequence: u64,
 }
 
 #[derive(Clone)]
 struct ActiveTurn {
     session_id: String,
     connection_id: Option<i64>,
-    start_request_id: u64,
-    turn_id: Option<String>,
+    request_id: u64,
     cancelled: bool,
     output_bytes: usize,
     output_limit_reached: bool,
 }
 
-impl CodexAppServer {
+impl GrokAcpServer {
     pub(super) fn spawn(
         app: AppHandle,
-        launch: CodexAppServerLaunch,
+        launch: GrokAcpServerLaunch,
         startup_cancellation: Arc<AtomicBool>,
         termination: SessionTermination,
     ) -> Result<Arc<Self>, String> {
-        let CodexAppServerLaunch {
+        let GrokAcpServerLaunch {
             identity,
             bridge,
             bridge_executable,
             provider_executable,
             gateway,
+            timestamp,
+            sequence,
         } = launch;
+        let prepared = prepare_grok_acp_launch(timestamp, sequence)?;
         let mut process = Command::new(&provider_executable);
         process
-            .args(["app-server", "--stdio"])
+            .args(&prepared.args)
+            .env_clear()
+            .envs(
+                prepared
+                    .environment
+                    .iter()
+                    .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
+            )
+            .current_dir(&prepared.current_directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(directory) = identity
-            .working_directory
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            process.current_dir(directory);
-        }
         if let Some((_, token)) = bridge.as_ref() {
             process.env("NOCTERM_MCP_TOKEN", token);
         } else {
@@ -104,14 +108,14 @@ impl CodexAppServer {
         }
         let mut child = process
             .spawn()
-            .map_err(|error| format!("启动 codex app-server 失败：{error}"))?;
+            .map_err(|error| format!("启动 Grok ACP 失败：{error}"))?;
         let Some(mut stdin) = child.stdin.take() else {
             terminate_child(&mut child);
-            return Err("Codex app-server 标准输入不可用".to_string());
+            return Err("Grok ACP 标准输入不可用".to_string());
         };
         let Some(stdout) = child.stdout.take() else {
             terminate_child(&mut child);
-            return Err("Codex app-server 标准输出不可用".to_string());
+            return Err("Grok ACP 标准输出不可用".to_string());
         };
         let stderr_relay = Arc::new(ProviderStderrRelay::default());
         if let Some(stderr) = child.stderr.take() {
@@ -127,72 +131,66 @@ impl CodexAppServer {
             }
         });
 
-        // 初始化和 thread 创建必须在注册长生命周期读线程前完成，失败时同步回收子进程。
+        // 初始化期间同步等待固定响应，避免把尚未就绪的进程注册成可复用会话。
         let bootstrap = (|| {
-            write_message(
-                &mut stdin,
-                &json!({
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {"clientInfo": {"name": "nocterm", "version": env!("CARGO_PKG_VERSION")}}
-                }),
-            )?;
-            wait_for_response(
+            let mut pending = BootstrapMessages::default();
+            write_message(&mut stdin, &initialize_request())?;
+            let initialized = wait_for_response_collect(
                 &line_receiver,
                 1,
-                "初始化 Codex app-server",
+                "初始化 Grok ACP",
+                &mut pending,
                 &startup_cancellation,
             )?;
-            write_message(&mut stdin, &json!({"method": "initialized"}))?;
-
-            write_message(
-                &mut stdin,
-                &codex_config_read_request(identity.working_directory.as_deref()),
-            )?;
-            let config_response = wait_for_response(
+            if initialized
+                .pointer("/result/protocolVersion")
+                .and_then(Value::as_u64)
+                != Some(1)
+            {
+                return Err("Grok ACP 返回了不兼容的协议版本".to_string());
+            }
+            let cwd = prepared
+                .current_directory
+                .to_str()
+                .ok_or_else(|| "Grok 隔离目录不是有效 UTF-8".to_string())?;
+            let session_request = session_new_request(
+                cwd,
+                &identity,
+                bridge
+                    .as_ref()
+                    .map(|(endpoint, _)| (bridge_executable.as_str(), endpoint.as_str())),
+            );
+            write_message(&mut stdin, &session_request)?;
+            let response = wait_for_response_collect(
                 &line_receiver,
                 2,
-                "读取 Codex 生效配置",
+                "创建 Grok ACP 会话",
+                &mut pending,
                 &startup_cancellation,
             )?;
-            let configured_mcp_servers = configured_mcp_server_names(&config_response)?;
-            let config = codex_provider_config(
-                &bridge_executable,
-                bridge.as_ref().map(|(endpoint, _)| endpoint.as_str()),
-                &configured_mcp_servers,
-            );
-            let thread_request = codex_thread_start_request(&identity, config, bridge.is_some());
-            write_message(&mut stdin, &thread_request)?;
-            let response = wait_for_response(
-                &line_receiver,
-                3,
-                "创建 Codex thread",
-                &startup_cancellation,
-            )?;
-            validate_thread_security(&response)?;
-            let thread_id = response
-                .pointer("/result/thread/id")
+            let session_id = response
+                .pointer("/result/sessionId")
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
-                .ok_or_else(|| "Codex thread/start 未返回 thread id".to_string())?;
-            write_message(&mut stdin, &codex_feature_list_request(&thread_id))?;
-            let feature_response = wait_for_response(
-                &line_receiver,
-                4,
-                "验证 Codex 执行能力隔离",
-                &startup_cancellation,
-            )?;
-            validate_disabled_features(&feature_response)?;
-            Ok(thread_id)
+                .ok_or_else(|| "Grok session/new 未返回 session id".to_string())?;
+            if bridge.is_some() {
+                wait_for_mcp_ready(
+                    &line_receiver,
+                    &mut pending,
+                    &session_id,
+                    &startup_cancellation,
+                )?;
+            }
+            Ok(session_id)
         })();
-        let thread_id = match bootstrap {
-            Ok(thread_id) => thread_id,
+        let acp_session_id = match bootstrap {
+            Ok(session_id) => session_id,
             Err(error) => {
                 terminate_child(&mut child);
                 stderr_relay.wait(Duration::from_millis(250));
-                return Err(redact_token(
-                    append_startup_diagnostics(error, &stderr_relay),
+                return Err(redact_bridge_token(
+                    prepared.redact(append_startup_diagnostics(error, &stderr_relay)),
                     bridge.as_ref().map(|(_, token)| token.as_str()),
                 ));
             }
@@ -200,14 +198,15 @@ impl CodexAppServer {
 
         let server = Arc::new(Self {
             identity,
-            thread_id,
+            acp_session_id,
             stdin: Mutex::new(stdin),
             child: ManagedChild::new(child),
             active_turn: Mutex::new(None),
-            next_request_id: AtomicU64::new(5),
+            next_request_id: AtomicU64::new(3),
             alive: AtomicBool::new(true),
             bridge_token: bridge.map(|(_, token)| token),
             gateway,
+            prepared,
             termination,
             stderr_completion: StreamCompletion::default(),
         });
@@ -220,7 +219,7 @@ impl CodexAppServer {
         Ok(server)
     }
 
-    pub(super) fn matches_identity(&self, identity: &CodexSessionIdentity) -> bool {
+    pub(super) fn matches_identity(&self, identity: &ProviderSessionIdentity) -> bool {
         self.identity == *identity
     }
 
@@ -236,54 +235,39 @@ impl CodexAppServer {
         command_policy: AiCommandPolicy,
     ) -> Result<(), String> {
         if !self.is_alive() {
-            return Err("Codex app-server 已退出，请重试".to_string());
+            return Err("Grok ACP 已退出，请重试".to_string());
         }
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         {
             let mut active = self
                 .active_turn
                 .lock()
-                .map_err(|_| "Codex turn 状态不可用".to_string())?;
+                .map_err(|_| "Grok turn 状态不可用".to_string())?;
             if active.is_some() {
-                return Err("当前 Codex 会话仍有任务在执行".to_string());
+                return Err("当前 Grok 会话仍有任务在执行".to_string());
             }
             *active = Some(ActiveTurn {
                 session_id: session_id.clone(),
                 connection_id: self.identity.connection_id,
-                start_request_id: request_id,
-                turn_id: None,
+                request_id,
                 cancelled: false,
                 output_bytes: 0,
                 output_limit_reached: false,
             });
         }
-        // 先原子占用 turn，再激活授权；重复启动不能改写正在运行任务的审计身份。
         if let Some(token) = self.bridge_token.as_deref()
             && let Err(error) =
                 self.gateway
                     .activate_session(token, session_id.clone(), command_policy)
         {
-            if let Ok(mut active) = self.active_turn.lock()
-                && active
-                    .as_ref()
-                    .is_some_and(|turn| turn.session_id == session_id)
-            {
-                *active = None;
-            }
+            self.clear_turn(&session_id);
             return Err(error);
         }
-        let request = json!({
-            "id": request_id,
-            "method": "turn/start",
-            "params": {
-                "threadId": self.thread_id,
-                "input": [{"type": "text", "text": prompt}]
-            }
-        });
+        let request = prompt_request(request_id, &self.acp_session_id, &prompt);
         let result = self
             .stdin
             .lock()
-            .map_err(|_| "Codex app-server 标准输入不可用".to_string())
+            .map_err(|_| "Grok ACP 标准输入不可用".to_string())
             .and_then(|mut stdin| write_message(&mut *stdin, &request));
         if let Err(error) = result {
             self.alive.store(false, Ordering::Release);
@@ -294,39 +278,37 @@ impl CodexAppServer {
     }
 
     pub(super) fn stop_turn(&self, session_id: &str) -> Result<bool, String> {
-        let turn = {
+        {
             let mut active = self
                 .active_turn
                 .lock()
-                .map_err(|_| "Codex turn 状态不可用".to_string())?;
+                .map_err(|_| "Grok turn 状态不可用".to_string())?;
             let Some(turn) = active.as_mut().filter(|turn| turn.session_id == session_id) else {
                 return Ok(false);
             };
             turn.cancelled = true;
-            turn.clone()
-        };
-        let Some(turn_id) = turn.turn_id else {
-            // turn/start 尚未应答时没有可中断 ID，关闭服务器并由 stdout EOF 收尾。
-            self.shutdown();
-            return Ok(true);
-        };
-        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-        let request = json!({
-            "id": request_id,
-            "method": "turn/interrupt",
-            "params": {"threadId": self.thread_id, "turnId": turn_id}
-        });
+        }
+        let request = cancel_notification(&self.acp_session_id);
         let result = self
             .stdin
             .lock()
-            .map_err(|_| "Codex app-server 标准输入不可用".to_string())
+            .map_err(|_| "Grok ACP 标准输入不可用".to_string())
             .and_then(|mut stdin| write_message(&mut *stdin, &request));
         if let Err(error) = result {
-            // 协议中断无法写入时不保留失控 turn，关闭进程触发统一清理。
             self.shutdown();
             return Err(error);
         }
         Ok(true)
+    }
+
+    fn clear_turn(&self, session_id: &str) {
+        if let Ok(mut active) = self.active_turn.lock()
+            && active
+                .as_ref()
+                .is_some_and(|turn| turn.session_id == session_id)
+        {
+            *active = None;
+        }
     }
 
     fn read_stdout(self: Arc<Self>, app: AppHandle, lines: mpsc::Receiver<Result<String, String>>) {
@@ -349,12 +331,12 @@ impl CodexAppServer {
         if let Some(error) = read_error {
             self.emit_output(&app, "stderr", error);
         }
-        // 持续协议没有发出 turn 完成事件便退出，即使进程代码为 0 也属于任务失败。
         self.finish_turn(
             &app,
             Some(exit_code.filter(|code| *code != 0).unwrap_or(1)),
             false,
         );
+        self.prepared.cleanup();
         self.termination.notify();
     }
 
@@ -376,7 +358,9 @@ impl CodexAppServer {
 
     fn handle_message(&self, app: &AppHandle, line: &str) {
         let Ok(message) = serde_json::from_str::<Value>(line) else {
-            self.emit_output(app, "stderr", line.to_string());
+            self.emit_output(app, "stderr", "Grok ACP 返回了无效 JSON".to_string());
+            self.finish_turn(app, Some(1), false);
+            self.shutdown();
             return;
         };
         if message.get("id").is_some() && message.get("method").is_some() {
@@ -387,39 +371,11 @@ impl CodexAppServer {
             self.handle_response(app, id, &message);
             return;
         }
-        let method = message.get("method").and_then(Value::as_str).unwrap_or("");
-        match method {
-            "item/agentMessage/delta"
-            | "item/reasoning/summaryTextDelta"
-            | "item/started"
-            | "item/completed" => self.emit_output(app, "stdout", line.to_string()),
-            "turn/completed" => {
-                let status = message
-                    .pointer("/params/turn/status")
-                    .and_then(Value::as_str);
-                let error = message
-                    .pointer("/params/turn/error/message")
-                    .and_then(Value::as_str);
-                if let Some(error) = error {
-                    self.emit_output(app, "stderr", error.to_string());
-                }
-                let cancelled = self
-                    .active_turn
-                    .lock()
-                    .ok()
-                    .and_then(|active| active.as_ref().map(|turn| turn.cancelled))
-                    .unwrap_or(status == Some("interrupted"));
-                self.finish_turn(
-                    app,
-                    Some(if status == Some("completed") { 0 } else { 1 }),
-                    cancelled,
-                );
-            }
-            _ => {}
+        if is_renderable_update(&message, &self.acp_session_id) {
+            self.emit_output(app, "stdout", line.to_string());
         }
     }
 
-    /// Bridge 承接命令审批；其他 Codex 交互请求没有对应 UI，必须明确拒绝。
     fn reject_server_request(&self, app: &AppHandle, message: &Value) {
         let Some(id) = message.get("id").cloned() else {
             return;
@@ -429,50 +385,53 @@ impl CodexAppServer {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let response = json!({
+            "jsonrpc": "2.0",
             "id": id,
-            "error": {"code": -32601, "message": "Nocterm 暂不支持该 Codex 交互请求"}
+            "error": {"code": -32601, "message": "Nocterm does not expose ACP client tools"}
         });
         let write_result = self
             .stdin
             .lock()
-            .map_err(|_| "Codex app-server 标准输入不可用".to_string())
+            .map_err(|_| "Grok ACP 标准输入不可用".to_string())
             .and_then(|mut stdin| write_message(&mut *stdin, &response));
+        if let Err(error) = write_result {
+            self.emit_output(app, "stderr", error);
+            self.shutdown();
+            return;
+        }
         self.emit_output(
             app,
             "stderr",
-            if let Err(error) = write_result {
-                error
-            } else {
-                format!("Codex 请求 {method} 未被当前 Nocterm 界面支持")
-            },
+            format!("Grok 请求 {method} 未被当前 Nocterm 界面支持"),
         );
     }
 
     fn handle_response(&self, app: &AppHandle, id: u64, message: &Value) {
-        let mut failed = None;
-        if let Ok(mut active) = self.active_turn.lock()
-            && let Some(turn) = active.as_mut().filter(|turn| turn.start_request_id == id)
-        {
-            if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
-                failed = Some(error.to_string());
-            } else {
-                turn.turn_id = message
-                    .pointer("/result/turn/id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                if turn.turn_id.is_none() {
-                    failed = Some("Codex turn/start 未返回 turn id".to_string());
-                }
-            }
-        }
-        if let Some(error) = failed {
-            self.emit_output(app, "stderr", error);
+        let active = self
+            .active_turn
+            .lock()
+            .ok()
+            .and_then(|active| active.clone());
+        let Some(turn) = active.filter(|turn| turn.request_id == id) else {
+            return;
+        };
+        if message.get("error").is_some() {
+            let error = response_error(message).unwrap_or("Grok ACP 返回了未说明原因的协议错误");
+            self.emit_output(app, "stderr", error.to_string());
             self.finish_turn(app, Some(1), false);
+            return;
+        }
+        match prompt_completion(message, turn.cancelled) {
+            Ok((code, cancelled)) => self.finish_turn(app, Some(code), cancelled),
+            Err(error) => {
+                self.emit_output(app, "stderr", error);
+                self.finish_turn(app, Some(1), false);
+            }
         }
     }
 
     fn emit_output(&self, app: &AppHandle, stream: &str, data: String) {
-        let data = redact_token(data, self.bridge_token.as_deref());
+        let data = redact_bridge_token(self.prepared.redact(data), self.bridge_token.as_deref());
         let Some((session_id, connection_id, limit_reached)) =
             self.active_turn.lock().ok().and_then(|mut active| {
                 let turn = active.as_mut()?;
@@ -519,7 +478,6 @@ impl CodexAppServer {
             .ok()
             .and_then(|mut active| active.take());
         if let Some(turn) = turn {
-            // 仅在唯一收尾路径撤销本轮工具授权，文本输出不代表 turn 已完成。
             let _ = self.gateway.deactivate_session(&turn.session_id);
             let _ = app.emit(
                 "nocterm://ai-exit",
@@ -535,14 +493,21 @@ impl CodexAppServer {
 
     pub(super) fn shutdown(&self) {
         self.alive.store(false, Ordering::Release);
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut stdin) = self.stdin.lock() {
+            let _ = write_message(
+                &mut *stdin,
+                &close_request(request_id, &self.acp_session_id),
+            );
+        }
         self.child.terminate();
+        self.prepared.cleanup();
         if let Some(token) = self.bridge_token.as_deref() {
             self.gateway.revoke(token);
         }
         self.termination.notify();
     }
 
-    /// 只回收仍属于被中断 session 的 turn，不能误杀其间启动的新任务。
     pub(super) fn shutdown_if_turn_active(&self, session_id: &str) {
         let still_active = self
             .active_turn
@@ -556,13 +521,13 @@ impl CodexAppServer {
     }
 }
 
-impl PersistentProviderSession for CodexAppServer {
-    fn matches_identity(&self, identity: &CodexSessionIdentity) -> bool {
-        CodexAppServer::matches_identity(self, identity)
+impl PersistentProviderSession for GrokAcpServer {
+    fn matches_identity(&self, identity: &ProviderSessionIdentity) -> bool {
+        GrokAcpServer::matches_identity(self, identity)
     }
 
     fn is_alive(&self) -> bool {
-        CodexAppServer::is_alive(self)
+        GrokAcpServer::is_alive(self)
     }
 
     fn start_turn<R: Runtime>(
@@ -572,38 +537,35 @@ impl PersistentProviderSession for CodexAppServer {
         prompt: String,
         command_policy: AiCommandPolicy,
     ) -> Result<(), String> {
-        CodexAppServer::start_turn(self, app, session_id, prompt, command_policy)
+        GrokAcpServer::start_turn(self, app, session_id, prompt, command_policy)
     }
 
     fn stop_turn(&self, session_id: &str) -> Result<bool, String> {
-        CodexAppServer::stop_turn(self, session_id)
+        GrokAcpServer::stop_turn(self, session_id)
     }
 
     fn shutdown(&self) {
-        CodexAppServer::shutdown(self);
+        GrokAcpServer::shutdown(self);
     }
 
     fn shutdown_if_turn_active(&self, session_id: &str) {
-        CodexAppServer::shutdown_if_turn_active(self, session_id);
+        GrokAcpServer::shutdown_if_turn_active(self, session_id);
     }
 }
 
-impl Drop for CodexAppServer {
+fn redact_bridge_token(mut text: String, token: Option<&str>) -> String {
+    if let Some(token) = token.filter(|token| !token.is_empty()) {
+        text = text.replace(token, "[REDACTED]");
+    }
+    text
+}
+
+impl Drop for GrokAcpServer {
     fn drop(&mut self) {
         self.shutdown();
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::commands::ai_stream::redact_token;
-
-    #[test]
-    fn bridge_tokens_never_leave_the_codex_output_boundary() {
-        assert_eq!(
-            redact_token("endpoint token=secret-123".into(), Some("secret-123")),
-            "endpoint token=[REDACTED]"
-        );
-        assert_eq!(redact_token("plain".into(), None), "plain");
-    }
-}
+#[cfg(all(test, unix))]
+#[path = "session/tests.rs"]
+mod tests;
