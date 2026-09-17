@@ -85,30 +85,144 @@
   animation: status-pulse 1.4s ease-in-out infinite;
 }
 
-/* 等待期过程流只陪伴本次运行，不写入历史消息。 */
+/* 执行过程采用轻量时间线，不与最终回答争夺视觉层级。 */
+.activityDisclosure {
+  width: 100%;
+  margin: 1px 0 4px;
+}
+
+.activityToggle {
+  display: grid;
+  width: 100%;
+  min-height: 28px;
+  grid-template-columns: 7px auto 1fr 16px;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  color: var(--term-muted);
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.activityToggle:hover {
+  color: var(--term-text);
+}
+
+.activityToggle:focus-visible {
+  outline: 2px solid var(--term-blue);
+  outline-offset: 2px;
+}
+
+.activityStatus {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.activityStatusRunning {
+  background: var(--term-yellow);
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+.activityStatusComplete {
+  background: color-mix(in srgb, var(--term-green) 78%, var(--term-muted));
+}
+
+.activityTitle {
+  color: currentcolor;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.activityMeta {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityChevron {
+  width: 14px;
+  height: 14px;
+  justify-self: end;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform var(--dur-fast);
+}
+
+.activityChevronExpanded {
+  transform: rotate(180deg);
+}
+
 .activityList {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: 5px;
+  margin: 1px 0 7px 3px;
+  padding: 4px 0 5px 14px;
+  border-left: 1px solid color-mix(in srgb, var(--term-muted) 32%, transparent);
+  animation: activity-reveal var(--dur-fast) ease-out;
 }
 
 .activityLine {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+  position: relative;
+  min-width: 0;
   color: var(--term-muted);
-  font-size: 11px;
-  line-height: 1.5;
-  overflow-wrap: break-word;
+  font-size: 10px;
+  line-height: 1.55;
 }
 
-.activityKind {
-  flex: none;
-  padding: 0 5px;
-  font-size: 10px;
-  background: var(--bg-hover);
-  border-radius: 4px;
+.activityMarker {
+  position: absolute;
+  top: 6px;
+  left: -18px;
+  width: 7px;
+  height: 7px;
+  background: var(--term-panel);
+  border: 1px solid var(--term-muted);
+  border-radius: 50%;
+}
+
+.activityMarkerTool {
+  border-color: color-mix(in srgb, var(--term-blue) 76%, var(--term-muted));
+}
+
+.activityMarkerProgress {
+  width: 5px;
+  height: 5px;
+  top: 7px;
+  left: -17px;
+  border-color: color-mix(in srgb, var(--term-muted) 54%, transparent);
+}
+
+.activityText {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.answerContent {
+  margin-top: 7px;
+}
+
+@keyframes activity-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* 命令审批是终端写操作的安全边界，目标与原始命令必须同时完整可见。 */

@@ -89,3 +89,7 @@ Windows 还需确认系统原生标题栏及右上角最小化、最大化/还�
 15. 若终端里出现“[无法写入剪贴板]”，记录平台与 WebView 版本——说明该环境同时拒绝了异步剪贴板 API 与 `execCommand('copy')` 兜底。
 
 只有在目标系统完成上述交互后，才能把本地终端更新为对应平台“已验收”。
+
+## AI Provider 与 Nocterm Bridge 验收
+
+完整步骤、提示词、证据要求和 Pass/Fail 判据见 [AI Provider 与 Nocterm Bridge 验收流程](ai-provider-smoke.md)。至少完成其中全部核心用例和对应 Provider 专项检查，并分别记录 macOS、Windows、Provider 与 SSH 认证方式；未完成实际 Provider 和目标系统交互前，Agent 能力不能标记为“已验收”。

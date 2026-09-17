@@ -14,7 +14,7 @@ import {
 import { buildAiPrompt, type AiAttachment } from '../model/ai-attachment';
 import { buildConversationContext } from '../model/ai-conversation';
 import type { AiTerminalTarget } from '../model/ai-target';
-import { reduceAiRuntimeOutput } from '../model/ai-runtime-output';
+import { aiRuntimeErrorMessage, reduceAiRuntimeOutput } from '../model/ai-runtime-output';
 import type {
   AiCommandPolicy,
   AiMessage,
@@ -67,7 +67,6 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
   const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
   const [streamText, setStreamText] = useState('');
   const [runParts, setRunParts] = useState<AiMessagePart[]>([]);
-  const [liveThinking, setLiveThinking] = useState('');
   const [pendingApproval, setPendingApproval] = useState<AiToolApprovalEvent | null>(null);
   const [approvalSubmitting, setApprovalSubmitting] = useState(false);
   const [providerAvailability, setProviderAvailability] = useState<Record<string, boolean>>({});
@@ -88,7 +87,6 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
     answerStreamedRef.current = false;
     setStreamText('');
     setRunParts([]);
-    setLiveThinking('');
     setPendingApproval(null);
     setApprovalSubmitting(false);
   }, []);
@@ -99,7 +97,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
     void stopAiSession(sessionId).catch((error: unknown) => {
       if (runningSessionRef.current !== sessionId) return;
       timedOutSessionRef.current = null;
-      setNotice(error instanceof Error ? error.message : '停止 AI 会话失败。');
+      setNotice(aiRuntimeErrorMessage(error, '停止 AI 会话失败。'));
       setCanRetryQuestion(false);
     });
   }, []);
@@ -129,10 +127,6 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         parts: runPartsRef.current,
         answerStreamed: answerStreamedRef.current,
       });
-      if (reduced.thinkingDelta) {
-        setLiveThinking((current) => (current + reduced.thinkingDelta).slice(-160));
-      }
-      if (reduced.clearThinking) setLiveThinking('');
       if (!reduced.changed) return;
       // 先更新 ref，再提交 React state；Provider 可能在下次渲染前立即退出。
       streamTextRef.current = reduced.text;
@@ -237,9 +231,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       .catch((error: unknown) => {
         if (!disposed) {
           setEventListenersReady(false);
-          setNotice(
-            error instanceof Error ? error.message : '初始化 AI 事件监听失败，请重启应用。'
-          );
+          setNotice(aiRuntimeErrorMessage(error, '初始化 AI 事件监听失败，请重启应用。'));
         }
       });
     void getAiProviderStatus()
@@ -251,8 +243,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         }
       })
       .catch((error: unknown) => {
-        if (!disposed)
-          setNotice(error instanceof Error ? error.message : '读取 AI Provider 状态失败。');
+        if (!disposed) setNotice(aiRuntimeErrorMessage(error, '读取 AI Provider 状态失败。'));
       });
     return () => {
       disposed = true;
@@ -335,7 +326,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
           timeoutRef.current = null;
           runningSessionRef.current = null;
           setRunningSessionId(null);
-          setNotice(error instanceof Error ? error.message : '启动 AI Provider 失败。');
+          setNotice(aiRuntimeErrorMessage(error, '启动 AI Provider 失败。'));
           setCanRetryQuestion(true);
         });
     },
@@ -369,7 +360,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         })
         .catch((error: unknown) => {
           setApprovalSubmitting(false);
-          setNotice(error instanceof Error ? error.message : '提交命令确认失败。');
+          setNotice(aiRuntimeErrorMessage(error, '提交命令确认失败。'));
         });
     },
     [approvalSubmitting, pendingApproval, requestSessionStop]
@@ -391,7 +382,6 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
     runningSessionId,
     streamText,
     runParts,
-    liveThinking,
     pendingApproval,
     approvalSubmitting,
     providerAvailability,

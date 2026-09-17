@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveAiTerminalTarget } from './ai-target';
+import { isAiTerminalTargetReady, resolveAiTerminalTarget } from './ai-target';
 
 describe('resolveAiTerminalTarget', () => {
   it('binds only a connected SSH session as a remote target', () => {
@@ -12,8 +12,11 @@ describe('resolveAiTerminalTarget', () => {
       host: 'server.example',
     };
 
-    expect(resolveAiTerminalTarget(session, 'connecting')).toEqual({ context: '' });
+    const connecting = resolveAiTerminalTarget(session, 'connecting');
+    expect(connecting).toEqual({ context: '' });
+    expect(isAiTerminalTargetReady(connecting)).toBe(false);
     const target = resolveAiTerminalTarget(session, 'connected');
+    expect(isAiTerminalTargetReady(target)).toBe(true);
     expect(target.connectionId).toBe(7);
     expect(target.targetSessionId).toBeUndefined();
     expect(target.context).toContain('不要假设它继承可见终端中的 cd');
@@ -24,8 +27,11 @@ describe('resolveAiTerminalTarget', () => {
   it('binds only a connected local session as a local target', () => {
     const session = { id: 'local:1', kind: 'local' as const, name: '本地终端' };
 
-    expect(resolveAiTerminalTarget(session, 'closed')).toEqual({ context: '' });
+    const closed = resolveAiTerminalTarget(session, 'closed');
+    expect(closed).toEqual({ context: '' });
+    expect(isAiTerminalTargetReady(closed)).toBe(false);
     const target = resolveAiTerminalTarget(session, 'connected');
+    expect(isAiTerminalTargetReady(target)).toBe(true);
     expect(target.connectionId).toBeUndefined();
     expect(target.targetSessionId).toBe('local:1');
     expect(target.context).not.toContain('local_terminal_exec');

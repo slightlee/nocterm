@@ -74,20 +74,22 @@ describe('extractAiActivities', () => {
     ).toEqual([{ kind: 'tool', text: '读取容器日志：new-api' }]);
     expect(
       extractAiActivities(
+        '{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"use_tool","raw_input":{"tool_name":"nocterm__get_system_info","arguments":{}}}}}'
+      )
+    ).toEqual([{ kind: 'tool', text: '读取服务器系统信息' }]);
+    expect(
+      extractAiActivities(
         '{"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"use_tool"}}}'
       )
     ).toEqual([{ kind: 'tool', text: '执行终端操作' }]);
   });
 
-  it('extracts Claude thinking and tool use as activity entries', () => {
+  it('hides Claude thinking and keeps tool use as an activity entry', () => {
     const activities = extractAiActivities(
       '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"先确认\\nDocker 状态"},{"type":"tool_use","name":"Bash","input":{"command":"docker ps"}}]}}'
     );
 
-    expect(activities).toEqual([
-      { kind: 'thinking', text: '先确认 Docker 状态' },
-      { kind: 'tool', text: 'Bash docker ps' },
-    ]);
+    expect(activities).toEqual([{ kind: 'tool', text: 'Bash docker ps' }]);
   });
 
   it('summarizes tool calls without a recognizable input', () => {
@@ -98,7 +100,7 @@ describe('extractAiActivities', () => {
     ).toEqual([{ kind: 'tool', text: 'Task' }]);
   });
 
-  it('extracts Codex command execution and reasoning entries', () => {
+  it('extracts Codex command execution and hides reasoning entries', () => {
     expect(
       extractAiActivities(
         '{"type":"item.started","item":{"type":"command_execution","command":"docker ps -a"}}'
@@ -108,7 +110,7 @@ describe('extractAiActivities', () => {
       extractAiActivities(
         '{"type":"item.completed","item":{"type":"reasoning","text":"需要检查端口"}}'
       )
-    ).toEqual([{ kind: 'thinking', text: '需要检查端口' }]);
+    ).toEqual([]);
   });
 
   it('shows Codex MCP tool calls while the terminal command is running', () => {
@@ -140,9 +142,9 @@ describe('extractAiActivities', () => {
     expect(extractAiActivities('')).toEqual([]);
   });
 
-  it('truncates overlong thinking summaries', () => {
+  it('truncates overlong tool summaries', () => {
     const activities = extractAiActivities(
-      `{"type":"item.completed","item":{"type":"reasoning","text":"${'思'.repeat(300)}"}}`
+      `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"${'x'.repeat(300)}"}}]}}`
     );
 
     expect(activities[0]?.text).toHaveLength(161);
@@ -151,7 +153,7 @@ describe('extractAiActivities', () => {
 });
 
 describe('extractAiStreamDelta', () => {
-  it('extracts Grok ACP answer and thought chunks', () => {
+  it('extracts Grok ACP answers and hides thought chunks', () => {
     expect(
       extractAiStreamDelta(
         '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"容器正常"}}}}'
@@ -161,10 +163,10 @@ describe('extractAiStreamDelta', () => {
       extractAiStreamDelta(
         '{"method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"读取状态"}}}}'
       )
-    ).toEqual({ thinking: '读取状态' });
+    ).toBeNull();
   });
 
-  it('extracts Claude text and thinking deltas', () => {
+  it('extracts Claude text and hides thinking deltas', () => {
     expect(
       extractAiStreamDelta(
         '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"你好"}}}'
@@ -174,7 +176,7 @@ describe('extractAiStreamDelta', () => {
       extractAiStreamDelta(
         '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"先查容器"}}}'
       )
-    ).toEqual({ thinking: '先查容器' });
+    ).toBeNull();
     expect(
       extractAiStreamDelta(
         '{"type":"stream_event","event":{"type":"content_block_start","index":0}}'
@@ -184,7 +186,7 @@ describe('extractAiStreamDelta', () => {
     expect(extractAiStreamDelta('not json')).toBeNull();
   });
 
-  it('extracts Codex app-server answer and reasoning deltas', () => {
+  it('extracts Codex app-server answers and hides reasoning deltas', () => {
     expect(
       extractAiStreamDelta('{"method":"item/agentMessage/delta","params":{"delta":"检查完成"}}')
     ).toEqual({ answer: '检查完成' });
@@ -192,16 +194,14 @@ describe('extractAiStreamDelta', () => {
       extractAiStreamDelta(
         '{"method":"item/reasoning/summaryTextDelta","params":{"delta":"先检查状态"}}'
       )
-    ).toEqual({ thinking: '先检查状态' });
+    ).toBeNull();
   });
 
-  it('extracts Grok streaming-json answer and thought deltas', () => {
+  it('extracts Grok streaming-json answers and hides thought deltas', () => {
     expect(extractAiStreamDelta('{"type":"text","data":"容器正常"}')).toEqual({
       answer: '容器正常',
     });
-    expect(extractAiStreamDelta('{"type":"thought","data":"读取状态"}')).toEqual({
-      thinking: '读取状态',
-    });
+    expect(extractAiStreamDelta('{"type":"thought","data":"读取状态"}')).toBeNull();
   });
 });
 

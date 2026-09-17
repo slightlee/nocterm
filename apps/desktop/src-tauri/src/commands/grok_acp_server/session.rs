@@ -12,16 +12,19 @@ use std::{
     time::Duration,
 };
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use super::protocol::{
-    BootstrapMessages, cancel_notification, close_request, initialize_request,
-    is_renderable_update, prompt_completion, prompt_request, response_error, session_new_request,
-    terminate_child, wait_for_mcp_ready, wait_for_response_collect, write_message,
+    BootstrapMessages, GROK_MCP_SDK_CALL_METHOD, cancel_notification, close_request,
+    initialize_request, is_renderable_update, prompt_completion, prompt_request,
+    require_supported_sdk_mcp, response_error, sdk_call_response, session_new_request,
+    terminate_child, wait_for_mcp_ready_with_requests, wait_for_response_collect,
+    wait_for_response_collect_with_requests, write_message,
 };
 use crate::{
     commands::{
+        ai_bridge::McpRequestDispatcher,
         ai_persistent::{PersistentProviderSession, SessionTermination},
         ai_process::{ManagedChild, StreamCompletion},
         ai_provider::{PreparedGrokAcpLaunch, ProviderSessionIdentity, prepare_grok_acp_launch},
@@ -44,6 +47,7 @@ pub(super) struct GrokAcpServer {
     alive: AtomicBool,
     bridge_token: Option<String>,
     gateway: Arc<AiGatewayState>,
+    mcp_dispatcher: Arc<McpRequestDispatcher>,
     prepared: PreparedGrokAcpLaunch,
     termination: SessionTermination,
     stderr_completion: StreamCompletion,
@@ -52,10 +56,10 @@ pub(super) struct GrokAcpServer {
 /// ACP 进程创建参数属于 Grok Adapter，不进入跨 Provider 生命周期接口。
 pub(super) struct GrokAcpServerLaunch {
     pub identity: ProviderSessionIdentity,
-    pub bridge: Option<(String, String)>,
-    pub bridge_executable: String,
+    pub bridge_token: Option<String>,
     pub provider_executable: PathBuf,
     pub gateway: Arc<AiGatewayState>,
+    pub mcp_dispatcher: Arc<McpRequestDispatcher>,
     pub timestamp: u128,
     pub sequence: u64,
 }
@@ -79,10 +83,10 @@ impl GrokAcpServer {
     ) -> Result<Arc<Self>, String> {
         let GrokAcpServerLaunch {
             identity,
-            bridge,
-            bridge_executable,
+            bridge_token,
             provider_executable,
             gateway,
+            mcp_dispatcher,
             timestamp,
             sequence,
         } = launch;
@@ -101,11 +105,6 @@ impl GrokAcpServer {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some((_, token)) = bridge.as_ref() {
-            process.env("NOCTERM_MCP_TOKEN", token);
-        } else {
-            process.env_remove("NOCTERM_MCP_TOKEN");
-        }
         let mut child = process
             .spawn()
             .map_err(|error| format!("启动 Grok ACP 失败：{error}"))?;
@@ -149,24 +148,31 @@ impl GrokAcpServer {
             {
                 return Err("Grok ACP 返回了不兼容的协议版本".to_string());
             }
+            require_supported_sdk_mcp(&initialized)?;
+            if bridge_token.is_none() {
+                return Err("Nocterm MCP 授权未建立，请重新打开终端后重试".to_string());
+            }
             let cwd = prepared
                 .current_directory
                 .to_str()
                 .ok_or_else(|| "Grok 隔离目录不是有效 UTF-8".to_string())?;
-            let session_request = session_new_request(
-                cwd,
-                &identity,
-                bridge
-                    .as_ref()
-                    .map(|(endpoint, _)| (bridge_executable.as_str(), endpoint.as_str())),
-            );
+            let session_request = session_new_request(cwd, &identity);
             write_message(&mut stdin, &session_request)?;
-            let response = wait_for_response_collect(
+            let mut handle_request = |request: &Value| {
+                handle_server_request(
+                    &mut stdin,
+                    request,
+                    bridge_token.as_deref(),
+                    &mcp_dispatcher,
+                )
+            };
+            let response = wait_for_response_collect_with_requests(
                 &line_receiver,
                 2,
                 "创建 Grok ACP 会话",
                 &mut pending,
                 &startup_cancellation,
+                &mut handle_request,
             )?;
             let session_id = response
                 .pointer("/result/sessionId")
@@ -174,14 +180,13 @@ impl GrokAcpServer {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
                 .ok_or_else(|| "Grok session/new 未返回 session id".to_string())?;
-            if bridge.is_some() {
-                wait_for_mcp_ready(
-                    &line_receiver,
-                    &mut pending,
-                    &session_id,
-                    &startup_cancellation,
-                )?;
-            }
+            wait_for_mcp_ready_with_requests(
+                &line_receiver,
+                &mut pending,
+                &session_id,
+                &startup_cancellation,
+                &mut handle_request,
+            )?;
             Ok(session_id)
         })();
         let acp_session_id = match bootstrap {
@@ -191,7 +196,7 @@ impl GrokAcpServer {
                 stderr_relay.wait(Duration::from_millis(250));
                 return Err(redact_bridge_token(
                     prepared.redact(append_startup_diagnostics(error, &stderr_relay)),
-                    bridge.as_ref().map(|(_, token)| token.as_str()),
+                    bridge_token.as_deref(),
                 ));
             }
         };
@@ -204,8 +209,9 @@ impl GrokAcpServer {
             active_turn: Mutex::new(None),
             next_request_id: AtomicU64::new(3),
             alive: AtomicBool::new(true),
-            bridge_token: bridge.map(|(_, token)| token),
+            bridge_token,
             gateway,
+            mcp_dispatcher,
             prepared,
             termination,
             stderr_completion: StreamCompletion::default(),
@@ -288,6 +294,7 @@ impl GrokAcpServer {
             };
             turn.cancelled = true;
         }
+        let _ = self.gateway.deactivate_session(session_id);
         let request = cancel_notification(&self.acp_session_id);
         let result = self
             .stdin
@@ -364,7 +371,7 @@ impl GrokAcpServer {
             return;
         };
         if message.get("id").is_some() && message.get("method").is_some() {
-            self.reject_server_request(app, &message);
+            self.handle_server_request(app, &message);
             return;
         }
         if let Some(id) = message.get("id").and_then(Value::as_u64) {
@@ -376,34 +383,36 @@ impl GrokAcpServer {
         }
     }
 
-    fn reject_server_request(&self, app: &AppHandle, message: &Value) {
-        let Some(id) = message.get("id").cloned() else {
-            return;
-        };
+    fn handle_server_request(&self, app: &AppHandle, message: &Value) {
         let method = message
             .get("method")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
-        let response = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": {"code": -32601, "message": "Nocterm does not expose ACP client tools"}
-        });
         let write_result = self
             .stdin
             .lock()
             .map_err(|_| "Grok ACP 标准输入不可用".to_string())
-            .and_then(|mut stdin| write_message(&mut *stdin, &response));
+            .and_then(|mut stdin| {
+                handle_server_request(
+                    &mut stdin,
+                    message,
+                    self.bridge_token.as_deref(),
+                    &self.mcp_dispatcher,
+                )
+                .map(|_| ())
+            });
         if let Err(error) = write_result {
             self.emit_output(app, "stderr", error);
             self.shutdown();
             return;
         }
-        self.emit_output(
-            app,
-            "stderr",
-            format!("Grok 请求 {method} 未被当前 Nocterm 界面支持"),
-        );
+        if method != GROK_MCP_SDK_CALL_METHOD {
+            self.emit_output(
+                app,
+                "stderr",
+                format!("Grok 请求 {method} 未被当前 Nocterm 界面支持"),
+            );
+        }
     }
 
     fn handle_response(&self, app: &AppHandle, id: u64, message: &Value) {
@@ -519,6 +528,22 @@ impl GrokAcpServer {
             self.shutdown();
         }
     }
+}
+
+/// 握手和运行阶段共用同一反向请求处理，避免 session/new 期间 MCP 初始化死锁。
+fn handle_server_request(
+    writer: &mut ChildStdin,
+    request: &Value,
+    bridge_token: Option<&str>,
+    dispatcher: &McpRequestDispatcher,
+) -> Result<bool, String> {
+    let response = if let Some(token) = bridge_token {
+        sdk_call_response(request, |message| dispatcher.dispatch(token, message))
+    } else {
+        sdk_call_response(request, |_| None)
+    };
+    write_message(writer, &response)?;
+    Ok(true)
 }
 
 impl PersistentProviderSession for GrokAcpServer {

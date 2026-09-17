@@ -151,10 +151,26 @@ mod tests {
     fn only_allows_single_safe_readonly_commands() {
         assert!(is_safe_readonly_command(" pwd "));
         assert!(is_safe_readonly_command("hostname"));
+        // 即使每个子命令单独安全，Shell 组合语法仍必须进入审批路径。
+        assert!(!is_safe_readonly_command("hostname; pwd"));
         assert!(!is_safe_readonly_command("pwd; rm -rf /"));
         assert!(!is_safe_readonly_command("ls | cat"));
         assert!(!is_safe_readonly_command("uname -n"));
         assert!(!is_safe_readonly_command("docker ps"));
+    }
+
+    #[test]
+    fn auto_safe_confirms_compound_readonly_commands() {
+        let operation = if is_safe_readonly_command("hostname; pwd") {
+            AiOperationClass::ReadOnly
+        } else {
+            AiOperationClass::Unrestricted
+        };
+
+        assert_eq!(
+            execution_decision(AiCommandPolicy::AutoSafe, operation),
+            AiExecutionDecision::Confirm
+        );
     }
 
     #[test]

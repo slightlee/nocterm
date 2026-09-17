@@ -14,22 +14,33 @@ use crate::commands::{ai_persistent::receive_startup_line, ai_provider::Provider
 
 const GROK_LOCAL_TERMINAL_RULES: &str = concat!(
     "This session is bound to a visible Nocterm local terminal. For every terminal-related ",
-    "request, use only the connected Nocterm MCP server. Use its session context capability ",
-    "when target identity matters and its local terminal execution capability for commands. ",
-    "Never use another tool or server to inspect or operate the machine. State only facts ",
-    "returned by tools and omit unrelated diagnostics."
+    "request, use only the connected Nocterm MCP server. Its complete tool catalog is ",
+    "session_context and local_terminal_exec. Make exactly one search_tool call covering every ",
+    "required exact tool name, then call the discovered tools through use_tool. Do not repeat ",
+    "discovery. Use session_context only when the user asks about target identity; otherwise use ",
+    "only local_terminal_exec with the smallest command needed. Never use another tool or server ",
+    "to inspect or operate the machine. State only requested facts returned by tools."
 );
 const GROK_SSH_TERMINAL_RULES: &str = concat!(
     "This session is bound to a Nocterm SSH connection. For every server or terminal-related ",
-    "request, use only the connected Nocterm MCP server. Prefer its structured inspection ",
-    "capabilities and use its general SSH execution capability only when needed. Never use ",
-    "another tool or server to inspect or operate the machine. The SSH command channel reuses ",
-    "the current authenticated connection to the same server; never describe it as a new ",
-    "connection, separate server or independent environment. It does not inherit temporary ",
-    "interactive-shell state. State only facts returned by tools and omit unrelated diagnostics."
+    "request, use only the connected Nocterm MCP server. Its complete tool catalog is ",
+    "session_context, get_system_info, list_processes, list_listening_ports, get_service_status, ",
+    "read_service_logs, get_disk_usage, get_memory_usage, list_docker_containers, get_docker_info, ",
+    "get_docker_container_status, read_docker_logs, and ssh_exec. Make exactly one search_tool ",
+    "call covering every required exact tool name, then call the discovered tools through ",
+    "use_tool. Do not repeat discovery. Prefer the narrow structured tool; use ssh_exec only for ",
+    "a missing fact, and use session_context only when the user asks about target identity. Never ",
+    "inspect unrelated state. The SSH command channel reuses the current authenticated connection ",
+    "to the same server, is not a new environment, and does not inherit temporary interactive-shell ",
+    "state. State only requested facts returned by tools."
 );
 const MAX_BOOTSTRAP_PENDING_MESSAGES: usize = 128;
 const MAX_BOOTSTRAP_PENDING_BYTES: usize = 1024 * 1024;
+pub(super) const NOCTERM_MCP_SERVER_ID: &str = "nocterm";
+// ACP 在线路上为扩展方法增加 `_` 前缀；官方内部扩展名仍是 `x.ai/mcp/sdk_call`。
+pub(super) const GROK_MCP_SDK_CALL_METHOD: &str = "_x.ai/mcp/sdk_call";
+const MIN_SUPPORTED_GROK_VERSION: [u64; 3] = [1, 0, 34];
+const MIN_SUPPORTED_GROK_VERSION_TEXT: &str = "1.0.34";
 
 #[derive(Default)]
 pub(super) struct BootstrapMessages {
@@ -80,20 +91,8 @@ pub(super) fn initialize_request() -> Value {
     })
 }
 
-/// Nocterm Bridge 是会话唯一 MCP。Token 从 Grok 子进程环境继承，不进入协议消息。
-pub(super) fn session_new_request(
-    cwd: &str,
-    identity: &ProviderSessionIdentity,
-    bridge: Option<(&str, &str)>,
-) -> Value {
-    let mcp_servers = bridge.map_or_else(Vec::new, |(executable, endpoint)| {
-        vec![json!({
-            "name": "nocterm",
-            "command": executable,
-            "args": ["mcp-stdio", "--endpoint", endpoint],
-            "env": []
-        })]
-    });
+/// Nocterm 是会话唯一 MCP；Grok 通过官方 ACP 反向请求调用进程内公共 Gateway。
+pub(super) fn session_new_request(cwd: &str, identity: &ProviderSessionIdentity) -> Value {
     let rules = if identity.connection_id.is_some() {
         Some(GROK_SSH_TERMINAL_RULES)
     } else if identity.target_session_id.is_some() {
@@ -107,13 +106,144 @@ pub(super) fn session_new_request(
         "method": "session/new",
         "params": {
             "cwd": cwd,
-            "mcpServers": mcp_servers,
+            "mcpServers": [],
             "_meta": {
                 "yoloMode": true,
-                "rules": rules
+                "rules": rules,
+                "x.ai/mcp/servers": [{
+                    "name": "nocterm",
+                    "serverId": NOCTERM_MCP_SERVER_ID
+                }]
             }
         }
     })
+}
+
+/// 当前产品只支持经过真实握手验证的 Grok MCP-over-ACP，旧版必须显式升级。
+pub(super) fn require_supported_sdk_mcp(initialize_response: &Value) -> Result<(), String> {
+    let version_text = initialize_response
+        .pointer("/result/_meta/agentVersion")
+        .and_then(Value::as_str)
+        .filter(|version| !version.trim().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "无法识别当前 Grok 版本，请升级到 Grok {MIN_SUPPORTED_GROK_VERSION_TEXT} 或更高版本后重试"
+            )
+        })?;
+    let version = parse_core_version(version_text).ok_or_else(|| {
+        format!(
+            "无法识别当前 Grok 版本 {version_text}，请升级到 Grok {MIN_SUPPORTED_GROK_VERSION_TEXT} 或更高版本后重试"
+        )
+    })?;
+    if version < MIN_SUPPORTED_GROK_VERSION {
+        return Err(format!(
+            "当前 Grok 版本 {version_text} 不受支持，请升级到 Grok {MIN_SUPPORTED_GROK_VERSION_TEXT} 或更高版本后重试"
+        ));
+    }
+    let supports_sdk_mcp = initialize_response
+        .pointer("/result/_meta/x.ai~1mcp~1sdk")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if !supports_sdk_mcp {
+        return Err(format!(
+            "当前 Grok {version_text} 不支持 Nocterm 所需的 MCP-over-ACP，请升级到 Grok {MIN_SUPPORTED_GROK_VERSION_TEXT} 或更高版本后重试"
+        ));
+    }
+    Ok(())
+}
+
+fn parse_core_version(version: &str) -> Option<[u64; 3]> {
+    let core = version
+        .split_once(['-', '+', ' '])
+        .map_or(version, |(core, _)| core);
+    let mut parts = core.split('.');
+    let parsed = [
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ];
+    parts.next().is_none().then_some(parsed)
+}
+
+/// 把 Grok 的 ACP 扩展请求转换为嵌套 MCP JSON-RPC 响应；工具执行仍由公共分发器完成。
+pub(super) fn sdk_call_response(
+    request: &Value,
+    dispatch: impl FnOnce(&Value) -> Option<Value>,
+) -> Value {
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    if request.get("method").and_then(Value::as_str) != Some(GROK_MCP_SDK_CALL_METHOD) {
+        return json_rpc_error(id, -32601, "ACP client method not found");
+    }
+    if request.pointer("/params/serverId").and_then(Value::as_str) != Some(NOCTERM_MCP_SERVER_ID) {
+        return json_rpc_error(id, -32602, "unknown MCP serverId");
+    }
+    let Some(message) = request
+        .pointer("/params/message")
+        .filter(|value| value.is_object())
+    else {
+        return json_rpc_error(id, -32602, "missing MCP message");
+    };
+    if message.get("id").is_none_or(Value::is_null) {
+        return json_rpc_error(id, -32602, "MCP-over-ACP requires a request id");
+    }
+    let Some(response) = dispatch(message) else {
+        return json_rpc_error(id, -32602, "MCP-over-ACP does not support notifications");
+    };
+    json!({"jsonrpc":"2.0","id":id,"result":response})
+}
+
+fn json_rpc_error(id: Value, code: i64, message: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
+}
+
+/// Grok 的 session/new 不等待 MCP 握手；目标绑定时必须额外等待完成通知并检查工具数。
+pub(super) fn wait_for_mcp_ready_with_requests(
+    lines: &mpsc::Receiver<Result<String, String>>,
+    pending: &mut BootstrapMessages,
+    session_id: &str,
+    cancellation: &AtomicBool,
+    mut handle_request: impl FnMut(&Value) -> Result<bool, String>,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let message = if let Some(message) = pending.pop_front() {
+            message
+        } else {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("初始化 Nocterm MCP 超时".to_string());
+            }
+            let line = receive_startup_line(
+                lines,
+                deadline,
+                cancellation,
+                "初始化 Nocterm MCP",
+                "初始化 Nocterm MCP 失败：Grok ACP 进程提前退出",
+            )?;
+            serde_json::from_str::<Value>(&line)
+                .map_err(|_| "初始化 Nocterm MCP 失败：Grok ACP 返回了无效 JSON".to_string())?
+        };
+        if message.get("id").is_some()
+            && message.get("method").is_some()
+            && handle_request(&message)?
+        {
+            continue;
+        }
+        if message.get("method").and_then(Value::as_str) != Some("_x.ai/mcp_initialized")
+            || message.pointer("/params/sessionId").and_then(Value::as_str) != Some(session_id)
+        {
+            continue;
+        }
+        let tool_count = message
+            .pointer("/params/mcpToolCount")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "初始化 Nocterm MCP 失败：Grok 未返回工具数量".to_string())?;
+        return if tool_count > 0 {
+            Ok(())
+        } else {
+            Err("初始化 Nocterm MCP 失败：未发现可用终端工具".to_string())
+        };
+    }
 }
 
 pub(super) fn prompt_request(request_id: u64, session_id: &str, prompt: &str) -> Value {
@@ -181,6 +311,24 @@ pub(super) fn wait_for_response_collect(
     pending: &mut BootstrapMessages,
     cancellation: &AtomicBool,
 ) -> Result<Value, String> {
+    wait_for_response_collect_with_requests(
+        lines,
+        expected_id,
+        action,
+        pending,
+        cancellation,
+        |_| Ok(false),
+    )
+}
+
+pub(super) fn wait_for_response_collect_with_requests(
+    lines: &mpsc::Receiver<Result<String, String>>,
+    expected_id: u64,
+    action: &str,
+    pending: &mut BootstrapMessages,
+    cancellation: &AtomicBool,
+    mut handle_request: impl FnMut(&Value) -> Result<bool, String>,
+) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -196,6 +344,12 @@ pub(super) fn wait_for_response_collect(
         )?;
         let message = serde_json::from_str::<Value>(&line)
             .map_err(|_| format!("{action}失败：Grok ACP 返回了无效 JSON"))?;
+        if message.get("id").is_some()
+            && message.get("method").is_some()
+            && handle_request(&message)?
+        {
+            continue;
+        }
         if message.get("id").and_then(Value::as_u64) != Some(expected_id) {
             pending.push(message, line.len())?;
             continue;
@@ -204,49 +358,6 @@ pub(super) fn wait_for_response_collect(
             return Err(format!("{action}失败：{error}"));
         }
         return Ok(message);
-    }
-}
-
-/// Grok 的 session/new 不等待 MCP 握手；目标绑定时必须额外等待完成通知并检查工具数。
-pub(super) fn wait_for_mcp_ready(
-    lines: &mpsc::Receiver<Result<String, String>>,
-    pending: &mut BootstrapMessages,
-    session_id: &str,
-    cancellation: &AtomicBool,
-) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let message = if let Some(message) = pending.pop_front() {
-            message
-        } else {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err("初始化 Nocterm MCP 超时".to_string());
-            }
-            let line = receive_startup_line(
-                lines,
-                deadline,
-                cancellation,
-                "初始化 Nocterm MCP",
-                "初始化 Nocterm MCP 失败：Grok ACP 进程提前退出",
-            )?;
-            serde_json::from_str::<Value>(&line)
-                .map_err(|_| "初始化 Nocterm MCP 失败：Grok ACP 返回了无效 JSON".to_string())?
-        };
-        if message.get("method").and_then(Value::as_str) != Some("_x.ai/mcp_initialized")
-            || message.pointer("/params/sessionId").and_then(Value::as_str) != Some(session_id)
-        {
-            continue;
-        }
-        let tool_count = message
-            .pointer("/params/mcpToolCount")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "初始化 Nocterm MCP 失败：Grok 未返回工具数量".to_string())?;
-        return if tool_count > 0 {
-            Ok(())
-        } else {
-            Err("初始化 Nocterm MCP 失败：未发现可用终端工具".to_string())
-        };
     }
 }
 
@@ -289,9 +400,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        BootstrapMessages, MAX_BOOTSTRAP_PENDING_BYTES, cancel_notification, initialize_request,
-        is_renderable_update, prompt_completion, prompt_request, session_new_request,
-        wait_for_mcp_ready, wait_for_response, write_message,
+        BootstrapMessages, GROK_MCP_SDK_CALL_METHOD, MAX_BOOTSTRAP_PENDING_BYTES,
+        NOCTERM_MCP_SERVER_ID, cancel_notification, initialize_request, is_renderable_update,
+        prompt_completion, prompt_request, require_supported_sdk_mcp, sdk_call_response,
+        session_new_request, wait_for_mcp_ready_with_requests, wait_for_response,
+        wait_for_response_collect_with_requests, write_message,
     };
     use crate::commands::ai_provider::ProviderSessionIdentity;
 
@@ -315,18 +428,161 @@ mod tests {
     }
 
     #[test]
-    fn session_injects_only_nocterm_without_serializing_the_token() {
+    fn session_registers_only_the_in_process_nocterm_mcp() {
+        let request = session_new_request("/private/runtime", &identity());
+        let encoded = request.to_string();
+        assert!(
+            request["params"]["mcpServers"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            request["params"]["_meta"]["x.ai/mcp/servers"][0],
+            json!({"name":"nocterm","serverId":NOCTERM_MCP_SERVER_ID})
+        );
+        assert_eq!(request["params"]["_meta"]["yoloMode"], true);
+        let rules = request["params"]["_meta"]["rules"].as_str().unwrap();
+        assert!(rules.contains("Make exactly one search_tool call"));
+        assert!(rules.contains("get_system_info"));
+        assert!(rules.contains("ssh_exec"));
+        assert!(rules.contains("Do not repeat discovery"));
+        assert!(!encoded.contains("mcp-stdio"));
+        assert!(!encoded.contains("127.0.0.1"));
+        assert!(!encoded.contains("NOCTERM_MCP_TOKEN"));
+    }
+
+    #[test]
+    fn local_session_rules_expose_only_the_local_mcp_catalog() {
         let request = session_new_request(
             "/private/runtime",
-            &identity(),
-            Some(("/Applications/Nocterm", "127.0.0.1:4567")),
+            &ProviderSessionIdentity {
+                connection_id: None,
+                target_session_id: Some("local-one".into()),
+                working_directory: None,
+            },
         );
-        let encoded = request.to_string();
-        assert_eq!(request["params"]["mcpServers"].as_array().unwrap().len(), 1);
-        assert_eq!(request["params"]["mcpServers"][0]["name"], "nocterm");
-        assert_eq!(request["params"]["_meta"]["yoloMode"], true);
-        assert!(encoded.contains("127.0.0.1:4567"));
-        assert!(!encoded.contains("NOCTERM_MCP_TOKEN"));
+        let rules = request["params"]["_meta"]["rules"].as_str().unwrap();
+
+        assert!(rules.contains("session_context and local_terminal_exec"));
+        assert!(rules.contains("Make exactly one search_tool call"));
+        assert!(!rules.contains("get_system_info"));
+        assert!(!rules.contains("ssh_exec"));
+    }
+
+    #[test]
+    fn sdk_mcp_support_requires_the_minimum_version_and_capability() {
+        assert!(
+            require_supported_sdk_mcp(&json!({
+                "result":{"_meta":{"x.ai/mcp/sdk":true,"agentVersion":"1.0.34"}}
+            }))
+            .is_ok()
+        );
+        assert!(
+            require_supported_sdk_mcp(&json!({
+                "result":{"_meta":{"x.ai/mcp/sdk":true,"agentVersion":"1.1.0-beta.1"}}
+            }))
+            .is_ok()
+        );
+
+        let old_version = require_supported_sdk_mcp(&json!({
+            "result":{"_meta":{"x.ai/mcp/sdk":true,"agentVersion":"1.0.33"}}
+        }))
+        .expect_err("old Grok versions must fail closed");
+        assert!(old_version.contains("1.0.33"));
+        assert!(old_version.contains("1.0.34 或更高版本"));
+
+        let missing_capability = require_supported_sdk_mcp(&json!({
+            "result":{"_meta":{"x.ai/mcp/sdk":false,"agentVersion":"1.0.34"}}
+        }))
+        .expect_err("MCP-over-ACP is required");
+        assert!(missing_capability.contains("MCP-over-ACP"));
+        assert!(require_supported_sdk_mcp(&json!({"result":{"_meta":{}}})).is_err());
+    }
+
+    #[test]
+    fn sdk_call_wraps_the_shared_mcp_response_and_preserves_both_ids() {
+        let request = json!({
+            "jsonrpc":"2.0",
+            "id":41,
+            "method":GROK_MCP_SDK_CALL_METHOD,
+            "params":{
+                "serverId":NOCTERM_MCP_SERVER_ID,
+                "message":{"jsonrpc":"2.0","id":7,"method":"tools/list"}
+            }
+        });
+        let response = sdk_call_response(&request, |message| {
+            assert_eq!(message["id"], 7);
+            Some(json!({"jsonrpc":"2.0","id":7,"result":{"tools":[]}}))
+        });
+
+        assert_eq!(response["id"], 41);
+        assert_eq!(response["result"]["id"], 7);
+        assert_eq!(response["result"]["result"]["tools"], json!([]));
+    }
+
+    #[test]
+    fn sdk_call_rejects_unknown_servers_and_mcp_notifications_without_dispatching() {
+        let unknown_server = json!({
+            "id":1,
+            "method":GROK_MCP_SDK_CALL_METHOD,
+            "params":{"serverId":"other","message":{"id":2,"method":"tools/list"}}
+        });
+        let unknown_response = sdk_call_response(&unknown_server, |_| {
+            panic!("unknown server must not reach the Gateway")
+        });
+        assert_eq!(unknown_response["error"]["code"], -32602);
+
+        let notification = json!({
+            "id":1,
+            "method":GROK_MCP_SDK_CALL_METHOD,
+            "params":{
+                "serverId":NOCTERM_MCP_SERVER_ID,
+                "message":{"method":"notifications/initialized"}
+            }
+        });
+        let notification_response = sdk_call_response(&notification, |_| {
+            panic!("notifications must not reach the half-duplex Gateway")
+        });
+        assert_eq!(notification_response["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn bootstrap_wait_services_reverse_requests_before_the_expected_response() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(Ok(json!({
+                "id":40,
+                "method":GROK_MCP_SDK_CALL_METHOD,
+                "params":{
+                    "serverId":NOCTERM_MCP_SERVER_ID,
+                    "message":{"id":6,"method":"tools/list"}
+                }
+            })
+            .to_string()))
+            .unwrap();
+        sender
+            .send(Ok(
+                json!({"id":2,"result":{"sessionId":"grok-one"}}).to_string()
+            ))
+            .unwrap();
+        let mut handled = 0;
+
+        let response = wait_for_response_collect_with_requests(
+            &receiver,
+            2,
+            "session/new",
+            &mut BootstrapMessages::default(),
+            &AtomicBool::new(false),
+            |_| {
+                handled += 1;
+                Ok(true)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(handled, 1);
+        assert_eq!(response["result"]["sessionId"], "grok-one");
     }
 
     #[test]
@@ -388,6 +644,20 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_pending_messages_have_a_cumulative_size_limit() {
+        let mut pending = BootstrapMessages::default();
+        pending
+            .push(json!({"method": "small"}), MAX_BOOTSTRAP_PENDING_BYTES)
+            .expect("first message fits exactly");
+        assert!(
+            pending
+                .push(json!({"method": "overflow"}), 1)
+                .expect_err("pending events must be bounded")
+                .contains("过多待处理事件")
+        );
+    }
+
+    #[test]
     fn mcp_readiness_requires_a_positive_tool_count_for_the_expected_session() {
         let (sender, receiver) = mpsc::channel();
         sender
@@ -405,11 +675,12 @@ mod tests {
             .to_string()))
             .unwrap();
         assert!(
-            wait_for_mcp_ready(
+            wait_for_mcp_ready_with_requests(
                 &receiver,
                 &mut BootstrapMessages::default(),
                 "grok-one",
                 &AtomicBool::new(false),
+                |_| Ok(false),
             )
             .is_err()
         );
@@ -423,22 +694,14 @@ mod tests {
             .push(ready.clone(), ready.to_string().len())
             .expect("queue readiness event");
         assert!(
-            wait_for_mcp_ready(&receiver, &mut pending, "grok-one", &AtomicBool::new(false),)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn bootstrap_pending_messages_have_a_cumulative_size_limit() {
-        let mut pending = BootstrapMessages::default();
-        pending
-            .push(json!({"method": "small"}), MAX_BOOTSTRAP_PENDING_BYTES)
-            .expect("first message fits exactly");
-        assert!(
-            pending
-                .push(json!({"method": "overflow"}), 1)
-                .expect_err("pending events must be bounded")
-                .contains("过多待处理事件")
+            wait_for_mcp_ready_with_requests(
+                &receiver,
+                &mut pending,
+                "grok-one",
+                &AtomicBool::new(false),
+                |_| Ok(false),
+            )
+            .is_ok()
         );
     }
 }

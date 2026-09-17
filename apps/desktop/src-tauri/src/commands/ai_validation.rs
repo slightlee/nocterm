@@ -111,6 +111,9 @@ fn validate_target_selectors(
     if connection_id.is_some() && local_session_id.is_some() {
         return Err("AI 会话不能同时绑定本地终端和 SSH 连接".to_string());
     }
+    if connection_id.is_none() && local_session_id.is_none() {
+        return Err("请先连接本地终端或远程服务器，再使用 AI 助手".to_string());
+    }
     Ok(local_session_id)
 }
 
@@ -141,7 +144,7 @@ mod tests {
 
     #[test]
     fn terminal_target_selectors_are_unambiguous_and_positive() {
-        assert_eq!(validate_target_selectors(None, None).unwrap(), None);
+        assert!(validate_target_selectors(None, None).is_err());
         assert_eq!(
             validate_target_selectors(None, Some(" local:one ")).unwrap(),
             Some("local:one".to_string())
@@ -180,7 +183,7 @@ mod tests {
             continuation_prompt: "inspect".into(),
             working_directory: None,
             connection_id: None,
-            target_session_id: None,
+            target_session_id: Some("local:one".into()),
             command_policy: None,
         };
 

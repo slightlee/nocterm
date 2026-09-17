@@ -8,6 +8,11 @@ export interface AiTerminalTarget {
   targetSessionId?: string;
 }
 
+/** AI 面板只对已连接的 Nocterm 终端启动 Provider，禁止退化到 Provider 宿主环境。 */
+export function isAiTerminalTargetReady(target: AiTerminalTarget): boolean {
+  return target.connectionId !== undefined || target.targetSessionId !== undefined;
+}
+
 /** 仅绑定后端已确认 connected 的目标，标签存在本身不代表 SSH 或 PTY 已就绪。 */
 export function resolveAiTerminalTarget(
   session: AiBindableSession | null,

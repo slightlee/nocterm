@@ -2,12 +2,14 @@
 
 use serde_json::{Value, json};
 
+use crate::commands::ai_tool_contract::execution_context_schema;
+
 /// 每个工具都声明封闭的输入 Schema，避免 Provider 猜测额外参数或传入完整命令。
 pub(crate) fn server_tool_definitions() -> Vec<Value> {
     vec![
         tool(
             "get_system_info",
-            "读取当前服务器的主机名、内核、架构和运行时间",
+            "读取当前服务器的操作系统主机名、内核、架构和运行时间；不返回当前工作目录",
             empty_schema(),
         ),
         tool(
@@ -108,6 +110,7 @@ pub(crate) fn server_tool_definitions() -> Vec<Value> {
 }
 
 fn tool(name: &str, description: &str, input_schema: Value) -> Value {
+    let execution_schema = execution_context_schema();
     json!({
         "name":name,
         "description":description,
@@ -116,9 +119,11 @@ fn tool(name: &str, description: &str, input_schema: Value) -> Value {
             "type":"object",
             "properties":{
                 "operation":{"type":"string"},
-                "output":{"type":"string"}
+                "output":{"type":"string"},
+                "succeeded":{"type":"boolean"},
+                "execution":execution_schema
             },
-            "required":["operation","output"],
+            "required":["operation","output","succeeded","execution"],
             "additionalProperties":false
         },
         "annotations":{
@@ -153,5 +158,13 @@ mod tests {
                 .all(|tool| tool["annotations"]["readOnlyHint"] == true)
         );
         assert!(tools.iter().all(|tool| tool.get("outputSchema").is_some()));
+        assert!(tools.iter().all(|tool| {
+            tool["outputSchema"]["properties"]["execution"]["properties"]
+                ["visibleTerminalStateInherited"]["type"]
+                == "boolean"
+        }));
+        assert!(tools[0]["description"].as_str().is_some_and(|value| {
+            value.contains("操作系统主机名") && value.contains("不返回当前工作目录")
+        }));
     }
 }

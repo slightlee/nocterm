@@ -1,9 +1,12 @@
-//! Provider 进程使用的最小 MCP stdio Bridge。
-//! stdio 子进程只负责协议适配，真正的终端操作仍在 Tauri 进程内完成。
+//! Provider 进程使用的 Nocterm MCP Bridge 与公共请求分发器。
+//! stdio/TCP 和 Grok MCP-over-ACP 只负责传输；鉴权、审批、审计与终端执行统一在
+//! Tauri 进程内由 [`McpRequestDispatcher`] 进入同一个 Tool Gateway。
 
 mod gateway;
 mod stdio;
 mod transport;
+
+pub(crate) use gateway::McpRequestDispatcher;
 
 pub use gateway::start_gateway;
 pub use stdio::{mcp_config, run_stdio};

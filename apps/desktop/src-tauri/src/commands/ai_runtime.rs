@@ -7,8 +7,8 @@ use tauri::AppHandle;
 
 use crate::{
     commands::{
-        ai_provider::ProviderSessionIdentity, codex_app_server::CodexAppServerManager,
-        grok_acp_server::GrokAcpServerManager,
+        ai_bridge::McpRequestDispatcher, ai_provider::ProviderSessionIdentity,
+        codex_app_server::CodexAppServerManager, grok_acp_server::GrokAcpServerManager,
     },
     state::{AiCommandPolicy, AiGatewayState},
 };
@@ -21,9 +21,13 @@ pub struct PersistentProviderLaunch {
     pub initial_prompt: String,
     pub continuation_prompt: String,
     pub bridge: Option<(String, String)>,
+    /// 与传输无关的 Gateway 授权；ACP Provider 不需要回环端点。
+    pub gateway_token: Option<String>,
     pub bridge_executable: String,
     pub provider_executable: PathBuf,
     pub command_policy: AiCommandPolicy,
+    /// Grok 的官方 MCP-over-ACP 直接复用公共 Gateway；其他 Provider 可忽略此宿主能力。
+    pub mcp_dispatcher: Arc<McpRequestDispatcher>,
 }
 
 /// Runtime 适配持续 Provider 的宿主生命周期；协议消息仍属于具体 Provider。

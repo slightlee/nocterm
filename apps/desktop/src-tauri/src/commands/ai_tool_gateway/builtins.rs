@@ -12,12 +12,13 @@ use crate::{
         },
         ai_terminal::execute_ssh_inspection_sync,
         ai_tool_audit::{append as append_audit, elapsed_ms, execute_after_audit},
+        ai_tool_contract::{execution_context, inspection_result},
         ai_tools::{ServerInspection, build_server_inspection},
     },
     state::{AiGatewayBinding, AiTarget},
 };
 
-use super::{GatewayServices, ToolExecutionContext, execution_context, tool_error};
+use super::{GatewayServices, ToolExecutionContext, tool_error};
 
 impl GatewayServices {
     /// 结构化工具只对 SSH 目标开放，命令由后端计划器生成后复用当前认证连接。
@@ -65,8 +66,8 @@ impl GatewayServices {
                 "当前会话已设置为仅分析，未访问终端",
             ),
             AiExecutionDecision::Confirm => {
-                self.execute_with_approval_callback(context, &plan.command, |_| {
-                    self.execute_server_inspection(
+                match self.execute_with_approval_callback(context, &plan.command, |_| {
+                    self.execute_server_inspection_result(
                         binding,
                         &access.cancellation,
                         audit_tool,
@@ -74,7 +75,10 @@ impl GatewayServices {
                         AiAuditApproval::Approved,
                         deadline,
                     )
-                })
+                }) {
+                    Ok(result) => inspection_result(&binding.target, plan.operation, result.output),
+                    Err(error) => tool_error(&error),
+                }
             }
             AiExecutionDecision::Execute => self.execute_server_inspection(
                 binding,
@@ -96,19 +100,35 @@ impl GatewayServices {
         approval: AiAuditApproval,
         deadline: Instant,
     ) -> Value {
+        match self.execute_server_inspection_result(
+            binding,
+            cancellation,
+            audit_tool,
+            plan,
+            approval,
+            deadline,
+        ) {
+            Ok(result) => inspection_result(&binding.target, plan.operation, result.output),
+            Err(error) => tool_error(&error),
+        }
+    }
+
+    fn execute_server_inspection_result(
+        &self,
+        binding: &AiGatewayBinding,
+        cancellation: &AtomicBool,
+        audit_tool: AiAuditTool,
+        plan: &ServerInspection,
+        approval: AiAuditApproval,
+        deadline: Instant,
+    ) -> Result<crate::commands::ai_terminal::TerminalCommandResult, String> {
         let AiTarget::Ssh { connection_id } = &binding.target else {
-            return self.audited_error(
-                binding,
-                audit_tool,
-                approval,
-                "AI_TOOL_TARGET_INVALID",
-                "服务器检查工具只能用于 SSH 目标",
-            );
+            return Err("服务器检查工具只能用于 SSH 目标".to_string());
         };
         let execution_deadline = (Instant::now() + AI_EXECUTION_TIMEOUT).min(deadline);
         // 前置事件必须成功落库；否则远程 exec channel 不会被打开。
         let started_at = Instant::now();
-        let result = match execute_after_audit(&self.audit, binding, audit_tool, approval, || {
+        let result = execute_after_audit(&self.audit, binding, audit_tool, approval, || {
             execute_ssh_inspection_sync(
                 &self.connection,
                 &self.terminal,
@@ -117,10 +137,7 @@ impl GatewayServices {
                 cancellation,
                 execution_deadline,
             )
-        }) {
-            Ok(result) => result,
-            Err(error) => return tool_error(&error),
-        };
+        })?;
         let (outcome, error_code) = if result.is_ok() {
             (AiAuditOutcome::Succeeded, None)
         } else {
@@ -138,17 +155,16 @@ impl GatewayServices {
         .is_err()
         {
             // pending 前置事件仍能明确标识结果未知，且不会泄露已取得的远端输出。
-            return tool_error("服务器检查已执行，但完成审计写入失败，请稍后核查且不要自动重试");
+            return Err(
+                "服务器检查已执行，但完成审计写入失败，请稍后核查且不要自动重试".to_string(),
+            );
         }
         match result {
-            Ok(output) => {
-                let structured = json!({"operation":plan.operation,"output":output});
-                json!({
-                    "content":[{"type":"text","text":structured["output"]}],
-                    "structuredContent":structured
-                })
-            }
-            Err(error) => tool_error(&error),
+            Ok(output) => Ok(crate::commands::ai_terminal::TerminalCommandResult {
+                output,
+                exit_code: 0,
+            }),
+            Err(error) => Err(error),
         }
     }
 

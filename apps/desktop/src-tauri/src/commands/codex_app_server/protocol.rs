@@ -10,31 +10,9 @@ use std::{
 use serde_json::{Map, Value, json};
 
 use super::CodexSessionIdentity;
-use crate::commands::ai_persistent::receive_startup_line;
-
-const CODEX_LOCAL_TERMINAL_INSTRUCTIONS: &str = concat!(
-    "This thread is bound to a visible Nocterm local terminal. For every terminal-related ",
-    "request, use only the nocterm MCP server: use session_context when target identity matters ",
-    "and local_terminal_exec for commands. Never use Codex command execution, browser or ",
-    "computer-use tools, node/cua REPL tools, or another MCP server to inspect or operate the ",
-    "machine. Do not claim the terminal capability is unavailable unless the relevant nocterm ",
-    "tool was actually called and returned an error. Keep internal server and tool names out of ",
-    "user-facing responses; describe actions in natural language. State only facts returned by ",
-    "tools and omit unrelated diagnostics."
-);
-const CODEX_SSH_TERMINAL_INSTRUCTIONS: &str = concat!(
-    "This thread is bound to a Nocterm SSH connection. For every server or terminal-related ",
-    "request, use only the nocterm MCP server: prefer its structured inspection tools and use ",
-    "ssh_exec only when they cannot complete the task. Never use Codex command execution, ",
-    "browser or computer-use tools, node/cua REPL tools, or another MCP server to inspect or ",
-    "operate the machine. Do not claim the connection capability is unavailable unless the ",
-    "relevant nocterm tool was actually called and returned an error. Keep internal server and ",
-    "tool names out of user-facing responses; describe actions in natural language. The SSH ",
-    "command channel reuses the current authenticated connection to the same server; never ",
-    "describe it as a new connection, separate server or independent environment. It does not ",
-    "inherit temporary interactive-shell state. State only facts returned by tools and omit ",
-    "unrelated diagnostics."
-);
+use crate::commands::{
+    ai_persistent::receive_startup_line, ai_provider::terminal_session_instructions,
+};
 const CODEX_DISABLED_FEATURES: &[&str] = &[
     "shell_tool",
     "unified_exec",
@@ -90,17 +68,6 @@ const CODEX_EXECUTION_GATE_FEATURES: &[&str] = &[
 ];
 const CODEX_REQUIRED_FEATURE_STATES: &[(&str, bool)] =
     &[("shell_tool", false), ("skip_host_skill_discovery", true)];
-
-/// 终端路由属于宿主安全约束，必须进入 developer instructions，而不是普通消息前缀。
-fn terminal_developer_instructions(identity: &CodexSessionIdentity) -> Option<&'static str> {
-    if identity.connection_id.is_some() {
-        Some(CODEX_SSH_TERMINAL_INSTRUCTIONS)
-    } else if identity.target_session_id.is_some() {
-        Some(CODEX_LOCAL_TERMINAL_INSTRUCTIONS)
-    } else {
-        None
-    }
-}
 
 /// 读取最终生效配置是兼容性门禁，也用于枚举并关闭用户已有的 MCP Server。
 pub(super) fn codex_config_read_request(cwd: Option<&str>) -> Value {
@@ -238,7 +205,7 @@ pub(super) fn codex_thread_start_request(
     bridge_enabled: bool,
 ) -> Value {
     let developer_instructions = bridge_enabled
-        .then(|| terminal_developer_instructions(identity))
+        .then(|| terminal_session_instructions(identity))
         .flatten();
     json!({
         "id": 3,
@@ -308,8 +275,8 @@ mod tests {
 
     use super::{
         codex_config_read_request, codex_feature_list_request, codex_provider_config,
-        codex_thread_start_request, configured_mcp_server_names, terminal_developer_instructions,
-        validate_disabled_features, validate_thread_security, wait_for_response, write_message,
+        codex_thread_start_request, configured_mcp_server_names, validate_disabled_features,
+        validate_thread_security, wait_for_response, write_message,
     };
     use crate::commands::codex_app_server::CodexSessionIdentity;
 
@@ -384,9 +351,6 @@ mod tests {
             target_session_id: Some("local:one".into()),
             working_directory: None,
         };
-        let instructions = terminal_developer_instructions(&local).unwrap();
-        assert!(instructions.contains("local_terminal_exec"));
-        assert!(instructions.contains("Do not claim"));
         let request = codex_thread_start_request(&local, config, true);
         assert_eq!(request["method"], "thread/start");
         assert_eq!(request["id"], 3);
@@ -394,7 +358,7 @@ mod tests {
         assert!(
             request["params"]["developerInstructions"]
                 .as_str()
-                .is_some_and(|value| value.contains("local_terminal_exec"))
+                .is_some_and(|value| value.contains("directly and concisely"))
         );
         assert_eq!(
             request["params"]["config"]["mcp_servers"]["nocterm"]["required"],
@@ -406,7 +370,6 @@ mod tests {
             target_session_id: None,
             working_directory: None,
         };
-        assert!(terminal_developer_instructions(&untargeted).is_none());
         let untargeted_config = codex_provider_config("/Applications/Nocterm", None, &[]);
         assert_eq!(untargeted_config["features"]["shell_tool"], false);
         assert!(untargeted_config.get("mcp_servers").is_none());

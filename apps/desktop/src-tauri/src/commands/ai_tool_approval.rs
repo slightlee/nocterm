@@ -6,15 +6,14 @@ use std::{
 };
 
 use nocterm_domain::ai_audit::{AiAuditApproval, AiAuditOutcome, AiAuditTool};
-use serde_json::{Value, json};
 use tauri::Emitter;
 
 use crate::{
     commands::{
         ai_policy::{AI_APPROVAL_TIMEOUT, AI_EXECUTION_TIMEOUT},
-        ai_terminal::{execute_local_sync, execute_ssh_sync},
+        ai_terminal::{TerminalCommandResult, execute_local_sync, execute_ssh_sync},
         ai_tool_audit::{append as append_audit, elapsed_ms, execute_after_audit},
-        ai_tool_gateway::{GatewayServices, ToolExecutionContext, execution_context},
+        ai_tool_gateway::{GatewayServices, ToolExecutionContext},
     },
     dto::ai::{AiToolApprovalClosedEvent, AiToolApprovalEvent},
     state::{AiApprovalDecision, AiGatewayAccess, AiGatewayBinding, AiTarget},
@@ -27,7 +26,7 @@ impl GatewayServices {
         &self,
         context: &ToolExecutionContext<'_>,
         command: &str,
-    ) -> Value {
+    ) -> Result<TerminalCommandResult, String> {
         self.execute_with_approval_callback(context, command, |command| {
             self.execute_command(
                 context.access,
@@ -45,22 +44,22 @@ impl GatewayServices {
         context: &ToolExecutionContext<'_>,
         command: &str,
         on_approved: F,
-    ) -> Value
+    ) -> Result<TerminalCommandResult, String>
     where
-        F: FnOnce(&str) -> Value,
+        F: FnOnce(&str) -> Result<TerminalCommandResult, String>,
     {
         let binding = &context.access.binding;
         let audit_tool = context.audit_tool;
         let command = command.trim();
         if command.is_empty() || command.len() > 4096 || command.contains('\0') {
-            return self.approval_error(
+            return Err(self.approval_error(
                 binding,
                 audit_tool,
                 AiAuditApproval::NotRequested,
                 AiAuditOutcome::Failed,
                 "AI_TOOL_ARGUMENTS_INVALID",
                 "终端命令不能为空、不能包含空字符且不能超过 4096 个字符",
-            );
+            ));
         }
         let approval_id = format!(
             "ai-approval-{}",
@@ -76,14 +75,14 @@ impl GatewayServices {
                     ),
                 ),
                 Err(error) => {
-                    return self.approval_error(
+                    return Err(self.approval_error(
                         binding,
                         audit_tool,
                         AiAuditApproval::NotRequested,
                         AiAuditOutcome::Failed,
                         "AI_TOOL_TARGET_UNAVAILABLE",
                         &error.message,
-                    );
+                    ));
                 }
             },
             AiTarget::Local {
@@ -95,20 +94,20 @@ impl GatewayServices {
                     .terminal_for(session_id)
                     .is_none_or(|current| current != *terminal_id)
                 {
-                    return self.approval_error(
+                    return Err(self.approval_error(
                         binding,
                         audit_tool,
                         AiAuditApproval::NotRequested,
                         AiAuditOutcome::Failed,
                         "AI_TOOL_TARGET_UNAVAILABLE",
                         "目标本地终端不存在或已重新连接",
-                    );
+                    ));
                 }
                 ("local".to_string(), session_id.clone())
             }
         };
         // 审批事件先持久化，再向 UI 展示命令；审计不可用时不会产生可批准的请求。
-        if let Err(error) = append_audit(
+        append_audit(
             &self.audit,
             binding,
             audit_tool,
@@ -116,23 +115,21 @@ impl GatewayServices {
             AiAuditOutcome::Pending,
             None,
             None,
-        ) {
-            return tool_error(&error);
-        }
+        )?;
         let receiver = match context
             .gateway
             .request_approval(context.token.to_string(), approval_id.clone())
         {
             Ok(receiver) => receiver,
             Err(error) => {
-                return self.approval_error(
+                return Err(self.approval_error(
                     binding,
                     audit_tool,
                     AiAuditApproval::Requested,
                     AiAuditOutcome::Failed,
                     "AI_TOOL_TASK_REVOKED",
                     &error,
-                );
+                ));
             }
         };
         let approval_deadline = (Instant::now() + AI_APPROVAL_TIMEOUT).min(context.deadline);
@@ -161,14 +158,14 @@ impl GatewayServices {
             let _ = context
                 .gateway
                 .resolve_approval(&approval_id, &binding.session_id, false);
-            return self.approval_error(
+            return Err(self.approval_error(
                 binding,
                 audit_tool,
                 AiAuditApproval::Requested,
                 AiAuditOutcome::Failed,
                 "AI_TOOL_APPROVAL_UI_UNAVAILABLE",
                 "无法向 Nocterm 界面发送命令确认请求",
-            );
+            ));
         }
         match receiver.recv_timeout(approval_wait) {
             Ok(AiApprovalDecision::Approved) => {
@@ -177,50 +174,50 @@ impl GatewayServices {
             }
             Ok(AiApprovalDecision::Rejected) => {
                 self.emit_approval_closed(binding, &approval_id, "rejected");
-                self.approval_error(
+                Err(self.approval_error(
                     binding,
                     audit_tool,
                     AiAuditApproval::Rejected,
                     AiAuditOutcome::Denied,
                     "AI_TOOL_APPROVAL_REJECTED",
                     "用户拒绝执行该终端命令",
-                )
+                ))
             }
             Ok(AiApprovalDecision::Revoked) => {
                 self.emit_approval_closed(binding, &approval_id, "revoked");
-                self.approval_error(
+                Err(self.approval_error(
                     binding,
                     audit_tool,
                     AiAuditApproval::Rejected,
                     AiAuditOutcome::Denied,
                     "AI_TOOL_TASK_REVOKED",
                     "AI 任务已停止，终端命令未执行",
-                )
+                ))
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let _ = context
                     .gateway
                     .resolve_approval(&approval_id, &binding.session_id, false);
                 self.emit_approval_closed(binding, &approval_id, "timed_out");
-                self.approval_error(
+                Err(self.approval_error(
                     binding,
                     audit_tool,
                     AiAuditApproval::TimedOut,
                     AiAuditOutcome::Denied,
                     "AI_TOOL_APPROVAL_TIMEOUT",
                     "终端命令确认已超时",
-                )
+                ))
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 self.emit_approval_closed(binding, &approval_id, "revoked");
-                self.approval_error(
+                Err(self.approval_error(
                     binding,
                     audit_tool,
                     AiAuditApproval::Rejected,
                     AiAuditOutcome::Denied,
                     "AI_TOOL_TASK_REVOKED",
                     "AI 任务已停止，终端命令未执行",
-                )
+                ))
             }
         }
     }
@@ -249,18 +246,18 @@ impl GatewayServices {
         audit_tool: AiAuditTool,
         command: &str,
         call_deadline: Instant,
-    ) -> Value {
+    ) -> Result<TerminalCommandResult, String> {
         let command = match crate::commands::ai_policy::validate_approved_command(command) {
             Ok(command) => command,
             Err(error) => {
-                return self.approval_error(
+                return Err(self.approval_error(
                     &access.binding,
                     audit_tool,
                     AiAuditApproval::NotRequested,
                     AiAuditOutcome::Failed,
                     "AI_TOOL_ARGUMENTS_INVALID",
                     &error,
-                );
+                ));
             }
         };
         self.execute_command(
@@ -279,13 +276,13 @@ impl GatewayServices {
         command: &str,
         approval: AiAuditApproval,
         call_deadline: Instant,
-    ) -> Value {
+    ) -> Result<TerminalCommandResult, String> {
         let binding = &access.binding;
         let execution_deadline = (Instant::now() + AI_EXECUTION_TIMEOUT).min(call_deadline);
         // 无论是用户批准还是策略自动放行，命令都必须先写入 pending 审计再执行。
         let started_at = Instant::now();
         let result =
-            match execute_after_audit(
+            execute_after_audit(
                 &self.audit,
                 binding,
                 audit_tool,
@@ -312,10 +309,7 @@ impl GatewayServices {
                         execution_deadline,
                     ),
                 },
-            ) {
-                Ok(result) => result,
-                Err(error) => return tool_error(&error),
-            };
+            )?;
         let succeeded = result.as_ref().is_ok_and(|value| value.exit_code == 0);
         let (outcome, error_code) = if succeeded {
             (AiAuditOutcome::Succeeded, None)
@@ -333,24 +327,9 @@ impl GatewayServices {
         )
         .is_err()
         {
-            return tool_error("终端命令可能已执行，但完成审计写入失败，请勿自动重试");
+            return Err("终端命令可能已执行，但完成审计写入失败，请勿自动重试".to_string());
         }
-        match result {
-            Ok(result) => {
-                let structured = json!({
-                    "output":result.output,
-                    "exitCode":result.exit_code,
-                    "succeeded":succeeded,
-                    "execution":execution_context(&binding.target)
-                });
-                json!({
-                    "isError":!succeeded,
-                    "content":[{"type":"text","text":structured.to_string()}],
-                    "structuredContent":structured
-                })
-            }
-            Err(error) => tool_error(&error),
-        }
+        result
     }
 
     /// 审批失败只有在对应脱敏事件成功落库后才返回原始业务错误。
@@ -362,7 +341,7 @@ impl GatewayServices {
         outcome: AiAuditOutcome,
         error_code: &'static str,
         message: &str,
-    ) -> Value {
+    ) -> String {
         match append_audit(
             &self.audit,
             binding,
@@ -372,12 +351,8 @@ impl GatewayServices {
             None,
             Some(error_code),
         ) {
-            Ok(()) => tool_error(message),
-            Err(error) => tool_error(&error),
+            Ok(()) => message.to_string(),
+            Err(error) => error,
         }
     }
-}
-
-fn tool_error(message: &str) -> Value {
-    json!({"isError":true,"content":[{"type":"text","text":message}]})
 }

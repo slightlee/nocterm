@@ -1,5 +1,6 @@
-import { Fragment } from 'react';
+import { Fragment, useId, useState } from 'react';
 
+import { presentAiMessageParts, type AiProcessEntry } from '../model/ai-message-presentation';
 import type { AiMessage, AiMessagePart, AiToolApprovalEvent } from '../model/ai-types';
 import { AiMarkdown } from './AiMarkdown';
 import styles from './AiConversationView.module.css';
@@ -10,7 +11,6 @@ interface AiConversationViewProps {
   running: boolean;
   streamText: string;
   runParts: AiMessagePart[];
-  liveThinking: string;
   pendingApproval: AiToolApprovalEvent | null;
   approvalSubmitting: boolean;
   notice: string | null;
@@ -19,18 +19,88 @@ interface AiConversationViewProps {
   onResolveApproval: (approved: boolean) => void;
 }
 
-/** 已完成与流式消息共用同一渲染器，工具活动不会在任务结束时改变位置或消失。 */
-function AssistantContent({ content, parts }: { content: string; parts?: AiMessagePart[] }) {
-  if (!parts?.length) return <AiMarkdown content={content} />;
-  return parts.map((part, index) =>
-    part.type === 'text' ? (
-      <AiMarkdown content={part.content} key={`text-${index}`} />
-    ) : (
-      <div className={styles.activityLine} key={`activity-${index}-${part.content}`}>
-        <span className={styles.activityKind}>{part.kind === 'tool' ? '执行' : '思考'}</span>
-        <span>{part.content}</span>
-      </div>
-    )
+/** 过程区只展示可审计的动作摘要，不把 Provider 的私有推理当作回答正文。 */
+function ActivityDisclosure({
+  activityCount,
+  entries,
+  running,
+}: {
+  activityCount: number;
+  entries: AiProcessEntry[];
+  running: boolean;
+}) {
+  const [expanded, setExpanded] = useState(running);
+  const detailsId = useId();
+
+  return (
+    <section className={styles.activityDisclosure}>
+      <button
+        aria-controls={detailsId}
+        aria-expanded={expanded}
+        className={styles.activityToggle}
+        onClick={() => setExpanded((current) => !current)}
+        type="button"
+      >
+        <span
+          className={`${styles.activityStatus} ${running ? styles.activityStatusRunning : styles.activityStatusComplete}`}
+        />
+        <span className={styles.activityTitle}>执行过程</span>
+        <span className={styles.activityMeta}>{running ? '进行中' : `${activityCount} 项`}</span>
+        <svg
+          className={`${styles.activityChevron} ${expanded ? styles.activityChevronExpanded : ''}`}
+          viewBox="0 0 20 20"
+          aria-hidden="true"
+        >
+          <path d="m6.75 8.25 3.25 3.5 3.25-3.5" />
+        </svg>
+      </button>
+      {expanded ? (
+        <div className={styles.activityList} id={detailsId}>
+          {entries.map((entry, index) => (
+            <div className={styles.activityLine} key={`${entry.kind}-${index}-${entry.content}`}>
+              <span
+                aria-hidden="true"
+                className={`${styles.activityMarker} ${
+                  entry.kind === 'tool' ? styles.activityMarkerTool : styles.activityMarkerProgress
+                }`}
+              />
+              <span className={styles.activityText}>{entry.content}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** 已完成与流式消息共用同一结构，执行过程和最终结论始终保持两个视觉层级。 */
+function AssistantContent({
+  content,
+  parts,
+  running = false,
+}: {
+  content: string;
+  parts?: AiMessagePart[];
+  running?: boolean;
+}) {
+  const presentation = presentAiMessageParts(content, parts);
+  const processEntries = presentation.processEntries;
+
+  return (
+    <>
+      {processEntries.length ? (
+        <ActivityDisclosure
+          activityCount={presentation.activityCount}
+          entries={processEntries}
+          running={running}
+        />
+      ) : null}
+      {presentation.answer ? (
+        <div className={processEntries.length ? styles.answerContent : undefined}>
+          <AiMarkdown content={presentation.answer} />
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -41,7 +111,6 @@ export function AiConversationView({
   running,
   streamText,
   runParts,
-  liveThinking,
   pendingApproval,
   approvalSubmitting,
   notice,
@@ -97,14 +166,8 @@ export function AiConversationView({
               {providerName}
               {running ? ' · 输出中' : ''}
             </span>
-            <AssistantContent content={streamText} parts={runParts} />
-            {liveThinking ? (
-              <div className={styles.activityLine}>
-                <span className={styles.activityKind}>思考</span>
-                <span>{liveThinking}</span>
-              </div>
-            ) : null}
-            {running && !liveThinking && runParts.length === 0 ? (
+            <AssistantContent content={streamText} parts={runParts} running={running} />
+            {running && runParts.length === 0 ? (
               <div aria-live="polite" className={styles.executionStatus} role="status">
                 <span className={styles.executionDot} />
                 <span>正在思考</span>

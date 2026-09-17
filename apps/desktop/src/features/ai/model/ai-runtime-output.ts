@@ -15,13 +15,17 @@ export interface AiRuntimeOutputSnapshot {
 
 /**
  * 单个事件的归并结果。
- * `changed` 表示持久展示内容发生变化，`thinkingDelta` 只用于瞬时思考提示，
- * `clearThinking` 表示消息级事件已经固化，可移除滚动中的思考文本。
+ * `changed` 表示持久展示内容发生变化；Provider 私有推理不会进入展示快照。
  */
 export interface AiRuntimeOutputReduction extends AiRuntimeOutputSnapshot {
   changed: boolean;
-  clearThinking: boolean;
-  thinkingDelta?: string;
+}
+
+/** Tauri command 可能拒绝字符串或 Error；面板必须保留后端可操作的失败说明。 */
+export function aiRuntimeErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  return fallback;
 }
 
 function appendTextPart(parts: AiMessagePart[], text: string): AiMessagePart[] {
@@ -44,18 +48,9 @@ export function reduceAiRuntimeOutput(
       parts: appendTextPart(current.parts, delta.answer),
       answerStreamed: true,
       changed: true,
-      clearThinking: true,
     };
   }
-  if (delta?.thinking) {
-    return {
-      ...current,
-      changed: false,
-      clearThinking: false,
-      thinkingDelta: delta.thinking,
-    };
-  }
-  if (delta) return { ...current, changed: false, clearThinking: false };
+  if (delta) return { ...current, changed: false };
 
   // 非增量事件可能同时包含工具活动和最终文本，必须按事件内顺序归并。
   const activities = extractAiActivities(data);
@@ -80,6 +75,5 @@ export function reduceAiRuntimeOutput(
     parts,
     answerStreamed: current.answerStreamed,
     changed: text !== current.text || parts.length !== current.parts.length,
-    clearThinking: fullTextEvent,
   };
 }

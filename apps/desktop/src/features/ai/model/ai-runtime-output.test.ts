@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { reduceAiRuntimeOutput, type AiRuntimeOutputSnapshot } from './ai-runtime-output';
+import {
+  aiRuntimeErrorMessage,
+  reduceAiRuntimeOutput,
+  type AiRuntimeOutputSnapshot,
+} from './ai-runtime-output';
 
 const empty = (): AiRuntimeOutputSnapshot => ({ text: '', parts: [], answerStreamed: false });
 
@@ -39,27 +43,38 @@ describe('reduceAiRuntimeOutput', () => {
     expect(completed.text).toBe('检查完成');
     expect(completed.parts).toEqual([{ type: 'text', content: '检查完成' }]);
     expect(completed.changed).toBe(false);
-    expect(completed.clearThinking).toBe(true);
   });
 
-  it('keeps activity and text in their arrival order', () => {
+  it('hides private thinking while keeping answer text', () => {
     const reduced = reduceAiRuntimeOutput(
       '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"先检查状态"},{"type":"text","text":"服务正常"}]}}',
       empty()
     );
 
     expect(reduced.text).toBe('服务正常\n');
-    expect(reduced.parts).toEqual([
-      { type: 'activity', kind: 'thinking', content: '先检查状态' },
-      { type: 'text', content: '服务正常\n' },
-    ]);
+    expect(reduced.parts).toEqual([{ type: 'text', content: '服务正常\n' }]);
   });
 
-  it('returns thinking deltas without changing the answer snapshot', () => {
+  it('drops thinking deltas without changing the answer snapshot', () => {
     const reduced = reduceAiRuntimeOutput('{"type":"thought","data":"读取容器状态"}', empty());
 
-    expect(reduced.thinkingDelta).toBe('读取容器状态');
     expect(reduced.changed).toBe(false);
     expect(reduced.text).toBe('');
+  });
+});
+
+describe('aiRuntimeErrorMessage', () => {
+  it('preserves actionable Tauri string errors', () => {
+    expect(
+      aiRuntimeErrorMessage(
+        '当前 Grok 版本 1.0.33 不受支持，请升级到 Grok 1.0.34 或更高版本后重试',
+        '启动失败'
+      )
+    ).toContain('Grok 1.0.34');
+  });
+
+  it('uses Error messages and falls back for unknown values', () => {
+    expect(aiRuntimeErrorMessage(new Error('连接失败'), '启动失败')).toBe('连接失败');
+    expect(aiRuntimeErrorMessage({ code: 'unknown' }, '启动失败')).toBe('启动失败');
   });
 });

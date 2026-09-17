@@ -186,13 +186,16 @@ impl AiProcessManager {
 
 #[cfg(test)]
 mod tests {
-    use std::{process::Command, time::Duration};
+    use std::{process::Command, process::Stdio, time::Duration};
 
     use super::{AiProcessManager, ManagedChild};
 
     fn short_lived_child() -> std::process::Child {
         Command::new(std::env::current_exe().expect("test executable"))
             .arg("--list")
+            // 测试子进程只用于观察退出状态，不能把测试清单写回父测试的捕获管道。
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .expect("spawn test child")
     }
@@ -216,7 +219,8 @@ mod tests {
     fn managed_child_reaps_once_and_keeps_the_observed_exit_state() {
         let child = ManagedChild::new(short_lived_child());
 
-        let first = child.wait_after_output_closed(Duration::from_secs(5));
+        // 并行门禁下测试二进制的子进程启动可能明显变慢；这里验证状态保持而非超时策略。
+        let first = child.wait_after_output_closed(Duration::from_secs(30));
         let second = child.terminate();
 
         assert_eq!(first, Some(0));

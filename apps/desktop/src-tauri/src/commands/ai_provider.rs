@@ -10,18 +10,28 @@ use std::{
 mod claude_code;
 mod codex;
 mod grok;
+mod terminal_contract;
 
 pub(crate) use grok::{PreparedGrokAcpLaunch, prepare_grok_acp_launch};
+pub(crate) use terminal_contract::{terminal_session_instructions, terminal_task_instructions};
 
 pub struct ProviderBridge<'a> {
     pub executable: &'a str,
     pub endpoint: &'a str,
 }
 
+/// Provider 只选择 MCP 传输；工具目录、授权和执行仍由公共 Gateway 定义。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderToolTransport {
+    Stdio,
+    Acp,
+}
+
 /// 通用启动上下文只描述 Nocterm 能力，不暴露任何厂商专用参数或配置格式。
 pub struct ProviderLaunch<'a> {
     pub prompt: &'a str,
     pub bridge: Option<ProviderBridge<'a>>,
+    pub identity: &'a ProviderSessionIdentity,
 }
 
 /// 启动结果持有任务级临时文件；若进程启动失败，Drop 会立即清理。
@@ -30,7 +40,20 @@ pub struct PreparedHeadlessLaunch {
     pub environment: Vec<(OsString, OsString)>,
     pub current_directory: Option<PathBuf>,
     stdin_payload: Option<String>,
+    readiness_requirement: Option<HeadlessReadinessRequirement>,
     cleanup_paths: Vec<PathBuf>,
+}
+
+/// Headless Provider 必须在首个初始化事件中证明任务级工具已经可用。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadlessReadinessRequirement {
+    pub event_type: &'static str,
+    pub event_subtype: &'static str,
+    pub tool_prefix: &'static str,
+    pub failure_message: &'static str,
+    /// 绑定终端时至少要有一次请求真正进入 Gateway，不能接受模型直接猜测的结果。
+    pub require_gateway_call: bool,
+    pub missing_gateway_call_message: &'static str,
 }
 
 impl PreparedHeadlessLaunch {
@@ -39,6 +62,7 @@ impl PreparedHeadlessLaunch {
         stdin_payload: Option<String>,
         environment: Vec<(OsString, OsString)>,
         current_directory: Option<PathBuf>,
+        readiness_requirement: Option<HeadlessReadinessRequirement>,
         cleanup_paths: Vec<PathBuf>,
     ) -> Self {
         Self {
@@ -46,6 +70,7 @@ impl PreparedHeadlessLaunch {
             environment,
             current_directory,
             stdin_payload,
+            readiness_requirement,
             cleanup_paths,
         }
     }
@@ -59,6 +84,10 @@ impl PreparedHeadlessLaunch {
     pub fn take_cleanup_paths(&mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.cleanup_paths)
     }
+
+    pub fn take_readiness_requirement(&mut self) -> Option<HeadlessReadinessRequirement> {
+        self.readiness_requirement.take()
+    }
 }
 
 impl Drop for PreparedHeadlessLaunch {
@@ -70,7 +99,7 @@ impl Drop for PreparedHeadlessLaunch {
 /// 使用枚举表达互斥的 Provider 生命周期，避免“执行模式”和可选启动参数不一致。
 pub enum ProviderLaunchPlan {
     Persistent,
-    Headless(PreparedHeadlessLaunch),
+    Headless(Box<PreparedHeadlessLaunch>),
 }
 
 /// 持久 Provider 的复用身份由宿主确定，不能从模型消息或 Provider 会话状态推断。
@@ -87,6 +116,9 @@ pub trait ProviderAdapter: Send + Sync {
     fn command(&self) -> &'static str;
     fn executable(&self) -> Option<PathBuf> {
         find_provider_executable(self.command())
+    }
+    fn tool_transport(&self) -> ProviderToolTransport {
+        ProviderToolTransport::Stdio
     }
     fn prepare_launch(&self, launch: ProviderLaunch<'_>) -> Result<ProviderLaunchPlan, String>;
 }
@@ -159,12 +191,28 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        ProviderBridge, ProviderLaunch, ProviderLaunchPlan, find_provider_executable_in,
-        provider_adapter,
+        ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
+        ProviderToolTransport, find_provider_executable_in, provider_adapter,
     };
 
-    fn launch<'a>(prompt: &'a str, bridge: Option<ProviderBridge<'a>>) -> ProviderLaunch<'a> {
-        ProviderLaunch { prompt, bridge }
+    fn identity() -> ProviderSessionIdentity {
+        ProviderSessionIdentity {
+            connection_id: Some(7),
+            target_session_id: None,
+            working_directory: None,
+        }
+    }
+
+    fn launch<'a>(
+        prompt: &'a str,
+        bridge: Option<ProviderBridge<'a>>,
+        identity: &'a ProviderSessionIdentity,
+    ) -> ProviderLaunch<'a> {
+        ProviderLaunch {
+            prompt,
+            bridge,
+            identity,
+        }
     }
 
     #[test]
@@ -180,6 +228,18 @@ mod tests {
         assert_eq!(
             provider_adapter("grok").map(|item| item.command()),
             Some("grok")
+        );
+        assert_eq!(
+            provider_adapter("codex").map(|item| item.tool_transport()),
+            Some(ProviderToolTransport::Stdio)
+        );
+        assert_eq!(
+            provider_adapter("claude-code").map(|item| item.tool_transport()),
+            Some(ProviderToolTransport::Stdio)
+        );
+        assert_eq!(
+            provider_adapter("grok").map(|item| item.tool_transport()),
+            Some(ProviderToolTransport::Acp)
         );
         assert!(provider_adapter("unknown").is_none());
     }
@@ -206,9 +266,10 @@ mod tests {
             executable: "/tmp/nocterm",
             endpoint: "127.0.0.1:4567",
         };
+        let identity = identity();
         let ProviderLaunchPlan::Headless(claude) = provider_adapter("claude-code")
             .unwrap()
-            .prepare_launch(launch("inspect", Some(bridge())))
+            .prepare_launch(launch("inspect", Some(bridge()), &identity))
             .unwrap()
         else {
             panic!("Claude Code should use a headless launch");
@@ -223,19 +284,98 @@ mod tests {
         );
         assert!(claude.args.contains(&"--strict-mcp-config".to_string()));
         assert!(claude.args.windows(2).any(|pair| pair == ["--tools", ""]));
+        assert!(
+            claude
+                .args
+                .windows(2)
+                .any(|pair| { pair == ["--permission-mode", "dontAsk"] })
+        );
+        assert!(
+            claude
+                .args
+                .windows(2)
+                .any(|pair| { pair == ["--allowed-tools", "mcp__nocterm__*"] })
+        );
+        assert!(!claude.args.iter().any(|argument| argument == "manual"));
+        assert_eq!(
+            claude
+                .readiness_requirement
+                .as_ref()
+                .map(|requirement| requirement.tool_prefix),
+            Some("mcp__nocterm__")
+        );
+        assert!(
+            claude
+                .readiness_requirement
+                .as_ref()
+                .is_some_and(|requirement| requirement.require_gateway_call)
+        );
+        let claude_runtime = claude
+            .current_directory
+            .clone()
+            .expect("terminal-bound Claude launch should have an isolated cwd");
+        assert!(claude_runtime.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = std::fs::metadata(&claude_runtime)
+                .expect("Claude runtime metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        assert_ne!(
+            claude_runtime,
+            std::env::current_dir().expect("current test directory")
+        );
+        assert!(
+            claude
+                .args
+                .windows(2)
+                .any(|pair| pair[0] == "--system-prompt"
+                    && pair[1].contains("call the appropriate Nocterm tool before answering")
+                    && pair[1].contains("provider process is not the terminal target"))
+        );
+        assert!(!claude.args.contains(&"--append-system-prompt".to_string()));
+
+        let ProviderLaunchPlan::Headless(claude_without_bridge) = provider_adapter("claude-code")
+            .unwrap()
+            .prepare_launch(launch("inspect", None, &identity))
+            .unwrap()
+        else {
+            panic!("Claude Code should use a headless launch");
+        };
+        assert!(
+            !claude_without_bridge
+                .args
+                .iter()
+                .any(|argument| argument == "mcp__nocterm__*")
+        );
+        assert!(
+            !claude_without_bridge
+                .args
+                .contains(&"--system-prompt".to_string())
+        );
+        assert!(claude_without_bridge.readiness_requirement.is_none());
+        assert!(claude_without_bridge.current_directory.is_none());
+
+        drop(claude);
+        assert!(!claude_runtime.exists());
 
         let grok = provider_adapter("grok")
             .unwrap()
-            .prepare_launch(launch("inspect", Some(bridge())))
+            .prepare_launch(launch("inspect", Some(bridge()), &identity))
             .unwrap();
         assert!(matches!(grok, ProviderLaunchPlan::Persistent));
     }
 
     #[test]
     fn codex_uses_its_persistent_protocol_adapter() {
+        let identity = identity();
         let prepared = provider_adapter("codex")
             .unwrap()
-            .prepare_launch(launch("inspect", None))
+            .prepare_launch(launch("inspect", None, &identity))
             .unwrap();
         assert!(matches!(prepared, ProviderLaunchPlan::Persistent));
     }

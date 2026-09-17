@@ -18,7 +18,7 @@ Nocterm 是一个本地优先的跨平台桌面终端产品，为 macOS 和 Wind
 - macOS Keychain 与 Windows Credential Manager 凭据存储；
 - macOS 和 Windows 一致的业务接口与验收标准。
 
-Agent 不属于第一阶段核心。终端能力稳定后，只通过独立适配器接入成熟 Agent，不把任何厂商协议写入终端领域。
+Agent 不属于第一阶段核心。终端能力稳定后，按 [ADR-004](adr/004-local-agent-provider-integration.md) 通过独立 Provider Adapter 接入用户本机已安装的成熟 Agent；Nocterm 只提供会话级工具和安全边界，不把任何厂商协议写入终端领域。
 
 ## 2. 非目标
 
@@ -297,6 +297,7 @@ Windows 不是最后补上的兼容层，而是从工程基线开始参与编译
 - Repository 负责 SQL，Domain/Application 不拼 SQL；
 - WAL、foreign keys、busy timeout 在数据库初始化处统一设置；
 - 运行时会话和传输进度默认不持久化；
+- AI 工具审计使用 v6 不可变事件表，只保存脱敏身份、固定工具、审批与结果元数据，按 30 天且最多 10,000 条保留；
 - 首个稳定版本的 Schema 只包含当前业务需要的字段。
 
 ### 10.2 凭据
@@ -432,9 +433,13 @@ SFTP Adapter 已由 ADR-002 定案为 `russh-sftp`（与 SSH 终端复用同一�
 
 ### 阶段 4：成熟 Agent
 
-- 定义最小 `AgentAdapter`；
-- 只接入一个成熟 Agent；
-- 命令必须绑定明确终端、经过确认并返回真实结构化结果。
+- 按 ADR-004 定义最小 `ProviderAdapter` 和会话级 Tool Core；
+- 已接入 Claude Code、Codex、Grok 的本机 CLI 启动路径，复用其已有登录状态、模型配置和 Agent loop；终端绑定任务隔离用户 Skills、MCP、Hook 与 Provider 自带 Shell；
+- Codex 与 Claude Code 通过进程级 MCP stdio Bridge 接入，Grok 通过 ACP 原生 Terminal Adapter 直达同一类型化 Tool Gateway；终端权限按“仅分析、每次确认、变更前确认、完全访问”单调递增，并统一约束结构化工具与通用命令；
+- SSH Bridge 只在当前已认证连接上开启独立 exec channel；无活跃终端时明确失败，不读取凭据建立隐藏连接；
+- 远程命令必须绑定明确目标会话、经过 Nocterm 策略确认，并返回 SSH 协议提供的真实退出码与输出；独立 exec 不继承可见 Shell 的临时目录和环境，Agent 需显式建立执行上下文；
+- 本地命令写入当前可见 PTY 并继承其 Shell 上下文；完成探针由平台 Shell Adapter 生成，以随机标记和真实退出状态闭合一次执行，同一 PTY 不允许并发 AI 命令；
+- Codex 通过 `app-server`、Grok 通过 ACP stdio 为当前活动 UI 对话复用内存会话，切换后由界面历史重建；Grok 的 `terminal/*` 任务拥有有界 ID、输出、退出状态、取消与释放路径，但实际执行仍复用公共审批、审计和终端核心。二者每个 turn 都重新激活工具授权，并支持协议级取消和超时强制回收。Claude Code 仍通过受限历史保持单轮语义；真实 Provider/SSH 与跨平台验收仍待完成。
 
 Agent 只能在基础终端能力稳定后开始，不提前创建占位接口或预留实现。
 
@@ -475,9 +480,8 @@ feat: build remote directory browsing
 1. `ADR-001`：模块化单体与 Rust workspace 边界；
 2. `ADR-002`：系统 OpenSSH 与原生 Rust SSH/SFTP 的选择（已定案为 `russh` + `russh-sftp`）；
 3. `ADR-003`：macOS/Windows 凭据 Adapter 实现；
-4. `ADR-004`：Rust IPC DTO 到 TypeScript 的类型同步方式；
-5. `ADR-005`：SQLite Schema 与版本迁移策略；
-6. `ADR-006`：终端输出、进度事件和背压策略。
+4. `ADR-004`：本机 Agent Provider 与会话级能力代理；
+5. `ADR-005`：AI 自动执行采用结构化运维能力。
 
 ## 16. 风险与控制
 

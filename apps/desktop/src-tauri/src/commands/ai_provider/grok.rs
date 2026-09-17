@@ -8,7 +8,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{ProviderAdapter, ProviderLaunch, ProviderLaunchPlan, cleanup_paths};
+use super::{
+    ProviderAdapter, ProviderLaunch, ProviderLaunchPlan, ProviderToolTransport, cleanup_paths,
+    terminal_task_instructions,
+};
 
 mod config;
 
@@ -16,7 +19,7 @@ use config::create_runtime_config;
 
 pub(super) static ADAPTER: &dyn ProviderAdapter = &GrokAdapter;
 
-const AGENT_PROFILE: &str = r#"---
+const AGENT_PROFILE_HEADER: &str = r#"---
 name: nocterm-terminal
 description: Nocterm terminal assistant with task-scoped MCP access only.
 prompt_mode: full
@@ -29,8 +32,14 @@ tools: [search_tool, use_tool]
 Use only the connected Nocterm MCP server for terminal-related operations. Do not claim that
 terminal access is unavailable unless the relevant Nocterm tool returned an error. Keep MCP and
 internal tool names out of user-facing responses and describe actions in natural language. State
-the target and execution environment only from tool results, and answer only the facts requested.
+the target and execution environment only from tool results. Grok requires MCP schema discovery:
+make one precise search_tool call for all capabilities needed by the turn, then use_tool; never
+repeat discovery, browse unrelated capabilities, or continue after the requested facts are known.
 "#;
+
+fn agent_profile() -> String {
+    format!("{AGENT_PROFILE_HEADER}\n{}\n", terminal_task_instructions())
+}
 
 const RUNTIME_ENVIRONMENT_ALLOWLIST: [&str; 18] = [
     "PATH",
@@ -79,6 +88,10 @@ impl ProviderAdapter for GrokAdapter {
 
     fn command(&self) -> &'static str {
         "grok"
+    }
+
+    fn tool_transport(&self) -> ProviderToolTransport {
+        ProviderToolTransport::Acp
     }
 
     fn prepare_launch(&self, _launch: ProviderLaunch<'_>) -> Result<ProviderLaunchPlan, String> {
@@ -149,7 +162,7 @@ fn prepare_isolated_launch(
         create_isolated_environment(model_environment);
     link_authentication(runtime_directory)?;
     let profile = runtime_directory.join("agent.md");
-    write_private_file(&profile, AGENT_PROFILE.as_bytes(), "Grok Agent Profile")?;
+    write_private_file(&profile, agent_profile().as_bytes(), "Grok Agent Profile")?;
     for (key, value) in [
         (
             OsString::from("GROK_HOME"),
@@ -336,16 +349,19 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        AGENT_PROFILE, MODEL_ENVIRONMENT_ALLOWLIST, PreparedGrokAcpLaunch,
-        RUNTIME_ENVIRONMENT_ALLOWLIST,
+        AGENT_PROFILE_HEADER, MODEL_ENVIRONMENT_ALLOWLIST, PreparedGrokAcpLaunch,
+        RUNTIME_ENVIRONMENT_ALLOWLIST, agent_profile,
     };
 
     #[test]
     fn agent_profile_exposes_only_mcp_aggregation_tools() {
-        assert!(AGENT_PROFILE.contains("tools: [search_tool, use_tool]"));
-        assert!(AGENT_PROFILE.contains("agents_md: false"));
-        assert!(!AGENT_PROFILE.contains("run_terminal_cmd"));
-        assert!(!AGENT_PROFILE.contains("Read,"));
+        let profile = agent_profile();
+        assert!(AGENT_PROFILE_HEADER.contains("tools: [search_tool, use_tool]"));
+        assert!(profile.contains("agents_md: false"));
+        assert!(profile.contains("smallest sufficient set of calls"));
+        assert!(profile.contains("make one precise search_tool call"));
+        assert!(profile.contains("never\nrepeat discovery"));
+        assert!(!profile.contains("run_terminal_cmd"));
     }
 
     #[test]

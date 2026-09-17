@@ -20,8 +20,7 @@ export interface AiMessage {
 }
 
 export type AiMessagePart =
-  | { type: 'text'; content: string }
-  | { type: 'activity'; kind: 'thinking' | 'tool'; content: string };
+  { type: 'text'; content: string } | { type: 'activity'; kind: 'tool'; content: string };
 
 export interface AiOutputEvent {
   sessionId: string;

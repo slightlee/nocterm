@@ -19,7 +19,7 @@ use nocterm_infrastructure::{
     ssh::{SshTerminalManager, sftp::SftpManager},
     terminal::LocalTerminalManager,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -54,6 +54,7 @@ pub struct AiGatewayState {
     bindings: Mutex<HashMap<String, AiGatewayEntry>>,
     approvals: Mutex<HashMap<String, AiApprovalWaiter>>,
     tool_calls: Mutex<HashMap<String, VecDeque<Instant>>>,
+    observed_tool_calls: Mutex<HashSet<String>>,
     endpoint: Mutex<Option<String>>,
 }
 
@@ -208,11 +209,15 @@ impl AiGatewayState {
         }
     }
 
-    /// 调用方持有 bindings 锁，锁顺序固定为 bindings -> calls -> approvals。
+    /// 调用方持有 bindings 锁，锁顺序固定为 bindings -> calls -> observations -> approvals。
     fn clear_token_runtime_state(&self, token: &str) -> Result<(), String> {
         self.tool_calls
             .lock()
             .map_err(|_| "AI Bridge 限流状态不可用".to_string())?
+            .remove(token);
+        self.observed_tool_calls
+            .lock()
+            .map_err(|_| "AI Bridge 调用状态不可用".to_string())?
             .remove(token);
         let mut approvals = self
             .approvals
@@ -326,6 +331,30 @@ impl AiGatewayState {
         recent.push_back(now);
         drop(bindings);
         Ok(())
+    }
+
+    /// 只记录 MCP/ACP 清单中的有效工具；未知调用不能解锁 Provider 输出。
+    pub fn mark_tool_call(&self, token: &str) -> Result<(), String> {
+        let bindings = self
+            .bindings
+            .lock()
+            .map_err(|_| "AI Bridge 目标状态不可用".to_string())?;
+        if bindings.get(token).is_none_or(|entry| !entry.active) {
+            return Err("AI Bridge 任务已结束，请重新发起请求".to_string());
+        }
+        self.observed_tool_calls
+            .lock()
+            .map_err(|_| "AI Bridge 调用状态不可用".to_string())?
+            .insert(token.to_string());
+        Ok(())
+    }
+
+    /// Headless Provider 只在真实有效请求进入 Gateway 后才能发布终端相关回答。
+    pub fn has_tool_calls(&self, token: &str) -> Result<bool, String> {
+        self.observed_tool_calls
+            .lock()
+            .map_err(|_| "AI Bridge 调用状态不可用".to_string())
+            .map(|calls| calls.contains(token))
     }
 
     pub fn set_endpoint(&self, endpoint: String) {
@@ -513,15 +542,23 @@ mod tests {
     fn gateway_rate_limits_each_task_and_clears_state_on_revoke() {
         let gateway = AiGatewayState::default();
         bind_active(&gateway, "task-one", "ai-one");
+        assert!(!gateway.has_tool_calls("task-one").unwrap());
+        gateway.mark_tool_call("task-one").unwrap();
+        assert!(gateway.has_tool_calls("task-one").unwrap());
         for _ in 0..30 {
             gateway.check_tool_rate("task-one").unwrap();
         }
         assert!(gateway.check_tool_rate("task-one").is_err());
 
         gateway.revoke("task-one");
+        assert!(!gateway.has_tool_calls("task-one").unwrap());
         assert!(gateway.check_tool_rate("task-one").is_err());
         bind_active(&gateway, "task-one", "ai-one");
+        assert!(!gateway.has_tool_calls("task-one").unwrap());
         assert!(gateway.check_tool_rate("task-one").is_ok());
+        assert!(!gateway.has_tool_calls("task-one").unwrap());
+        gateway.mark_tool_call("task-one").unwrap();
+        assert!(gateway.has_tool_calls("task-one").unwrap());
     }
 
     #[test]
@@ -532,15 +569,19 @@ mod tests {
             .access_for("task-one")
             .unwrap()
             .expect("first access");
+        gateway.mark_tool_call("task-one").unwrap();
+        assert!(gateway.has_tool_calls("task-one").unwrap());
 
         gateway
             .deactivate_session("ai-one")
             .expect("deactivate first turn");
         assert!(first_access.cancellation.load(Ordering::Acquire));
+        assert!(!gateway.has_tool_calls("task-one").unwrap());
         assert!(gateway.check_tool_rate("task-one").is_err());
         gateway
             .activate_session("task-one", "ai-two".into(), AiCommandPolicy::ConfirmEach)
             .expect("update session");
+        assert!(!gateway.has_tool_calls("task-one").unwrap());
 
         let access = gateway
             .access_for("task-one")

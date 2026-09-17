@@ -37,8 +37,8 @@ impl Drop for GatewayConnectionPermit {
 }
 
 pub fn start_gateway(app: AppHandle, state: &AppState) {
+    let dispatcher = Arc::new(McpRequestDispatcher::new(app, state));
     let gateway = Arc::clone(state.ai_gateway());
-    let services = Arc::new(GatewayServices::new(app, state));
     let listener = match TcpListener::bind(("127.0.0.1", 0)) {
         Ok(listener) => listener,
         Err(_) => return,
@@ -59,21 +59,16 @@ pub fn start_gateway(app: AppHandle, state: &AppState) {
                 continue;
             }
             let permit = GatewayConnectionPermit(Arc::clone(&active_connections));
-            let gateway = Arc::clone(&gateway);
-            let services = Arc::clone(&services);
+            let dispatcher = Arc::clone(&dispatcher);
             thread::spawn(move || {
                 let _permit = permit;
-                handle_gateway(stream, gateway, services);
+                handle_gateway(stream, dispatcher);
             });
         }
     });
 }
 
-fn handle_gateway(
-    mut stream: TcpStream,
-    gateway: Arc<AiGatewayState>,
-    services: Arc<GatewayServices>,
-) {
+fn handle_gateway(mut stream: TcpStream, dispatcher: Arc<McpRequestDispatcher>) {
     // 每次连接只承载一个短期请求；未认证客户端不能长期占用 Gateway 线程。
     let _ = stream.set_read_timeout(Some(GATEWAY_HANDSHAKE_TIMEOUT));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -86,26 +81,51 @@ fn handle_gateway(
             Ok(value) => value,
             Err(_) => break,
         };
-        let id = request.get("id").cloned().unwrap_or(Value::Null);
         let token = request
             .get("token")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let access = match gateway.access_for(token) {
+        let Some(response) = dispatcher.dispatch(token, &request) else {
+            continue;
+        };
+        if write_json(&mut stream, &response).is_err() {
+            break;
+        }
+    }
+}
+
+/// MCP 传输只负责交付 JSON-RPC；stdio、TCP 和 ACP 必须复用同一分发与安全边界。
+pub struct McpRequestDispatcher {
+    gateway: Arc<AiGatewayState>,
+    services: GatewayServices,
+}
+
+impl McpRequestDispatcher {
+    pub(crate) fn new(app: AppHandle, state: &AppState) -> Self {
+        Self {
+            gateway: Arc::clone(state.ai_gateway()),
+            services: GatewayServices::new(app, state),
+        }
+    }
+
+    /// 返回完整 MCP JSON-RPC 响应；notification 没有响应，调用方必须只转发副作用。
+    pub(crate) fn dispatch(&self, token: &str, request: &Value) -> Option<Value> {
+        let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let access = match self.gateway.access_for(token) {
             Ok(Some(access)) => access,
             Ok(None) => {
-                let _ = write_json(
-                    &mut stream,
-                    &json!({"jsonrpc":"2.0","id":id,"error":{"code":-32001,"message":"invalid task token"}}),
-                );
-                continue;
+                return Some(json!({
+                    "jsonrpc":"2.0",
+                    "id":id,
+                    "error":{"code":-32001,"message":"invalid task token"}
+                }));
             }
             Err(error) => {
-                let _ = write_json(
-                    &mut stream,
-                    &json!({"jsonrpc":"2.0","id":id,"error":{"code":-32002,"message":error}}),
-                );
-                continue;
+                return Some(json!({
+                    "jsonrpc":"2.0",
+                    "id":id,
+                    "error":{"code":-32002,"message":error}
+                }));
             }
         };
         let method = request
@@ -116,34 +136,18 @@ fn handle_gateway(
             "initialize" => {
                 json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"nocterm","version":"0.1"}})
             }
-            "notifications/initialized" => Value::Null,
-            "tools/list" => services.tools_for_target(&access.binding.target),
-            "tools/call" => services.call(&gateway, token, &access, &request),
+            "notifications/initialized" => return None,
+            "tools/list" => self.services.tools_for_target(&access.binding.target),
+            "tools/call" => self.services.call(&self.gateway, token, &access, request),
+            _ if method.starts_with("notifications/") => return None,
             _ => {
-                if method.starts_with("notifications/") {
-                    continue;
-                }
-                if write_json(
-                    &mut stream,
-                    &json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}}),
-                )
-                .is_err()
-                {
-                    break;
-                }
-                continue;
+                return Some(json!({
+                    "jsonrpc":"2.0",
+                    "id":id,
+                    "error":{"code":-32601,"message":"method not found"}
+                }));
             }
         };
-        if method.starts_with("notifications/") {
-            continue;
-        }
-        if write_json(
-            &mut stream,
-            &json!({"jsonrpc":"2.0","id":id,"result":result}),
-        )
-        .is_err()
-        {
-            break;
-        }
+        Some(json!({"jsonrpc":"2.0","id":id,"result":result}))
     }
 }

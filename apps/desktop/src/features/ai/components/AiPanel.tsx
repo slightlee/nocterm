@@ -13,7 +13,7 @@ import { resetAiConversation } from '../api/ai-client';
 import { useAiRuntime } from '../hooks/use-ai-runtime';
 import { useAiStore } from '../model/ai-store';
 import { readAiAttachment, type AiAttachment } from '../model/ai-attachment';
-import { resolveAiTerminalTarget } from '../model/ai-target';
+import { isAiTerminalTargetReady, resolveAiTerminalTarget } from '../model/ai-target';
 import { AI_PROVIDERS, type AiCommandPolicy, type AiProviderId } from '../model/ai-types';
 import { AiComposer } from './AiComposer';
 import { AiConversationView } from './AiConversationView';
@@ -57,6 +57,11 @@ export function AiPanel({ visible }: AiPanelProps) {
   const activeSessionStatus = activeSession
     ? (terminalStatuses[String(activeSession.id)] ?? 'connecting')
     : 'idle';
+  const terminalTarget = useMemo(
+    () => resolveAiTerminalTarget(activeSession, activeSessionStatus),
+    [activeSession, activeSessionStatus]
+  );
+  const terminalReady = isAiTerminalTargetReady(terminalTarget);
   const activeConversation =
     conversations.find((item) => item.id === activeConversationId) ?? conversations[0];
   const conversationId = activeConversation?.id ?? activeConversationId;
@@ -71,7 +76,6 @@ export function AiPanel({ visible }: AiPanelProps) {
     runningSessionId,
     streamText,
     runParts,
-    liveThinking,
     pendingApproval,
     approvalSubmitting,
     providerAvailability,
@@ -91,6 +95,10 @@ export function AiPanel({ visible }: AiPanelProps) {
     if (runningSessionId) return;
     const content = draft.trim();
     if (!content && !attachment) return;
+    if (!terminalReady) {
+      setNotice('请先连接本地终端或远程服务器，再使用 AI 助手。');
+      return;
+    }
     const selectedAttachment = attachment;
     const question = content || `请分析附件：${selectedAttachment?.name ?? '未命名文件'}`;
     const visibleMessage = selectedAttachment
@@ -105,7 +113,7 @@ export function AiPanel({ visible }: AiPanelProps) {
       history: messages,
       conversationId,
       provider,
-      target: resolveAiTerminalTarget(activeSession, activeSessionStatus),
+      target: terminalTarget,
       commandPolicy,
     });
   };
@@ -122,6 +130,10 @@ export function AiPanel({ visible }: AiPanelProps) {
     }
     const retried = lastUserIndex >= 0 ? messages[lastUserIndex] : undefined;
     if (!retried) return;
+    if (!terminalReady) {
+      setNotice('请先连接本地终端或远程服务器，再重新发送。');
+      return;
+    }
     // 附件正文不落盘、无法随重试重读，只发送文本部分并去掉“附件：名称”标记。
     const question = retried.content.replace(/\n\n附件：[^\n]*$/, '');
     messages.slice(lastUserIndex).forEach((message) => deleteMessage(message.id));
@@ -132,7 +144,7 @@ export function AiPanel({ visible }: AiPanelProps) {
       history: messages.slice(0, lastUserIndex),
       conversationId,
       provider,
-      target: resolveAiTerminalTarget(activeSession, activeSessionStatus),
+      target: terminalTarget,
       commandPolicy,
     });
   };
@@ -297,7 +309,6 @@ export function AiPanel({ visible }: AiPanelProps) {
         <AiConversationView
           approvalSubmitting={approvalSubmitting}
           lastUserMessageId={lastUserMessageId}
-          liveThinking={liveThinking}
           messages={messages}
           notice={notice}
           onResolveApproval={resolveApproval}
@@ -313,6 +324,7 @@ export function AiPanel({ visible }: AiPanelProps) {
       <AiComposer
         attachment={attachment}
         attachmentLoading={attachmentLoading}
+        terminalReady={terminalReady}
         composerRef={composerRef}
         draft={draft}
         fileInputRef={fileInputRef}

@@ -46,13 +46,12 @@ export function extractAiText(line: string): string | null {
 }
 
 export interface AiActivity {
-  kind: 'thinking' | 'tool';
+  kind: 'tool';
   text: string;
 }
 
 export interface AiStreamDelta {
   answer?: string;
-  thinking?: string;
 }
 
 /**
@@ -71,42 +70,31 @@ export function extractAiStreamDelta(line: string): AiStreamDelta | null {
   if (!isRecord(event)) return null;
   const acpUpdate = getAcpUpdate(event);
   if (
-    (acpUpdate?.sessionUpdate === 'agent_message_chunk' ||
-      acpUpdate?.sessionUpdate === 'agent_thought_chunk') &&
+    acpUpdate?.sessionUpdate === 'agent_message_chunk' &&
     isRecord(acpUpdate.content) &&
     typeof acpUpdate.content.text === 'string' &&
     acpUpdate.content.text
   ) {
-    return acpUpdate.sessionUpdate === 'agent_message_chunk'
-      ? { answer: acpUpdate.content.text }
-      : { thinking: acpUpdate.content.text };
+    return { answer: acpUpdate.content.text };
   }
   if (
-    (event.method === 'item/agentMessage/delta' ||
-      event.method === 'item/reasoning/summaryTextDelta') &&
+    event.method === 'item/agentMessage/delta' &&
     isRecord(event.params) &&
     typeof event.params.delta === 'string' &&
     event.params.delta
   ) {
-    return event.method === 'item/agentMessage/delta'
-      ? { answer: event.params.delta }
-      : { thinking: event.params.delta };
+    return { answer: event.params.delta };
   }
   // Grok 的 headless streaming-json 直接把增量放在 data 字段。
   if (event.type === 'text' && typeof event.data === 'string') {
     return event.data ? { answer: event.data } : null;
   }
-  if (event.type === 'thought' && typeof event.data === 'string') {
-    return event.data ? { thinking: event.data } : null;
-  }
+  if (event.type === 'thought') return null;
   if (event.type !== 'stream_event' || !isRecord(event.event)) return null;
   if (event.event.type !== 'content_block_delta' || !isRecord(event.event.delta)) return null;
   const delta = event.event.delta;
   if (delta.type === 'text_delta' && typeof delta.text === 'string') {
     return delta.text ? { answer: delta.text } : null;
-  }
-  if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-    return delta.thinking ? { thinking: delta.thinking } : null;
   }
   return null;
 }
@@ -137,7 +125,7 @@ export function isAiFullTextEvent(line: string): boolean {
 
 const AI_ACTIVITY_LIMIT = 160;
 
-/** 过程信息只做摘要展示，超长思考或命令截断，避免等待区被刷屏。 */
+/** 工具动作只做摘要展示，超长命令截断，避免等待区被刷屏。 */
 function truncateActivity(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   return compact.length > AI_ACTIVITY_LIMIT ? `${compact.slice(0, AI_ACTIVITY_LIMIT)}…` : compact;
@@ -162,6 +150,11 @@ function summarizeToolUse(part: Record<string, unknown>): string {
 
 /** Nocterm 工具过程使用用户可理解的操作名；只展示已知、受约束的参数。 */
 function summarizeNoctermTool(tool: string, input: Record<string, unknown>): string {
+  // Grok 聚合层可能保留 MCP server 命名空间，展示前统一还原真实工具名。
+  const normalizedTool = tool
+    .trim()
+    .replace(/^mcp__nocterm__/, '')
+    .replace(/^nocterm__/, '');
   const service = typeof input.service === 'string' ? input.service : '';
   const container = typeof input.container === 'string' ? input.container : '';
   const command = typeof input.command === 'string' ? input.command : '';
@@ -181,10 +174,10 @@ function summarizeNoctermTool(tool: string, input: Record<string, unknown>): str
     ssh_exec: command ? `执行远程命令：${command}` : '执行远程命令',
     local_terminal_exec: command ? `执行本地命令：${command}` : '执行本地命令',
   };
-  return truncateActivity(labels[tool] ?? `使用 Nocterm 工具：${tool}`);
+  return truncateActivity(labels[normalizedTool] ?? '执行终端操作');
 }
 
-/** Grok 只暴露两个聚合工具；优先从 use_tool 输入还原实际 Nocterm 操作。 */
+/** 兼容旧版 Grok 聚合工具事件；新版原生 ACP 终端通常直接提供可读标题。 */
 function summarizeAcpToolCall(update: Record<string, unknown>): string {
   const title = typeof update.title === 'string' ? update.title.trim() : '';
   const normalizedTitle = title.toLowerCase();
@@ -249,7 +242,7 @@ export function extractAiActivities(line: string): AiActivity[] {
     return activities;
   }
 
-  // Claude stream-json：assistant 消息里的 thinking 与 tool_use 块；思考块固化展示，增量部分只负责实时滚动。
+  // Claude stream-json：只固化可审计的工具调用；模型私有 thinking 不进入产品事件。
   if (
     event.type === 'assistant' &&
     isRecord(event.message) &&
@@ -257,9 +250,6 @@ export function extractAiActivities(line: string): AiActivity[] {
   ) {
     for (const part of event.message.content) {
       if (!isRecord(part)) continue;
-      if (part.type === 'thinking' && typeof part.thinking === 'string' && part.thinking.trim()) {
-        activities.push({ kind: 'thinking', text: truncateActivity(part.thinking) });
-      }
       if (part.type === 'tool_use') {
         activities.push({ kind: 'tool', text: summarizeToolUse(part) });
       }
@@ -267,7 +257,7 @@ export function extractAiActivities(line: string): AiActivity[] {
     return activities;
   }
 
-  // Codex JSONL：命令在 item.started 时即展示，推理条目完成后展示摘要。
+  // Codex JSONL：只展示命令和 MCP 工具调用，不展示 Provider 私有推理。
   if (isRecord(event.item)) {
     const item = event.item;
     if (
@@ -277,14 +267,6 @@ export function extractAiActivities(line: string): AiActivity[] {
       item.command.trim()
     ) {
       activities.push({ kind: 'tool', text: truncateActivity(item.command) });
-    }
-    if (
-      event.type === 'item.completed' &&
-      item.type === 'reasoning' &&
-      typeof item.text === 'string' &&
-      item.text.trim()
-    ) {
-      activities.push({ kind: 'thinking', text: truncateActivity(item.text) });
     }
     if (event.type === 'item.started' && item.type === 'mcp_tool_call') {
       const server = typeof item.server === 'string' ? item.server : 'MCP';

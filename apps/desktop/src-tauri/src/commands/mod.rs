@@ -12,6 +12,7 @@ pub mod ai_stream;
 pub mod ai_terminal;
 pub mod ai_tool_approval;
 pub mod ai_tool_audit;
+mod ai_tool_contract;
 pub mod ai_tool_gateway;
 pub mod ai_tools;
 mod ai_validation;

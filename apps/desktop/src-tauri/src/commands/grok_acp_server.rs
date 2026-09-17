@@ -54,10 +54,12 @@ impl PersistentProviderRuntime for GrokAcpServerManager {
             identity,
             initial_prompt,
             continuation_prompt,
-            bridge,
-            bridge_executable,
+            bridge: _,
+            gateway_token,
+            bridge_executable: _,
             provider_executable,
             command_policy,
+            mcp_dispatcher,
         } = launch;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -79,10 +81,10 @@ impl PersistentProviderRuntime for GrokAcpServerManager {
                     app,
                     GrokAcpServerLaunch {
                         identity,
-                        bridge,
-                        bridge_executable,
+                        bridge_token: gateway_token,
                         provider_executable,
                         gateway,
+                        mcp_dispatcher,
                         timestamp,
                         sequence,
                     },

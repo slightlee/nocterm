@@ -52,9 +52,11 @@ impl PersistentProviderRuntime for CodexAppServerManager {
             initial_prompt,
             continuation_prompt,
             bridge,
+            gateway_token: _,
             bridge_executable,
             provider_executable,
             command_policy,
+            mcp_dispatcher: _,
         } = launch;
         self.sessions.start_turn(
             app.clone(),

@@ -13,12 +13,12 @@ use std::{
     time::Duration,
 };
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
     commands::{
         ai_process::AiProcessPoll,
-        ai_provider::PreparedHeadlessLaunch,
+        ai_provider::{HeadlessReadinessRequirement, PreparedHeadlessLaunch},
         ai_stream::{
             PROVIDER_TURN_OUTPUT_LIMIT_MESSAGE, read_bounded_lines, redact_token,
             reserve_turn_output,
@@ -44,11 +44,12 @@ struct HeadlessOutputBudget {
     limit_reached: AtomicBool,
 }
 
-struct HeadlessOutputContext<'a> {
-    app: &'a AppHandle,
+struct HeadlessOutputContext<'a, R: Runtime = tauri::Wry> {
+    app: &'a AppHandle<R>,
     session_id: &'a str,
     connection_id: Option<i64>,
     bridge_token: Option<&'a str>,
+    gateway: &'a crate::state::AiGatewayState,
     budget: &'a HeadlessOutputBudget,
     failed: &'a AtomicBool,
 }
@@ -102,6 +103,7 @@ pub(super) fn start_headless_session(
         bridge_token,
     } = launch;
     let stdin_payload = prepared.take_stdin_payload();
+    let readiness_requirement = prepared.take_readiness_requirement();
     let mut process = Command::new(&provider_executable);
     process
         .args(&prepared.args)
@@ -179,6 +181,7 @@ pub(super) fn start_headless_session(
         let app = app.clone();
         let session_id = session_id.clone();
         let bridge_token = bridge_token.clone();
+        let gateway = Arc::clone(&gateway);
         let output_budget = Arc::clone(&output_budget);
         let output_failed = Arc::clone(&output_failed);
         thread::spawn(move || {
@@ -187,16 +190,18 @@ pub(super) fn start_headless_session(
                 session_id: &session_id,
                 connection_id,
                 bridge_token: bridge_token.as_deref(),
+                gateway: &gateway,
                 budget: &output_budget,
                 failed: &output_failed,
             };
-            emit_lines("stdout", stdout, &context)
+            emit_lines("stdout", stdout, &context, readiness_requirement.as_ref())
         })
     });
     let stderr_thread = stderr.map(|stderr| {
         let app = app.clone();
         let session_id = session_id.clone();
         let bridge_token = bridge_token.clone();
+        let gateway = Arc::clone(&gateway);
         let output_budget = Arc::clone(&output_budget);
         let output_failed = Arc::clone(&output_failed);
         thread::spawn(move || {
@@ -205,10 +210,11 @@ pub(super) fn start_headless_session(
                 session_id: &session_id,
                 connection_id,
                 bridge_token: bridge_token.as_deref(),
+                gateway: &gateway,
                 budget: &output_budget,
                 failed: &output_failed,
             };
-            emit_lines("stderr", stderr, &context)
+            emit_lines("stderr", stderr, &context, None)
         })
     });
     let exit_app = app.clone();
@@ -246,9 +252,6 @@ pub(super) fn start_headless_session(
                 AiProcessPoll::Finished(mut process) => {
                     // 进程表和事件闭包中的目标必须一致，避免未来改动时串任务。
                     debug_assert_eq!(process.connection_id, connection_id);
-                    if let Some(token) = process.bridge_token.as_deref() {
-                        gateway.revoke(token);
-                    }
                     break match process.child.wait() {
                         Ok(status) => (status.code(), false),
                         Err(_) => (None, false),
@@ -276,6 +279,10 @@ pub(super) fn start_headless_session(
         let stderr_ok = stderr_thread
             .map(|handle| handle.join().unwrap_or(false))
             .unwrap_or(true);
+        // stdout 的完成校验需要读取本轮 Gateway 调用记录，因此必须在回收读线程后撤销。
+        if let Some(token) = bridge_token.as_deref() {
+            gateway.revoke(token);
+        }
         let code = if stdout_ok && stderr_ok {
             code
         } else {
@@ -300,12 +307,32 @@ fn revoke_bridge(state: &AppState, token: Option<&str>) {
     }
 }
 
-fn emit_lines<R: std::io::Read>(
+fn emit_lines<T: std::io::Read, R: Runtime>(
     stream: &str,
-    reader: R,
-    context: &HeadlessOutputContext<'_>,
+    reader: T,
+    context: &HeadlessOutputContext<'_, R>,
+    readiness_requirement: Option<&HeadlessReadinessRequirement>,
 ) -> bool {
+    let mut readiness_satisfied = readiness_requirement.is_none();
+    let mut readiness_failed = false;
+    let mut gateway_call_satisfied =
+        readiness_requirement.is_none_or(|requirement| !requirement.require_gateway_call);
+    let mut pending_lines = Vec::new();
     let result = read_bounded_lines(reader, |line| {
+        if !readiness_satisfied
+            && let Some(requirement) = readiness_requirement
+            && let Some(result) = validate_readiness_event(&line, requirement)
+        {
+            match result {
+                Ok(()) => readiness_satisfied = true,
+                Err(message) => {
+                    readiness_failed = true;
+                    context.failed.store(true, Ordering::Release);
+                    emit_headless_error(context, message);
+                    return false;
+                }
+            }
+        }
         match context.budget.reserve(line.len()) {
             OutputReservation::Accepted => {}
             OutputReservation::FirstRejection => {
@@ -326,37 +353,146 @@ fn emit_lines<R: std::io::Read>(
                 return false;
             }
         }
-        let _ = context.app.emit(
-            "nocterm://ai-output",
-            AiOutputEvent {
-                session_id: context.session_id.into(),
-                connection_id: context.connection_id,
-                stream: stream.into(),
-                data: redact_token(line, context.bridge_token),
-            },
-        );
+        let line = redact_token(line, context.bridge_token);
+        if !gateway_call_satisfied {
+            pending_lines.push(line);
+            match has_required_gateway_call(context) {
+                Ok(true) => {
+                    gateway_call_satisfied = true;
+                    for pending in pending_lines.drain(..) {
+                        emit_headless_line(stream, context, pending);
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    readiness_failed = true;
+                    context.failed.store(true, Ordering::Release);
+                    emit_headless_error(context, error);
+                    return false;
+                }
+            }
+            return true;
+        }
+        emit_headless_line(stream, context, line);
         true
     });
     if let Err(error) = result {
         context.failed.store(true, Ordering::Release);
-        let _ = context.app.emit(
-            "nocterm://ai-output",
-            AiOutputEvent {
-                session_id: context.session_id.into(),
-                connection_id: context.connection_id,
-                stream: "stderr".into(),
-                data: redact_token(error, context.bridge_token),
-            },
+        emit_headless_error(context, redact_token(error, context.bridge_token));
+        return false;
+    }
+    if readiness_failed {
+        return false;
+    }
+    if !readiness_satisfied {
+        context.failed.store(true, Ordering::Release);
+        emit_headless_error(
+            context,
+            "Provider 未返回终端能力初始化状态，已停止本次任务".into(),
         );
         return false;
+    }
+    if !gateway_call_satisfied {
+        match has_required_gateway_call(context) {
+            Ok(true) => {
+                for pending in pending_lines {
+                    emit_headless_line(stream, context, pending);
+                }
+            }
+            Ok(false) => {
+                context.failed.store(true, Ordering::Release);
+                emit_headless_error(
+                    context,
+                    readiness_requirement
+                        .map(|requirement| requirement.missing_gateway_call_message)
+                        .unwrap_or("Provider 未调用当前终端能力")
+                        .into(),
+                );
+                return false;
+            }
+            Err(error) => {
+                context.failed.store(true, Ordering::Release);
+                emit_headless_error(context, error);
+                return false;
+            }
+        }
     }
     true
 }
 
+fn has_required_gateway_call<R: Runtime>(
+    context: &HeadlessOutputContext<'_, R>,
+) -> Result<bool, String> {
+    let Some(token) = context.bridge_token else {
+        return Ok(false);
+    };
+    context.gateway.has_tool_calls(token)
+}
+
+fn emit_headless_line<R: Runtime>(
+    stream: &str,
+    context: &HeadlessOutputContext<'_, R>,
+    data: String,
+) {
+    let _ = context.app.emit(
+        "nocterm://ai-output",
+        AiOutputEvent {
+            session_id: context.session_id.into(),
+            connection_id: context.connection_id,
+            stream: stream.into(),
+            data,
+        },
+    );
+}
+
+fn validate_readiness_event(
+    line: &str,
+    requirement: &HeadlessReadinessRequirement,
+) -> Option<Result<(), String>> {
+    let event = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    if event.get("type").and_then(serde_json::Value::as_str) != Some(requirement.event_type)
+        || event.get("subtype").and_then(serde_json::Value::as_str)
+            != Some(requirement.event_subtype)
+    {
+        return None;
+    }
+    let tools = event.get("tools").and_then(serde_json::Value::as_array);
+    if tools.is_some_and(|tools| {
+        tools.iter().any(|tool| {
+            tool.as_str()
+                .is_some_and(|name| name.starts_with(requirement.tool_prefix))
+        })
+    }) {
+        Some(Ok(()))
+    } else {
+        Some(Err(requirement.failure_message.into()))
+    }
+}
+
+fn emit_headless_error<R: Runtime>(context: &HeadlessOutputContext<'_, R>, data: String) {
+    let _ = context.app.emit(
+        "nocterm://ai-output",
+        AiOutputEvent {
+            session_id: context.session_id.into(),
+            connection_id: context.connection_id,
+            stream: "stderr".into(),
+            data,
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{HeadlessOutputBudget, OutputReservation};
+    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+
+    use super::{
+        HeadlessOutputBudget, HeadlessOutputContext, OutputReservation, emit_lines,
+        validate_readiness_event,
+    };
+    use crate::commands::ai_provider::HeadlessReadinessRequirement;
     use crate::commands::ai_stream::{MAX_PROVIDER_TURN_OUTPUT_BYTES, redact_token};
+    use crate::state::{AiCommandPolicy, AiGatewayBinding, AiGatewayState, AiTarget};
+    use tauri::Listener;
 
     #[test]
     fn bridge_tokens_never_leave_headless_output() {
@@ -380,5 +516,96 @@ mod tests {
             OutputReservation::FirstRejection
         ));
         assert!(matches!(budget.reserve(1), OutputReservation::Rejected));
+    }
+
+    #[test]
+    fn readiness_requires_the_expected_provider_tool_prefix() {
+        let requirement = HeadlessReadinessRequirement {
+            event_type: "system",
+            event_subtype: "init",
+            tool_prefix: "mcp__nocterm__",
+            failure_message: "missing nocterm tools",
+            require_gateway_call: true,
+            missing_gateway_call_message: "missing nocterm call",
+        };
+
+        assert_eq!(
+            validate_readiness_event(
+                r#"{"type":"system","subtype":"init","tools":["mcp__nocterm__session_context"]}"#,
+                &requirement,
+            ),
+            Some(Ok(()))
+        );
+        assert_eq!(
+            validate_readiness_event(
+                r#"{"type":"system","subtype":"init","tools":["Bash"]}"#,
+                &requirement,
+            ),
+            Some(Err("missing nocterm tools".into()))
+        );
+        assert_eq!(
+            validate_readiness_event(r#"{"type":"assistant"}"#, &requirement),
+            None
+        );
+    }
+
+    #[test]
+    fn terminal_bound_output_is_not_emitted_without_a_real_gateway_call() {
+        let app = tauri::test::mock_app();
+        let output_events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&output_events);
+        app.listen("nocterm://ai-output", move |event| {
+            captured.lock().unwrap().push(event.payload().to_string());
+        });
+        let gateway = AiGatewayState::default();
+        let token = "test-bridge-token";
+        gateway
+            .bind(
+                token.into(),
+                AiGatewayBinding {
+                    target: AiTarget::Ssh { connection_id: 7 },
+                    provider: "claude-code".into(),
+                    session_id: "ai-test".into(),
+                    command_policy: AiCommandPolicy::AutoSafe,
+                },
+            )
+            .unwrap();
+        gateway
+            .activate_session(token, "ai-test".into(), AiCommandPolicy::AutoSafe)
+            .unwrap();
+        let budget = HeadlessOutputBudget::default();
+        let failed = AtomicBool::new(false);
+        let context = HeadlessOutputContext {
+            app: app.handle(),
+            session_id: "ai-test",
+            connection_id: Some(7),
+            bridge_token: Some(token),
+            gateway: &gateway,
+            budget: &budget,
+            failed: &failed,
+        };
+        let requirement = HeadlessReadinessRequirement {
+            event_type: "system",
+            event_subtype: "init",
+            tool_prefix: "mcp__nocterm__",
+            failure_message: "missing nocterm tools",
+            require_gateway_call: true,
+            missing_gateway_call_message: "missing nocterm call",
+        };
+        let output = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[\"mcp__nocterm__session_context\"]}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Mings-Mac.local\"}]}}\n"
+        );
+
+        assert!(!emit_lines(
+            "stdout",
+            output.as_bytes(),
+            &context,
+            Some(&requirement)
+        ));
+        let events = output_events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].contains("missing nocterm call"));
+        assert!(!events[0].contains("Mings-Mac.local"));
     }
 }

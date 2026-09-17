@@ -7,10 +7,11 @@ use tauri::AppHandle;
 
 use crate::{
     commands::{
+        ai_bridge::McpRequestDispatcher,
         ai_headless::{HeadlessSessionLaunch, start_headless_session},
         ai_provider::{
             ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
-            provider_adapter,
+            ProviderToolTransport, provider_adapter,
         },
         ai_runtime::PersistentProviderLaunch,
         ai_validation::{ValidatedAiSessionStart, validate_start_request},
@@ -42,54 +43,79 @@ pub(super) fn start_session(
     let provider_executable = adapter
         .executable()
         .ok_or_else(|| format!("未找到本机 AI Provider：{provider_command}"))?;
+    let tool_transport = adapter.tool_transport();
 
-    // Bridge 可执行路径先于 token 绑定解析，避免准备失败时留下无主授权。
-    let bridge_executable = std::env::current_exe()
-        .map_err(|error| format!("无法定位 Nocterm AI Bridge：{error}"))?
-        .to_str()
-        .ok_or_else(|| "Nocterm 可执行文件路径不是有效 UTF-8".to_string())?
-        .to_string();
-    let bridge = bind_bridge(
+    // 只有 stdio Provider 需要启动 Bridge 子进程；ACP 直接进入进程内公共分发器。
+    let bridge_executable = if tool_transport == ProviderToolTransport::Stdio {
+        std::env::current_exe()
+            .map_err(|error| format!("无法定位 Nocterm AI Bridge：{error}"))?
+            .to_str()
+            .ok_or_else(|| "Nocterm 可执行文件路径不是有效 UTF-8".to_string())?
+            .to_string()
+    } else {
+        String::new()
+    };
+    let gateway_token = bind_gateway(
         state,
         target.as_ref(),
         provider_id,
         &session_id,
         command_policy,
     )?;
+    let bridge_endpoint = match (gateway_token.as_ref(), tool_transport) {
+        (Some(token), ProviderToolTransport::Stdio) => match state.ai_gateway().endpoint() {
+            Some(endpoint) => Some(endpoint),
+            None => {
+                state.ai_gateway().revoke(token);
+                return Err("Nocterm AI Bridge 尚未启动，请重启应用后重试".to_string());
+            }
+        },
+        (Some(_), ProviderToolTransport::Acp) => None,
+        _ => None,
+    };
+    let bridge = bridge_endpoint
+        .as_ref()
+        .zip(gateway_token.as_ref())
+        .map(|(endpoint, token)| (endpoint.clone(), token.clone()));
     let provider_bridge = bridge.as_ref().map(|(endpoint, _)| ProviderBridge {
         executable: &bridge_executable,
         endpoint,
     });
+    let identity = ProviderSessionIdentity {
+        connection_id,
+        target_session_id: local_session_id.clone(),
+        working_directory: working_directory.clone(),
+    };
     let launch_plan = match adapter.prepare_launch(ProviderLaunch {
         prompt: &request.prompt,
         bridge: provider_bridge,
+        identity: &identity,
     }) {
         Ok(plan) => plan,
         Err(error) => {
-            revoke_bridge(state, bridge.as_ref());
+            revoke_gateway(state, gateway_token.as_deref());
             return Err(error);
         }
     };
 
     match launch_plan {
         ProviderLaunchPlan::Persistent => {
+            let mcp_dispatcher = Arc::new(McpRequestDispatcher::new(app.clone(), state));
             let started = state.ai_provider_runtimes().start_turn(
                 provider_id,
                 app,
                 PersistentProviderLaunch {
                     conversation_id,
                     session_id: session_id.clone(),
-                    identity: ProviderSessionIdentity {
-                        connection_id,
-                        target_session_id: local_session_id,
-                        working_directory,
-                    },
+                    identity,
                     initial_prompt: request.prompt,
                     continuation_prompt: request.continuation_prompt,
                     bridge: bridge.clone(),
+                    gateway_token: gateway_token.clone(),
                     bridge_executable,
                     provider_executable,
                     command_policy,
+                    mcp_dispatcher,
                 },
                 Arc::clone(state.ai_gateway()),
             );
@@ -97,18 +123,18 @@ pub(super) fn start_session(
                 Ok(is_new) => {
                     // 复用服务器时，新候选 token 未进入子进程，必须立即撤销。
                     if !is_new {
-                        revoke_bridge(state, bridge.as_ref());
+                        revoke_gateway(state, gateway_token.as_deref());
                     }
                     Ok(AiSessionStartResponse { session_id })
                 }
                 Err(error) => {
-                    revoke_bridge(state, bridge.as_ref());
+                    revoke_gateway(state, gateway_token.as_deref());
                     Err(error)
                 }
             }
         }
         ProviderLaunchPlan::Headless(prepared) => {
-            if let Some((_, token)) = bridge.as_ref()
+            if let Some(token) = gateway_token.as_ref()
                 && let Err(error) =
                     state
                         .ai_gateway()
@@ -124,10 +150,10 @@ pub(super) fn start_session(
                     session_id: session_id.clone(),
                     provider_command,
                     provider_executable,
-                    prepared,
+                    prepared: *prepared,
                     working_directory,
                     connection_id,
-                    bridge_token: bridge.map(|(_, token)| token),
+                    bridge_token: gateway_token,
                 },
             )?;
             Ok(AiSessionStartResponse { session_id })
@@ -160,20 +186,16 @@ fn resolve_target(
     }))
 }
 
-fn bind_bridge(
+fn bind_gateway(
     state: &AppState,
     target: Option<&AiTarget>,
     provider: &str,
     session_id: &str,
     command_policy: AiCommandPolicy,
-) -> Result<Option<(String, String)>, String> {
+) -> Result<Option<String>, String> {
     let Some(target) = target else {
         return Ok(None);
     };
-    let endpoint = state
-        .ai_gateway()
-        .endpoint()
-        .ok_or_else(|| "Nocterm AI Bridge 尚未启动，请重启应用后重试".to_string())?;
     let token = generate_bridge_token()?;
     state.ai_gateway().bind(
         token.clone(),
@@ -184,11 +206,11 @@ fn bind_bridge(
             command_policy,
         },
     )?;
-    Ok(Some((endpoint, token)))
+    Ok(Some(token))
 }
 
-fn revoke_bridge(state: &AppState, bridge: Option<&(String, String)>) {
-    if let Some((_, token)) = bridge {
+fn revoke_gateway(state: &AppState, token: Option<&str>) {
+    if let Some(token) = token {
         state.ai_gateway().revoke(token);
     }
 }

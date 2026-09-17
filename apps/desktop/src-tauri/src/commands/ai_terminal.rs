@@ -7,7 +7,7 @@ mod ssh;
 pub(crate) use local::execute_local_sync;
 pub(crate) use ssh::{execute_ssh_inspection_sync, execute_ssh_sync};
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TerminalCommandResult {
     pub output: String,
     /// SSH 取协议级状态，本地终端取当前 Shell 紧随命令返回的状态。
