@@ -29,10 +29,10 @@
   top: 50%;
 
   /* 保持与展开态同一尺寸，向右移出一半后由工作区边界裁掉右半胶囊。 */
-  right: -12px;
+  right: -9px;
   z-index: var(--z-sticky);
   display: inline-flex;
-  width: 24px;
+  width: 18px;
   height: 56px;
   align-items: center;
   justify-content: center;
@@ -40,7 +40,7 @@
   color: var(--term-muted);
   background: var(--bg-hover);
   border: 1px solid var(--term-border);
-  border-radius: 12px;
+  border-radius: 9px;
   cursor: pointer;
   transform: translateY(-50%);
   transition:
@@ -69,7 +69,7 @@
 .aiReveal svg {
   width: 12px;
   height: 12px;
-  transform: translateX(-6px);
+  transform: translateX(-4.5px);
   fill: none;
   stroke: currentcolor;
   stroke-linecap: round;

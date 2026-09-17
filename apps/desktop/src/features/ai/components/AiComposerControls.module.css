@@ -1,6 +1,7 @@
 .providerMenu {
   position: relative;
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 5px;
 }
@@ -92,10 +93,11 @@
 }
 
 .commandPolicyOptions {
-  left: 50%;
-  width: 276px;
+  right: 0;
+  left: auto;
+  width: min(276px, calc(100cqw - 64px));
   padding: 7px;
-  transform: translateX(-50%);
+  transform: none;
 }
 
 .commandPolicyOption {
@@ -194,7 +196,8 @@
 
 .composerProviderButton {
   display: inline-flex;
-  min-width: 92px;
+  width: 100%;
+  min-width: 0;
   height: 30px;
   align-items: center;
   justify-content: space-between;
@@ -225,11 +228,20 @@
   min-width: 0;
   align-items: center;
   gap: 6px;
+  overflow: hidden;
+}
+
+.providerLabel > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .providerButton .providerIcon {
   width: 14px;
   height: 14px;
+  flex: none;
   color: var(--term-blue);
 }
 
@@ -241,6 +253,7 @@
 .providerButton .providerChevron {
   width: 12px;
   height: 12px;
+  flex: none;
   color: var(--term-muted);
 }
 
@@ -264,13 +277,18 @@
 }
 
 .attachmentButton {
-  gap: 6px;
-  padding: 0 10px;
+  width: 30px;
+  justify-content: center;
+  padding: 0;
   cursor: pointer;
 }
 
+.attachmentButton > span {
+  display: none;
+}
+
 .attachmentChip {
-  max-width: 118px;
+  max-width: min(220px, 100%);
   padding-left: 7px;
 }
 
@@ -349,24 +367,6 @@
 
 @container (max-width: 330px) {
   .composerProviderButton {
-    min-width: 0;
-    max-width: 86px;
     padding: 0 7px;
-  }
-
-  .providerLabel > span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .attachmentButton {
-    width: 30px;
-    justify-content: center;
-    padding: 0;
-  }
-
-  .attachmentButton > span {
-    display: none;
   }
 }

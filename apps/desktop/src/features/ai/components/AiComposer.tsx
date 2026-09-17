@@ -8,7 +8,7 @@ import {
 
 import type { AiAttachment } from '../model/ai-attachment';
 import type { AiCommandPolicy, AiProvider, AiProviderId } from '../model/ai-types';
-import { AiAttachmentControl } from './AiAttachmentControl';
+import { AiAttachmentChip, AiAttachmentPicker } from './AiAttachmentControl';
 import { AiCommandPolicySelector } from './AiCommandPolicySelector';
 import { AiProviderSelector } from './AiProviderSelector';
 import styles from './AiComposer.module.css';
@@ -80,8 +80,22 @@ export function AiComposer({
           ref={composerRef}
           value={draft}
         />
+        {attachment ? (
+          <div className={styles.attachmentRow}>
+            <AiAttachmentChip
+              attachment={attachment}
+              fileInputRef={fileInputRef}
+              onRemove={onAttachmentRemove}
+            />
+          </div>
+        ) : null}
         <div className={styles.composerFooter}>
           <div className={styles.composerTools}>
+            <AiAttachmentPicker
+              fileInputRef={fileInputRef}
+              loading={attachmentLoading}
+              onChange={onAttachmentChange}
+            />
             <AiProviderSelector
               disabled={Boolean(runningSessionId)}
               onChange={onProviderChange}
@@ -105,13 +119,6 @@ export function AiComposer({
               }}
               open={commandPolicyMenuOpen}
               policy={commandPolicy}
-            />
-            <AiAttachmentControl
-              attachment={attachment}
-              fileInputRef={fileInputRef}
-              loading={attachmentLoading}
-              onChange={onAttachmentChange}
-              onRemove={onAttachmentRemove}
             />
           </div>
           {runningSessionId ? (

@@ -86,10 +86,10 @@ p {
 .collapseButton {
   position: absolute;
   top: 50%;
-  left: -12px;
+  left: -9px;
   z-index: var(--z-sticky);
   display: inline-flex;
-  width: 24px;
+  width: 18px;
   height: 56px;
   align-items: center;
   justify-content: center;
@@ -97,7 +97,7 @@ p {
   color: var(--term-muted);
   background: var(--bg-hover);
   border: 1px solid var(--term-border);
-  border-radius: 12px;
+  border-radius: 9px;
   cursor: pointer;
   transform: translateY(-50%);
   transition:

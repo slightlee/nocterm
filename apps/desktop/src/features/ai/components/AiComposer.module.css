@@ -54,6 +54,12 @@
   color: var(--term-muted);
 }
 
+.attachmentRow {
+  display: flex;
+  min-width: 0;
+  padding: 4px 8px 2px;
+}
+
 .composerFooter {
   display: flex;
   align-items: center;
@@ -63,8 +69,9 @@
 }
 
 .composerTools {
-  display: flex;
+  display: grid;
   flex: 1;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   min-width: 0;
