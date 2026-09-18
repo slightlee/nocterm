@@ -245,11 +245,20 @@ pub(crate) fn local_completion_status(output: &str, marker: &str) -> Option<(usi
     })
 }
 
+/// 删除 Shell 回显中的内部命令行，只把真实命令输出返回给 Provider。
+/// UI 与 Provider 共用相同保留前缀，避免 Windows 单行包装暴露实现细节。
+pub(crate) fn sanitize_local_command_output(output: &str) -> String {
+    output
+        .split_inclusive(['\r', '\n'])
+        .filter(|record| !record.contains(LOCAL_COMPLETION_REDACTION_PREFIX))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::LocalTerminalRegistry;
+    use super::{LocalTerminalRegistry, sanitize_local_command_output};
 
     #[test]
     fn routes_output_to_subscribers() {
@@ -260,6 +269,20 @@ mod tests {
         assert_eq!(
             receiver.recv_timeout(Duration::from_millis(50)).unwrap(),
             "visible output"
+        );
+    }
+
+    #[test]
+    fn strips_internal_command_echo_without_dropping_command_output() {
+        let output = concat!(
+            "PS C:\\> $__nocterm_source = 'pwd'; Write-Output \"__NOCTERM_LOCAL_AI_DONE_x__0\"\r\n",
+            "C:\\Users\\runneradmin\r\n",
+            "__NOCTERM_LOCAL_AI_DONE_x__0\r\n"
+        );
+
+        assert_eq!(
+            sanitize_local_command_output(output).trim(),
+            r"C:\Users\runneradmin"
         );
     }
 

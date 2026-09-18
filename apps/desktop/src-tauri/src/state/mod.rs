@@ -2,7 +2,7 @@ mod local_terminal;
 pub mod session_password;
 
 pub use local_terminal::LocalTerminalRegistry;
-pub(crate) use local_terminal::local_completion_status;
+pub(crate) use local_terminal::{local_completion_status, sanitize_local_command_output};
 
 use crate::commands::{
     ai_process::AiProcessManager, ai_runtime::PersistentProviderRuntimeRegistry,

@@ -3,7 +3,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 use nocterm_domain::terminal::{LocalTerminalPort, SshTerminalPort};
 use nocterm_domain::{
     connection::ConnectionProfile,
-    terminal::{OpenedSshExecution, OpenedTerminal},
+    terminal::{LocalTerminalInput, OpenedSshExecution, OpenedTerminal},
 };
 
 use crate::error::AppError;
@@ -95,9 +95,14 @@ impl LocalTerminalService {
             .map_err(local_terminal_error)
     }
 
-    pub fn completion_command(&self, terminal_id: &str, marker: &str) -> Result<String, AppError> {
+    pub fn command_input(
+        &self,
+        terminal_id: &str,
+        command: &str,
+        marker: &str,
+    ) -> Result<LocalTerminalInput, AppError> {
         self.backend
-            .completion_command(terminal_id, marker)
+            .command_input(terminal_id, command, marker)
             .map_err(local_terminal_error)
     }
 
@@ -212,8 +217,16 @@ mod tests {
             Ok(())
         }
 
-        fn completion_command(&self, _terminal_id: &str, marker: &str) -> Result<String, String> {
-            Ok(format!("echo {marker}0"))
+        fn command_input(
+            &self,
+            _terminal_id: &str,
+            command: &str,
+            marker: &str,
+        ) -> Result<LocalTerminalInput, String> {
+            Ok(LocalTerminalInput {
+                execution: format!("{command}\recho {marker}0\r"),
+                interrupt: "\u{3}".to_string(),
+            })
         }
 
         fn resize(&self, _terminal_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {

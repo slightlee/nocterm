@@ -11,6 +11,16 @@ pub struct OpenedTerminal {
     pub reader: Box<dyn Read + Send>,
 }
 
+/// 写入交互式本地 Shell 的完整按键序列。
+///
+/// Windows ConPTY 必须先提交单行命令，再把 Ctrl+C 放在恢复探针之前；具体序列由
+/// Infrastructure 根据实际 Shell 生成，调用方不得自行拼接平台语法。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalTerminalInput {
+    pub execution: String,
+    pub interrupt: String,
+}
+
 /// 独立 SSH exec 通道除输出外还必须返回协议级退出状态，供 Agent 区分成功与失败。
 pub struct OpenedSshExecution {
     pub id: String,
@@ -64,8 +74,13 @@ pub trait LocalTerminalPort: Send + Sync {
 
     fn write(&self, terminal_id: &str, data: &str) -> Result<(), String>;
 
-    /// 为当前终端实际使用的 Shell 生成“保存上一命令退出码并输出标记”的命令。
-    fn completion_command(&self, terminal_id: &str, marker: &str) -> Result<String, String>;
+    /// 为实际 Shell 生成执行与中断序列，并用随机标记返回可信退出状态。
+    fn command_input(
+        &self,
+        terminal_id: &str,
+        command: &str,
+        marker: &str,
+    ) -> Result<LocalTerminalInput, String>;
 
     fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), String>;
 

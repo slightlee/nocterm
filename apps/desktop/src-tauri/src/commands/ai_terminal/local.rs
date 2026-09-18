@@ -11,7 +11,7 @@ use std::{
 use super::TerminalCommandResult;
 use crate::{
     commands::ai_policy::{AI_OUTPUT_LIMIT_BYTES, truncate_utf8, validate_approved_command},
-    state::{LocalTerminalRegistry, local_completion_status},
+    state::{LocalTerminalRegistry, local_completion_status, sanitize_local_command_output},
 };
 
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -41,14 +41,11 @@ pub(crate) fn execute_local_sync(
     }
     let receiver = local_terminals.subscribe(terminal_id);
     let marker = local_completion_marker()?;
-    let completion_command = local_terminal_service
-        .completion_command(terminal_id, &marker)
+    let command_input = local_terminal_service
+        .command_input(terminal_id, &command, &marker)
         .map_err(|error| error.message.to_string())?;
     local_terminals.begin_output_marker_filter(terminal_id, &marker)?;
-    // 两次回车分别提交用户命令和完成探针，后者读取前一命令在当前 Shell 中的状态。
-    if let Err(error) =
-        local_terminal_service.write(terminal_id, &format!("{command}\r{completion_command}\r"))
-    {
+    if let Err(error) = local_terminal_service.write(terminal_id, &command_input.execution) {
         local_terminals.clear_output_marker_filter(terminal_id, &marker);
         return Err(error.message.to_string());
     }
@@ -61,6 +58,7 @@ pub(crate) fn execute_local_sync(
                 terminal_id,
                 &receiver,
                 &marker,
+                &command_input.interrupt,
             );
             return Err("AI 任务已停止，已中断本地终端命令".to_string());
         }
@@ -72,6 +70,7 @@ pub(crate) fn execute_local_sync(
                 terminal_id,
                 &receiver,
                 &marker,
+                &command_input.interrupt,
             );
             return Err("本地终端命令执行超时，已发送中断信号".to_string());
         }
@@ -88,6 +87,7 @@ pub(crate) fn execute_local_sync(
                         terminal_id,
                         &receiver,
                         &marker,
+                        &command_input.interrupt,
                     );
                     return Err("本地终端命令输出超过 128 KiB，已发送中断信号".to_string());
                 }
@@ -101,11 +101,11 @@ pub(crate) fn execute_local_sync(
     }
     let (result_marker_index, _, exit_code) = local_completion_status(&output, &marker)
         .ok_or_else(|| "本地终端命令结束，但未返回可验证的退出状态".to_string())?;
-    let internal_output_start = output[..=result_marker_index]
-        .find(&marker)
-        .and_then(|index| output[..index].rfind(['\r', '\n']).map(|line| line + 1))
-        .unwrap_or(result_marker_index);
-    output.truncate(internal_output_start);
+    let completion_line_start = output[..result_marker_index]
+        .rfind(['\r', '\n'])
+        .map_or(0, |index| index + 1);
+    output.truncate(completion_line_start);
+    let output = sanitize_local_command_output(&output);
     settle_local_terminal_output(&receiver, cancellation, deadline);
     local_terminals.clear_output_marker_filter(terminal_id, &marker);
     Ok(TerminalCommandResult {
@@ -121,8 +121,9 @@ fn interrupt_local_execution(
     terminal_id: &str,
     receiver: &mpsc::Receiver<String>,
     marker: &str,
+    interrupt_input: &str,
 ) {
-    let _ = local_terminal_service.write(terminal_id, "\u{3}");
+    let _ = local_terminal_service.write(terminal_id, interrupt_input);
     let cleanup_deadline = Instant::now() + LOCAL_TERMINAL_INTERRUPT_SETTLE_LIMIT;
     if drain_until_local_completion(receiver, marker, cleanup_deadline) {
         let not_cancelled = AtomicBool::new(false);
