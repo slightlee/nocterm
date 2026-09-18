@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0-beta.1](https://github.com/slightlee/nocterm/compare/v0.1.0-beta.3...v0.2.0-beta.1) (2026-09-18)
+
+
+### Features
+
+* add AI agent workspace ([f473e9b](https://github.com/slightlee/nocterm/commit/f473e9b5abbdf503be325e99ca6bee09829f1878))
+
+
+### Documentation
+
+* define beta minor release transition ([38d4393](https://github.com/slightlee/nocterm/commit/38d4393213a042a11d93f710c8a550d516c5832a))
+
 ## [0.1.0-beta.3](https://github.com/slightlee/nocterm/compare/v0.1.0-beta.2...v0.1.0-beta.3) (2026-08-31)
 
 
