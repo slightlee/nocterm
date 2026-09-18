@@ -95,7 +95,10 @@ fn create_private_runtime_directory() -> Result<PathBuf, String> {
         suffix.push(HEX[usize::from(byte & 0x0f)] as char);
     }
     let path = std::env::temp_dir().join(format!("nocterm-claude-runtime-{suffix}"));
+    #[cfg(unix)]
     let mut builder = DirBuilder::new();
+    #[cfg(not(unix))]
+    let builder = DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;

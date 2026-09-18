@@ -271,7 +271,10 @@ fn create_runtime_directory(
         "nocterm-grok-runtime-{}-{timestamp}-{sequence}",
         std::process::id()
     ));
+    #[cfg(unix)]
     let mut builder = DirBuilder::new();
+    #[cfg(not(unix))]
+    let builder = DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
