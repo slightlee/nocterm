@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0-beta.3](https://github.com/slightlee/nocterm/compare/v0.1.0-beta.2...v0.1.0-beta.3) (2026-08-31)
+
+
+### Features
+
+* refine about page and external links ([b687965](https://github.com/slightlee/nocterm/commit/b687965f0a7976b32f3e728f87f78bdc047145a6))
+
+
+### Bug Fixes
+
+* support squash release commits ([#19](https://github.com/slightlee/nocterm/issues/19)) ([b9d1d6d](https://github.com/slightlee/nocterm/commit/b9d1d6dc21c9c34d95b233ac0b7b3594c4b95d89))
+
 ## [0.1.0-beta.2](https://github.com/slightlee/nocterm/compare/v0.1.0-beta.1...v0.1.0-beta.2) (2026-08-28)
 
 
