@@ -8,8 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::{AppHandle, Runtime};
-
 use super::{
     PersistentProviderSession, PersistentSessionRegistry, PersistentTurnRequest, SessionSlot,
     receive_startup_line,
@@ -39,6 +37,8 @@ impl TestSession {
 }
 
 impl PersistentProviderSession for TestSession {
+    type TurnContext = ();
+
     fn matches_identity(&self, identity: &ProviderSessionIdentity) -> bool {
         self.identity == *identity
     }
@@ -47,9 +47,9 @@ impl PersistentProviderSession for TestSession {
         self.alive.load(Ordering::Acquire)
     }
 
-    fn start_turn<R: Runtime>(
+    fn start_turn(
         &self,
-        _app: AppHandle<R>,
+        _context: Self::TurnContext,
         session_id: String,
         prompt: String,
         _command_policy: AiCommandPolicy,
@@ -126,20 +126,19 @@ fn startup_receive_observes_asynchronous_cancellation_before_protocol_timeout() 
 
 #[test]
 fn first_turn_spawns_and_the_next_turn_reuses_the_same_session() {
-    let app = tauri::test::mock_app();
     let registry = PersistentSessionRegistry::<TestSession>::new("Test");
     let session = Arc::new(TestSession::with_identity(identity("local-one")));
 
     let first = registry
         .start_turn(
-            app.handle().clone(),
+            (),
             request("conversation", "turn-one", identity("local-one")),
             |_, _| Ok(Arc::clone(&session)),
         )
         .unwrap();
     let second = registry
         .start_turn(
-            app.handle().clone(),
+            (),
             request("conversation", "turn-two", identity("local-one")),
             |_, _| panic!("a reusable session must not spawn again"),
         )
@@ -158,21 +157,20 @@ fn first_turn_spawns_and_the_next_turn_reuses_the_same_session() {
 
 #[test]
 fn identity_change_shuts_down_the_old_session_and_spawns_a_replacement() {
-    let app = tauri::test::mock_app();
     let registry = PersistentSessionRegistry::<TestSession>::new("Test");
     let old = Arc::new(TestSession::with_identity(identity("local-one")));
     let replacement = Arc::new(TestSession::with_identity(identity("local-two")));
 
     registry
         .start_turn(
-            app.handle().clone(),
+            (),
             request("conversation", "turn-one", identity("local-one")),
             |_, _| Ok(Arc::clone(&old)),
         )
         .unwrap();
     let replaced = registry
         .start_turn(
-            app.handle().clone(),
+            (),
             request("conversation", "turn-two", identity("local-two")),
             |_, _| Ok(Arc::clone(&replacement)),
         )
@@ -185,15 +183,13 @@ fn identity_change_shuts_down_the_old_session_and_spawns_a_replacement() {
 
 #[test]
 fn concurrent_cold_start_for_the_same_conversation_is_rejected() {
-    let app = tauri::test::mock_app();
     let registry = Arc::new(PersistentSessionRegistry::<TestSession>::new("Test"));
     let worker_registry = Arc::clone(&registry);
-    let worker_handle = app.handle().clone();
     let (spawned_sender, spawned_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
     let worker = thread::spawn(move || {
         worker_registry.start_turn(
-            worker_handle,
+            (),
             request("conversation", "turn-one", identity("local-one")),
             |_, _| {
                 spawned_sender.send(()).unwrap();
@@ -208,7 +204,7 @@ fn concurrent_cold_start_for_the_same_conversation_is_rejected() {
 
     let error = registry
         .start_turn(
-            app.handle().clone(),
+            (),
             request("conversation", "turn-two", identity("local-one")),
             |_, _| panic!("a second cold start must not run its spawn closure"),
         )
@@ -221,17 +217,15 @@ fn concurrent_cold_start_for_the_same_conversation_is_rejected() {
 
 #[test]
 fn stopping_during_spawn_discards_and_shuts_down_the_late_session() {
-    let app = tauri::test::mock_app();
     let registry = Arc::new(PersistentSessionRegistry::<TestSession>::new("Test"));
     let late_session = Arc::new(TestSession::with_identity(identity("local-one")));
     let worker_session = Arc::clone(&late_session);
     let worker_registry = Arc::clone(&registry);
-    let worker_handle = app.handle().clone();
     let (spawned_sender, spawned_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
     let worker = thread::spawn(move || {
         worker_registry.start_turn(
-            worker_handle,
+            (),
             request("conversation", "turn-one", identity("local-one")),
             |_, _| {
                 spawned_sender.send(()).unwrap();

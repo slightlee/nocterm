@@ -1,13 +1,24 @@
-use std::sync::{Arc, Mutex, atomic::AtomicBool};
+use std::sync::{Mutex, atomic::AtomicBool};
 
 use super::output::{
-    HeadlessOutputBudget, HeadlessOutputContext, OutputReservation, emit_lines,
+    AiOutputEmitter, HeadlessOutputBudget, HeadlessOutputContext, OutputReservation, emit_lines,
     validate_readiness_event,
 };
 use crate::commands::ai_provider::HeadlessReadinessRequirement;
 use crate::commands::ai_stream::{MAX_PROVIDER_TURN_OUTPUT_BYTES, redact_token};
+use crate::dto::ai::AiOutputEvent;
 use crate::state::{AiCommandPolicy, AiGatewayBinding, AiGatewayState, AiTarget};
-use tauri::Listener;
+
+#[derive(Default)]
+struct TestOutputEmitter {
+    events: Mutex<Vec<AiOutputEvent>>,
+}
+
+impl AiOutputEmitter for TestOutputEmitter {
+    fn emit_output(&self, event: AiOutputEvent) {
+        self.events.lock().unwrap().push(event);
+    }
+}
 
 #[test]
 fn bridge_tokens_never_leave_headless_output() {
@@ -66,12 +77,7 @@ fn readiness_requires_the_expected_provider_tool_prefix() {
 
 #[test]
 fn terminal_bound_output_is_not_emitted_without_a_real_gateway_call() {
-    let app = tauri::test::mock_app();
-    let output_events = Arc::new(Mutex::new(Vec::new()));
-    let captured = Arc::clone(&output_events);
-    app.listen("nocterm://ai-output", move |event| {
-        captured.lock().unwrap().push(event.payload().to_string());
-    });
+    let emitter = TestOutputEmitter::default();
     let gateway = AiGatewayState::default();
     let token = "test-bridge-token";
     gateway
@@ -91,7 +97,7 @@ fn terminal_bound_output_is_not_emitted_without_a_real_gateway_call() {
     let budget = HeadlessOutputBudget::default();
     let failed = AtomicBool::new(false);
     let context = HeadlessOutputContext {
-        app: app.handle(),
+        emitter: &emitter,
         session_id: "ai-test",
         connection_id: Some(7),
         bridge_token: Some(token),
@@ -118,8 +124,8 @@ fn terminal_bound_output_is_not_emitted_without_a_real_gateway_call() {
         &context,
         Some(&requirement)
     ));
-    let events = output_events.lock().unwrap();
+    let events = emitter.events.lock().unwrap();
     assert_eq!(events.len(), 1);
-    assert!(events[0].contains("missing nocterm call"));
-    assert!(!events[0].contains("Mings-Mac.local"));
+    assert!(events[0].data.contains("missing nocterm call"));
+    assert!(!events[0].data.contains("Mings-Mac.local"));
 }

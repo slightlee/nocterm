@@ -134,7 +134,7 @@ pub(super) fn start_headless_session(
         let output_failed = Arc::clone(&output_failed);
         thread::spawn(move || {
             let context = HeadlessOutputContext {
-                app: &app,
+                emitter: &app,
                 session_id: &session_id,
                 connection_id,
                 bridge_token: bridge_token.as_deref(),
@@ -154,7 +154,7 @@ pub(super) fn start_headless_session(
         let output_failed = Arc::clone(&output_failed);
         thread::spawn(move || {
             let context = HeadlessOutputContext {
-                app: &app,
+                emitter: &app,
                 session_id: &session_id,
                 connection_id,
                 bridge_token: bridge_token.as_deref(),

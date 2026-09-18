@@ -547,6 +547,8 @@ fn handle_server_request(
 }
 
 impl PersistentProviderSession for GrokAcpServer {
+    type TurnContext = AppHandle;
+
     fn matches_identity(&self, identity: &ProviderSessionIdentity) -> bool {
         GrokAcpServer::matches_identity(self, identity)
     }
@@ -555,9 +557,9 @@ impl PersistentProviderSession for GrokAcpServer {
         GrokAcpServer::is_alive(self)
     }
 
-    fn start_turn<R: Runtime>(
+    fn start_turn(
         &self,
-        app: AppHandle<R>,
+        app: Self::TurnContext,
         session_id: String,
         prompt: String,
         command_policy: AiCommandPolicy,

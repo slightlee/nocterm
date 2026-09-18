@@ -30,14 +30,25 @@ pub(super) struct HeadlessOutputBudget {
 
 /// 输出读取所需的不可变任务上下文。
 /// 引用由两个短生命周期读取线程共享，任务状态仍由父模块统一回收。
-pub(super) struct HeadlessOutputContext<'a, R: Runtime = tauri::Wry> {
-    pub app: &'a AppHandle<R>,
+pub(super) struct HeadlessOutputContext<'a, E: AiOutputEmitter + ?Sized> {
+    pub emitter: &'a E,
     pub session_id: &'a str,
     pub connection_id: Option<i64>,
     pub bridge_token: Option<&'a str>,
     pub gateway: &'a AiGatewayState,
     pub budget: &'a HeadlessOutputBudget,
     pub failed: &'a AtomicBool,
+}
+
+/// 输出状态机只依赖稳定事件契约，避免单元测试加载 Tauri 的 Windows mock runtime。
+pub(super) trait AiOutputEmitter: Sync {
+    fn emit_output(&self, event: AiOutputEvent);
+}
+
+impl<R: Runtime> AiOutputEmitter for AppHandle<R> {
+    fn emit_output(&self, event: AiOutputEvent) {
+        let _ = self.emit("nocterm://ai-output", event);
+    }
 }
 
 /// 预算拒绝分为首次和后续两种，使并发线程只向 UI 报告一次超限。
@@ -81,10 +92,10 @@ impl HeadlessOutputBudget {
 /// 3. 终端绑定任务至少真实调用过一次当前 Gateway。
 ///
 /// 任一校验失败都会设置共享失败标志，由父模块终止进程并统一发出退出事件。
-pub(super) fn emit_lines<T: std::io::Read, R: Runtime>(
+pub(super) fn emit_lines<T: std::io::Read, E: AiOutputEmitter + ?Sized>(
     stream: &str,
     reader: T,
-    context: &HeadlessOutputContext<'_, R>,
+    context: &HeadlessOutputContext<'_, E>,
     readiness_requirement: Option<&HeadlessReadinessRequirement>,
 ) -> bool {
     let mut readiness_satisfied = readiness_requirement.is_none();
@@ -113,15 +124,12 @@ pub(super) fn emit_lines<T: std::io::Read, R: Runtime>(
             OutputReservation::Accepted => {}
             OutputReservation::FirstRejection => {
                 context.failed.store(true, Ordering::Release);
-                let _ = context.app.emit(
-                    "nocterm://ai-output",
-                    AiOutputEvent {
-                        session_id: context.session_id.into(),
-                        connection_id: context.connection_id,
-                        stream: "stderr".into(),
-                        data: PROVIDER_TURN_OUTPUT_LIMIT_MESSAGE.into(),
-                    },
-                );
+                context.emitter.emit_output(AiOutputEvent {
+                    session_id: context.session_id.into(),
+                    connection_id: context.connection_id,
+                    stream: "stderr".into(),
+                    data: PROVIDER_TURN_OUTPUT_LIMIT_MESSAGE.into(),
+                });
                 return false;
             }
             OutputReservation::Rejected => {
@@ -198,8 +206,8 @@ pub(super) fn emit_lines<T: std::io::Read, R: Runtime>(
     true
 }
 
-fn has_required_gateway_call<R: Runtime>(
-    context: &HeadlessOutputContext<'_, R>,
+fn has_required_gateway_call<E: AiOutputEmitter + ?Sized>(
+    context: &HeadlessOutputContext<'_, E>,
 ) -> Result<bool, String> {
     let Some(token) = context.bridge_token else {
         return Ok(false);
@@ -208,20 +216,17 @@ fn has_required_gateway_call<R: Runtime>(
 }
 
 /// 只有通过全部前置校验的行才能进入公共 AI 输出事件。
-fn emit_headless_line<R: Runtime>(
+fn emit_headless_line<E: AiOutputEmitter + ?Sized>(
     stream: &str,
-    context: &HeadlessOutputContext<'_, R>,
+    context: &HeadlessOutputContext<'_, E>,
     data: String,
 ) {
-    let _ = context.app.emit(
-        "nocterm://ai-output",
-        AiOutputEvent {
-            session_id: context.session_id.into(),
-            connection_id: context.connection_id,
-            stream: stream.into(),
-            data,
-        },
-    );
+    context.emitter.emit_output(AiOutputEvent {
+        session_id: context.session_id.into(),
+        connection_id: context.connection_id,
+        stream: stream.into(),
+        data,
+    });
 }
 
 /// 仅识别 Provider 声明的初始化事件；其他 JSONL 事件继续交给输出状态机。
@@ -250,14 +255,14 @@ pub(super) fn validate_readiness_event(
 }
 
 /// 协议和读取错误统一映射到 stderr 流，保持前端事件契约稳定。
-fn emit_headless_error<R: Runtime>(context: &HeadlessOutputContext<'_, R>, data: String) {
-    let _ = context.app.emit(
-        "nocterm://ai-output",
-        AiOutputEvent {
-            session_id: context.session_id.into(),
-            connection_id: context.connection_id,
-            stream: "stderr".into(),
-            data,
-        },
-    );
+fn emit_headless_error<E: AiOutputEmitter + ?Sized>(
+    context: &HeadlessOutputContext<'_, E>,
+    data: String,
+) {
+    context.emitter.emit_output(AiOutputEvent {
+        session_id: context.session_id.into(),
+        connection_id: context.connection_id,
+        stream: "stderr".into(),
+        data,
+    });
 }

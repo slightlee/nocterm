@@ -557,6 +557,8 @@ impl CodexAppServer {
 }
 
 impl PersistentProviderSession for CodexAppServer {
+    type TurnContext = AppHandle;
+
     fn matches_identity(&self, identity: &CodexSessionIdentity) -> bool {
         CodexAppServer::matches_identity(self, identity)
     }
@@ -565,9 +567,9 @@ impl PersistentProviderSession for CodexAppServer {
         CodexAppServer::is_alive(self)
     }
 
-    fn start_turn<R: Runtime>(
+    fn start_turn(
         &self,
-        app: AppHandle<R>,
+        app: Self::TurnContext,
         session_id: String,
         prompt: String,
         command_policy: AiCommandPolicy,

@@ -11,8 +11,6 @@ use std::{
     time::Duration,
 };
 
-use tauri::{AppHandle, Runtime};
-
 use crate::{commands::ai_provider::ProviderSessionIdentity, state::AiCommandPolicy};
 
 const TURN_CANCEL_GRACE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,11 +42,14 @@ pub fn receive_startup_line(
 
 /// Provider 协议只实现自身差异；缓存、并发和资源移除由注册表统一负责。
 pub trait PersistentProviderSession: Send + Sync + 'static {
+    /// 生命周期注册表只转发上下文；具体 Provider 决定是否需要 Tauri AppHandle。
+    type TurnContext;
+
     fn matches_identity(&self, identity: &ProviderSessionIdentity) -> bool;
     fn is_alive(&self) -> bool;
-    fn start_turn<R: Runtime>(
+    fn start_turn(
         &self,
-        app: AppHandle<R>,
+        context: Self::TurnContext,
         session_id: String,
         prompt: String,
         command_policy: AiCommandPolicy,
@@ -114,14 +115,13 @@ impl<S: PersistentProviderSession> PersistentSessionRegistry<S> {
     }
 
     /// 全局锁只保护槽位转换；协议握手和进程关闭都在锁外执行。
-    pub fn start_turn<R, F>(
+    pub fn start_turn<F>(
         &self,
-        app: AppHandle<R>,
+        context: S::TurnContext,
         request: PersistentTurnRequest,
         spawn: F,
     ) -> Result<bool, String>
     where
-        R: Runtime,
         F: FnOnce(Arc<AtomicBool>, SessionTermination) -> Result<Arc<S>, String>,
     {
         let PersistentTurnRequest {
@@ -238,7 +238,7 @@ impl<S: PersistentProviderSession> PersistentSessionRegistry<S> {
         } else {
             continuation_prompt
         };
-        if let Err(error) = server.start_turn(app, session_id, prompt, command_policy) {
+        if let Err(error) = server.start_turn(context, session_id, prompt, command_policy) {
             if is_new || !server.is_alive() {
                 self.remove_ready(&conversation_id, &server);
                 server.shutdown();
