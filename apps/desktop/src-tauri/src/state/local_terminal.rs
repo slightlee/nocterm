@@ -94,9 +94,14 @@ impl LocalTerminalRegistry {
             .lock()
             .map_err(|_| "本地终端输出过滤状态不可用".to_string())?;
         // 一个可见 PTY 只有一条输入流；并发写入会让命令、交互输入和完成标记互相串扰。
-        if filters.contains_key(terminal_id) {
+        if filters
+            .get(terminal_id)
+            .is_some_and(|filter| !filter.completed)
+        {
             return Err("当前本地终端已有 AI 命令正在执行，请等待完成后重试".to_string());
         }
+        // 取消调用方可能已返回，但读取线程仍会处理迟到的完成 marker。
+        // completed 证明 Shell 已重新取得控制权，此时才能用新 marker 原子替换旧状态。
         filters.insert(
             terminal_id.to_string(),
             TerminalOutputFilter {
@@ -387,10 +392,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_overlapping_ai_commands() {
+    fn rejects_overlapping_ai_commands_until_the_previous_marker_arrives() {
         let registry = LocalTerminalRegistry::default();
+        let first_marker = "__NOCTERM_LOCAL_AI_DONE_first__";
         registry
-            .begin_output_marker_filter("local-6", "marker-one")
+            .begin_output_marker_filter("local-6", first_marker)
             .unwrap();
 
         assert!(
@@ -399,7 +405,7 @@ mod tests {
                 .unwrap_err()
                 .contains("已有 AI 命令")
         );
-        registry.clear_output_marker_filter("local-6", "marker-one");
+        registry.visible_output("local-6", &format!("{first_marker}130\r\nPS> "));
         assert!(
             registry
                 .begin_output_marker_filter("local-6", "marker-two")

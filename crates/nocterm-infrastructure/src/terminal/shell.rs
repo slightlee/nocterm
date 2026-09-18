@@ -69,38 +69,9 @@ pub(super) fn completion_command(kind: LocalShellKind, marker: &str) -> String {
     }
 }
 
-/// 生成一次命令执行及取消恢复所需的完整输入序列。
-///
-/// ConPTY 在前台命令运行时不会继续读取下一行输入。PowerShell/CMD 因此把退出状态
-/// 探针与命令放在同一行；取消时 Ctrl+C 后再排入独立探针，确保 Shell 恢复可用。
-pub(super) fn command_input(kind: LocalShellKind, command: &str, marker: &str) -> (String, String) {
-    let completion = completion_command(kind, marker);
-    match kind {
-        LocalShellKind::PowerShell => {
-            // 把用户命令作为数据创建脚本块，避免尾部注释或分号改变内部探针语义；
-            // dot-source 保留 cd、环境变量等对当前可见 Shell 的修改。
-            let source = command.replace('\'', "''");
-            (
-                format!(
-                    "$__nocterm_source = '{source}'; . ([scriptblock]::Create($__nocterm_source)); {completion}\r"
-                ),
-                format!("\u{3}{completion}\r"),
-            )
-        }
-        LocalShellKind::Cmd => (
-            // CALL 触发第二次百分号展开，读取的是用户命令完成后的 ERRORLEVEL。
-            format!("{command} & call echo {marker}%%ERRORLEVEL%%\r"),
-            format!("\u{3}{completion}\r"),
-        ),
-        LocalShellKind::Posix | LocalShellKind::Fish => {
-            (format!("{command}\r{completion}\r"), "\u{3}".to_string())
-        }
-    }
-}
-
 #[cfg(test)]
 mod completion_tests {
-    use super::{LocalShellKind, command_input, completion_command, detect_shell_kind};
+    use super::{LocalShellKind, completion_command, detect_shell_kind};
 
     const MARKER: &str = "__NOCTERM_LOCAL_AI_DONE_test__";
 
@@ -136,35 +107,6 @@ mod completion_tests {
             detect_shell_kind(r"C:\\Windows\\System32\\cmd.exe"),
             LocalShellKind::Cmd
         );
-    }
-
-    #[test]
-    fn keeps_windows_interrupt_ahead_of_the_recovery_probe() {
-        let (powershell_execution, powershell_interrupt) = command_input(
-            LocalShellKind::PowerShell,
-            "Write-Output 'quoted' # trailing comment",
-            MARKER,
-        );
-        assert!(powershell_execution.contains("'Write-Output ''quoted'' # trailing comment'"));
-        assert!(powershell_execution.contains(&format!("Write-Output \"{MARKER}")));
-        assert_eq!(powershell_execution.matches('\r').count(), 1);
-        assert!(powershell_interrupt.starts_with('\u{3}'));
-        assert!(powershell_interrupt.ends_with('\r'));
-
-        let (cmd_execution, cmd_interrupt) = command_input(LocalShellKind::Cmd, "dir", MARKER);
-        assert_eq!(
-            cmd_execution,
-            format!("dir & call echo {MARKER}%%ERRORLEVEL%%\r")
-        );
-        assert_eq!(cmd_interrupt, format!("\u{3}echo {MARKER}%ERRORLEVEL%\r"));
-
-        let (posix_execution, posix_interrupt) =
-            command_input(LocalShellKind::Posix, "pwd", MARKER);
-        assert_eq!(
-            posix_execution,
-            format!("pwd\rprintf '\\n{MARKER}%s\\n' \"$?\"\r")
-        );
-        assert_eq!(posix_interrupt, "\u{3}");
     }
 }
 

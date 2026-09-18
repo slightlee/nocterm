@@ -7,14 +7,14 @@ use std::{
     },
 };
 
-use nocterm_domain::terminal::{LocalTerminalInput, LocalTerminalPort, OpenedTerminal};
+use nocterm_domain::terminal::{LocalTerminalPort, OpenedTerminal};
 use portable_pty::{Child, MasterPty, PtySize, native_pty_system};
 
 /// 默认 Shell 的选择是本模块唯一带平台差异的一步，单独成文件；PTY 生命周期本身
 /// 由 `portable-pty` 抹平差异，因此下面的代码不含任何平台 `cfg`。
 mod shell;
 
-use shell::{LocalShellKind, command_input, local_shell_command};
+use shell::{LocalShellKind, completion_command, local_shell_command};
 
 /// PTY 基础设施错误保留底层上下文，由 Application 边界转换为稳定错误码。
 #[derive(Debug)]
@@ -110,12 +110,11 @@ impl LocalTerminalManager {
             .map_err(error("写入本地终端失败"))
     }
 
-    pub fn command_input(
+    pub fn completion_command(
         &self,
         terminal_id: &str,
-        command: &str,
         marker: &str,
-    ) -> Result<LocalTerminalInput, TerminalError> {
+    ) -> Result<String, TerminalError> {
         let terminals = self
             .terminals
             .lock()
@@ -123,11 +122,7 @@ impl LocalTerminalManager {
         let terminal = terminals
             .get(terminal_id)
             .ok_or_else(|| TerminalError("本地终端不存在或已关闭".to_string()))?;
-        let (execution, interrupt) = command_input(terminal.shell_kind, command, marker);
-        Ok(LocalTerminalInput {
-            execution,
-            interrupt,
-        })
+        Ok(completion_command(terminal.shell_kind, marker))
     }
 
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), TerminalError> {
@@ -187,13 +182,8 @@ impl LocalTerminalPort for LocalTerminalManager {
         LocalTerminalManager::write(self, terminal_id, data).map_err(|error| error.to_string())
     }
 
-    fn command_input(
-        &self,
-        terminal_id: &str,
-        command: &str,
-        marker: &str,
-    ) -> Result<LocalTerminalInput, String> {
-        LocalTerminalManager::command_input(self, terminal_id, command, marker)
+    fn completion_command(&self, terminal_id: &str, marker: &str) -> Result<String, String> {
+        LocalTerminalManager::completion_command(self, terminal_id, marker)
             .map_err(|error| error.to_string())
     }
 

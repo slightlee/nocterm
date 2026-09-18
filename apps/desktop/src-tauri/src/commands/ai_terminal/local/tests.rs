@@ -1,5 +1,5 @@
 use std::{
-    io::Read,
+    io::{Cursor, Read},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -9,9 +9,12 @@ use std::{
 };
 
 use nocterm_application::terminal::LocalTerminalService;
+use nocterm_domain::terminal::{LocalTerminalPort, OpenedTerminal};
 use nocterm_infrastructure::terminal::LocalTerminalManager;
 
-use super::{drain_until_local_completion, execute_local_sync};
+use super::{
+    LocalInterruption, drain_until_local_completion, execute_local_sync, interrupt_local_execution,
+};
 use crate::state::{LocalTerminalRegistry, local_completion_status};
 
 #[test]
@@ -53,6 +56,133 @@ fn local_completion_status_distinguishes_command_echo_from_result() {
     assert_eq!(
         local_completion_status(&format!("{marker}-1073741510\r"), marker),
         Some((0, 11, -1_073_741_510))
+    );
+}
+
+struct InterruptTerminal {
+    fail_write: bool,
+}
+
+impl LocalTerminalPort for InterruptTerminal {
+    fn open(&self, _cols: u16, _rows: u16) -> Result<OpenedTerminal, String> {
+        Ok(OpenedTerminal {
+            id: "local-test".to_string(),
+            reader: Box::new(Cursor::new(Vec::new())),
+        })
+    }
+
+    fn write(&self, _terminal_id: &str, _data: &str) -> Result<(), String> {
+        if self.fail_write {
+            return Err("interrupt write failed".to_string());
+        }
+        Ok(())
+    }
+
+    fn completion_command(&self, _terminal_id: &str, marker: &str) -> Result<String, String> {
+        Ok(format!("echo {marker}0"))
+    }
+
+    fn resize(&self, _terminal_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn close(&self, _terminal_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn interruption_releases_the_terminal_only_after_observing_its_marker() {
+    let service = LocalTerminalService::new(Arc::new(InterruptTerminal { fail_write: false }));
+    let registry = LocalTerminalRegistry::default();
+    let marker = "__NOCTERM_LOCAL_AI_DONE_recovered__";
+    registry
+        .begin_output_marker_filter("local-test", marker)
+        .unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    sender.send(format!("output\r\n{marker}130\r\n")).unwrap();
+
+    assert_eq!(
+        interrupt_local_execution(
+            &service,
+            &registry,
+            "local-test",
+            &receiver,
+            marker,
+            Instant::now() + Duration::from_millis(100),
+        ),
+        LocalInterruption::Recovered
+    );
+    assert!(
+        registry
+            .begin_output_marker_filter("local-test", "next-marker")
+            .is_ok()
+    );
+}
+
+#[test]
+fn interruption_keeps_the_terminal_reserved_while_recovery_is_pending() {
+    let service = LocalTerminalService::new(Arc::new(InterruptTerminal { fail_write: false }));
+    let registry = LocalTerminalRegistry::default();
+    let marker = "__NOCTERM_LOCAL_AI_DONE_pending__";
+    registry
+        .begin_output_marker_filter("local-test", marker)
+        .unwrap();
+    let (_sender, receiver) = std::sync::mpsc::channel::<String>();
+
+    assert_eq!(
+        interrupt_local_execution(
+            &service,
+            &registry,
+            "local-test",
+            &receiver,
+            marker,
+            Instant::now() + Duration::from_millis(10),
+        ),
+        LocalInterruption::RecoveryPending
+    );
+    assert!(
+        registry
+            .begin_output_marker_filter("local-test", "next-marker")
+            .unwrap_err()
+            .contains("已有 AI 命令")
+    );
+
+    registry.visible_output("local-test", &format!("{marker}130\r\nPS> "));
+    assert!(
+        registry
+            .begin_output_marker_filter("local-test", "next-marker")
+            .is_ok()
+    );
+}
+
+#[test]
+fn failed_interrupt_write_does_not_release_the_terminal() {
+    let service = LocalTerminalService::new(Arc::new(InterruptTerminal { fail_write: true }));
+    let registry = LocalTerminalRegistry::default();
+    let marker = "__NOCTERM_LOCAL_AI_DONE_write_failed__";
+    registry
+        .begin_output_marker_filter("local-test", marker)
+        .unwrap();
+    let (_sender, receiver) = std::sync::mpsc::channel::<String>();
+
+    let result = interrupt_local_execution(
+        &service,
+        &registry,
+        "local-test",
+        &receiver,
+        marker,
+        Instant::now() + Duration::from_millis(10),
+    );
+    assert!(matches!(
+        result,
+        LocalInterruption::WriteFailed(error) if error.contains("interrupt write failed")
+    ));
+    assert!(
+        registry
+            .begin_output_marker_filter("local-test", "next-marker")
+            .unwrap_err()
+            .contains("已有 AI 命令")
     );
 }
 
@@ -141,14 +271,12 @@ fn local_approved_execution_uses_the_existing_visible_pty() {
     });
     thread::sleep(Duration::from_millis(250));
     cancellation.store(true, Ordering::Release);
-    assert!(
-        execution
-            .join()
-            .expect("join cancelled local command")
-            .expect_err("cancel local command")
-            .contains("已停止")
-    );
-    // 取消收尾后再执行一条命令，证明 PTY 没有被遗留过滤器永久占用。
+    let cancellation_error = execution
+        .join()
+        .expect("join cancelled local command")
+        .expect_err("cancel local command");
+    assert!(cancellation_error.contains("已停止"));
+    // Shell 若已返回 marker 可立即复用；否则必须快速拒绝，不能把新命令写进忙碌的 PTY。
     let after_cancel = execute_local_sync(
         &service,
         &registry,
@@ -157,9 +285,21 @@ fn local_approved_execution_uses_the_existing_visible_pty() {
         "pwd",
         &AtomicBool::new(false),
         Instant::now() + Duration::from_secs(5),
-    )
-    .expect("execute local command after cancellation");
-    assert_eq!(after_cancel.exit_code, 0);
+    );
+    if cancellation_error.contains("仍在恢复") || cancellation_error.contains("发送失败") {
+        assert!(
+            after_cancel
+                .expect_err("reject command while terminal recovery is pending")
+                .contains("已有 AI 命令")
+        );
+    } else {
+        assert_eq!(
+            after_cancel
+                .expect("execute local command after completed cancellation")
+                .exit_code,
+            0
+        );
+    }
     let terminal_output = visible_output.lock().unwrap();
     assert!(!terminal_output.contains("__NOCTERM_"));
     assert!(!terminal_output.contains("printf '\\n"));

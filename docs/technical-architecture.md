@@ -300,7 +300,7 @@ flowchart TD
     RESULT --> RESPONSE["结构化结果返回 Provider"]
 ```
 
-本地命令写入当前可见 PTY，继承该 Shell 的目录和环境，并使用随机完成探针取得真实退出码。SSH 命令复用当前已认证连接的独立 exec channel，不写入可见终端，也不继承可见 Shell 临时 `cd`、环境变量或虚拟环境。
+本地命令写入当前可见 PTY，继承该 Shell 的目录和环境，并使用随机完成探针取得真实退出码。取消或超时时，Ctrl+C 只表示已经请求中断；只有读取到该轮完成探针才证明 Shell 已恢复。恢复前本地 PTY 保持占用并拒绝新的 AI 命令，避免命令写入仍忙碌的 Shell。SSH 命令复用当前已认证连接的独立 exec channel，不写入可见终端，也不继承可见 Shell 临时 `cd`、环境变量或虚拟环境。
 
 Provider 退出、turn 结束、停止、目标变化或会话重置时，token、审批和临时资源一起撤销。迟到事件必须匹配当前 generation，不能覆盖新会话。
 

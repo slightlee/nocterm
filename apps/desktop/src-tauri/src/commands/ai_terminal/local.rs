@@ -19,6 +19,13 @@ const LOCAL_TERMINAL_QUIET_PERIOD: Duration = Duration::from_millis(100);
 const LOCAL_TERMINAL_SETTLE_LIMIT: Duration = Duration::from_millis(500);
 const LOCAL_TERMINAL_INTERRUPT_SETTLE_LIMIT: Duration = Duration::from_secs(2);
 
+#[derive(Debug, PartialEq, Eq)]
+enum LocalInterruption {
+    Recovered,
+    RecoveryPending,
+    WriteFailed(String),
+}
+
 /// 把已获授权的命令写入当前可见 PTY，并把同一结果返回 Provider。
 pub(crate) fn execute_local_sync(
     local_terminal_service: &nocterm_application::terminal::LocalTerminalService,
@@ -39,40 +46,45 @@ pub(crate) fn execute_local_sync(
     {
         return Err("目标本地终端不存在或已重新连接".to_string());
     }
-    let receiver = local_terminals.subscribe(terminal_id);
     let marker = local_completion_marker()?;
-    let command_input = local_terminal_service
-        .command_input(terminal_id, &command, &marker)
+    let completion_command = local_terminal_service
+        .completion_command(terminal_id, &marker)
         .map_err(|error| error.message.to_string())?;
     local_terminals.begin_output_marker_filter(terminal_id, &marker)?;
-    if let Err(error) = local_terminal_service.write(terminal_id, &command_input.execution) {
+    // 先取得 PTY 独占权再订阅，避免恢复期间的重试遗留无效订阅者。
+    // 订阅仍发生在写入命令之前，因此不会漏掉本轮输出。
+    let receiver = local_terminals.subscribe(terminal_id);
+    // 两次回车分别提交用户命令和完成探针，后者读取前一命令在当前 Shell 中的状态。
+    if let Err(error) =
+        local_terminal_service.write(terminal_id, &format!("{command}\r{completion_command}\r"))
+    {
         local_terminals.clear_output_marker_filter(terminal_id, &marker);
         return Err(error.message.to_string());
     }
     let mut output = String::new();
     loop {
         if cancellation.load(Ordering::Acquire) {
-            interrupt_local_execution(
+            let interruption = interrupt_local_execution(
                 local_terminal_service,
                 local_terminals,
                 terminal_id,
                 &receiver,
                 &marker,
-                &command_input.interrupt,
+                Instant::now() + LOCAL_TERMINAL_INTERRUPT_SETTLE_LIMIT,
             );
-            return Err("AI 任务已停止，已中断本地终端命令".to_string());
+            return Err(interruption_error("AI 任务已停止", interruption));
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            interrupt_local_execution(
+            let interruption = interrupt_local_execution(
                 local_terminal_service,
                 local_terminals,
                 terminal_id,
                 &receiver,
                 &marker,
-                &command_input.interrupt,
+                Instant::now() + LOCAL_TERMINAL_INTERRUPT_SETTLE_LIMIT,
             );
-            return Err("本地终端命令执行超时，已发送中断信号".to_string());
+            return Err(interruption_error("本地终端命令执行超时", interruption));
         }
         match receiver.recv_timeout(remaining.min(CANCELLATION_POLL_INTERVAL)) {
             Ok(data) => {
@@ -81,15 +93,18 @@ pub(crate) fn execute_local_sync(
                     break;
                 }
                 if truncate_utf8(&mut output, AI_OUTPUT_LIMIT_BYTES) {
-                    interrupt_local_execution(
+                    let interruption = interrupt_local_execution(
                         local_terminal_service,
                         local_terminals,
                         terminal_id,
                         &receiver,
                         &marker,
-                        &command_input.interrupt,
+                        Instant::now() + LOCAL_TERMINAL_INTERRUPT_SETTLE_LIMIT,
                     );
-                    return Err("本地终端命令输出超过 128 KiB，已发送中断信号".to_string());
+                    return Err(interruption_error(
+                        "本地终端命令输出超过 128 KiB",
+                        interruption,
+                    ));
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -101,10 +116,13 @@ pub(crate) fn execute_local_sync(
     }
     let (result_marker_index, _, exit_code) = local_completion_status(&output, &marker)
         .ok_or_else(|| "本地终端命令结束，但未返回可验证的退出状态".to_string())?;
-    let completion_line_start = output[..result_marker_index]
-        .rfind(['\r', '\n'])
-        .map_or(0, |index| index + 1);
-    output.truncate(completion_line_start);
+    let internal_output_start = output[..=result_marker_index]
+        .find(&marker)
+        .and_then(|index| output[..index].rfind(['\r', '\n']).map(|line| line + 1))
+        .unwrap_or(result_marker_index);
+    output.truncate(internal_output_start);
+    // 取消后的迟到 marker 可能在下一轮订阅建立前后到达；保留前缀属于内部协议，
+    // 无论来自当前轮还是上一轮都不能返回给 Provider。
     let output = sanitize_local_command_output(&output);
     settle_local_terminal_output(&receiver, cancellation, deadline);
     local_terminals.clear_output_marker_filter(terminal_id, &marker);
@@ -114,22 +132,39 @@ pub(crate) fn execute_local_sync(
     })
 }
 
-/// Ctrl+C 后完成探针可能仍在 PTY 输入队列中；短暂等待 Shell 消费后再释放 UI 过滤器。
+/// Ctrl+C 只是中断请求；只有观察到当前 marker 才能证明 Shell 已恢复并释放 PTY。
 fn interrupt_local_execution(
     local_terminal_service: &nocterm_application::terminal::LocalTerminalService,
     local_terminals: &LocalTerminalRegistry,
     terminal_id: &str,
     receiver: &mpsc::Receiver<String>,
     marker: &str,
-    interrupt_input: &str,
-) {
-    let _ = local_terminal_service.write(terminal_id, interrupt_input);
-    let cleanup_deadline = Instant::now() + LOCAL_TERMINAL_INTERRUPT_SETTLE_LIMIT;
+    cleanup_deadline: Instant,
+) -> LocalInterruption {
+    if let Err(error) = local_terminal_service.write(terminal_id, "\u{3}") {
+        return LocalInterruption::WriteFailed(error.message.to_string());
+    }
     if drain_until_local_completion(receiver, marker, cleanup_deadline) {
         let not_cancelled = AtomicBool::new(false);
         settle_local_terminal_output(receiver, &not_cancelled, cleanup_deadline);
+        local_terminals.clear_output_marker_filter(terminal_id, marker);
+        return LocalInterruption::Recovered;
     }
-    local_terminals.clear_output_marker_filter(terminal_id, marker);
+    // 不能把“已写入 Ctrl+C”当成“前台命令已经退出”。过滤器继续持有 PTY，
+    // 直到读取线程收到迟到 marker；否则下一条 AI 命令会写进仍忙碌的 Shell。
+    LocalInterruption::RecoveryPending
+}
+
+fn interruption_error(reason: &str, interruption: LocalInterruption) -> String {
+    match interruption {
+        LocalInterruption::Recovered => format!("{reason}，已中断本地终端命令"),
+        LocalInterruption::RecoveryPending => {
+            format!("{reason}，已发送中断请求；本地终端仍在恢复，恢复完成前不会执行新的 AI 命令")
+        }
+        LocalInterruption::WriteFailed(error) => {
+            format!("{reason}，但中断请求发送失败：{error}；本地终端恢复完成前不会执行新的 AI 命令")
+        }
+    }
 }
 
 fn drain_until_local_completion(
