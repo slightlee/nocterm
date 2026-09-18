@@ -1,0 +1,4 @@
+[env]
+# Tauri 仅在该模式下为 Windows MSVC 测试产物嵌入 Common Controls v6 manifest。
+# 缺少 manifest 会使链接 Tauri 的测试进程在启动前返回 STATUS_ENTRYPOINT_NOT_FOUND。
+__TAURI_WORKSPACE__ = "true"
