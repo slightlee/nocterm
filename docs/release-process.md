@@ -43,7 +43,7 @@ Nocterm 使用四个发布阶段：
 - 未实际生成和分发安装包的日常提交不递增产品版本；
 - SemVer 允许 `+build` 元数据，但 Nocterm 产品版本、Tag 和安装包名称暂不使用；构建信息单独记录 Git Commit 和 CI Run ID，避免平台工具排序不一致。
 
-当前首个内测目标从 `0.1.0-beta.1` 开始。Alpha 规则为后续大功能早期验证保留，不要求为了流程完整而补发无实际价值的 Alpha 包。
+Alpha 只在大功能需要早期验证时使用，不要求为了流程完整而补发没有实际价值的 Alpha 包。
 
 ## 3. 正式版本递增规则
 
@@ -123,11 +123,11 @@ Beta 可以保留明确记录的非核心缺失和 P2/P3，但以下声明支持
 - SSH 终端输入输出、重连和会话关闭；
 - SFTP 目录浏览、上传、下载、取消和连接释放。
 
-设置、服务器监控和 Agent 等未纳入本轮范围的能力可以不阻断，但必须在发布说明中明确。已知 P0 或上述核心范围内的 P1 会阻断 Beta 分发。
+设置、AI 面板等附加能力是否纳入某个 Beta 的声明范围，必须在发布验收 Issue 和发布说明中明确；一旦声明支持，就必须执行 `docs/testing.md` 对应流程，并按平台、Provider 和认证方式记录未验证组合。尚未实现的独立服务器监控页不属于当前发布能力。已知 P0 或声明范围内的 P1 会阻断 Beta 分发。
 
 ### 6.4 RC
 
-进入 RC 前必须冻结功能范围，并完成 `docs/testing/` 中 macOS、Windows 对应流程。RC 不得包含已知 P0/P1；任何代码变更都必须重新生成安装包并至少执行受影响路径和基础冒烟测试。
+进入 RC 前必须冻结功能范围，并完成 `docs/testing.md` 中 macOS、Windows 对应流程。RC 不得包含已知 P0/P1；任何代码变更都必须重新生成安装包并至少执行受影响路径和基础冒烟测试。
 
 如果修复不改变功能范围，发布新的 `rc.N`；如果重新增加功能或改变既定行为，退出当前 RC 周期并重新确定基础版本。
 
@@ -135,7 +135,7 @@ Beta 可以保留明确记录的非核心缺失和 P2/P3，但以下声明支持
 
 正式版还必须满足：
 
-- `docs/roadmap/capability-matrix.md` 中本次承诺的能力达到双平台验收状态；
+- 本次承诺的能力已按 `docs/testing.md` 完成双平台验收并留存脱敏记录；
 - 安装包签名、公证和分发方式已确定并验证；
 - 从上一受支持版本升级时，本地数据库和系统凭据保持可用；
 - 最终候选安装包与正式发布产物来自同一提交和同一构建配置；
@@ -148,7 +148,7 @@ Beta 可以保留明确记录的非核心缺失和 P2/P3，但以下声明支持
 - Migration 失败必须保持原数据可恢复，不得留下部分升级状态；
 - 系统凭据引用升级后必须继续有效，认证方式变化不得静默删除已有凭据；
 - 降级若不受支持，必须在发布说明中写明，不能用“重新安装”暗示用户数据一定安全；
-- `com.nocterm.desktop` 等应用标识属于持久化和系统权限边界，修改时必须新增 ADR，并提供迁移与并存策略；
+- `com.nocterm.desktop` 等应用标识属于持久化和系统权限边界，修改时必须在技术架构的“关键技术决策”中记录原因，并提供迁移与并存策略；
 - Beta 可以不承诺跨大版本降级，但仍不得容忍无提示的数据损坏。
 
 ## 8. 平台产物、签名与供应链
@@ -198,12 +198,7 @@ corepack pnpm release:build:windows
 
 ## 9. 验收记录
 
-验收分别记录操作系统版本、CPU 架构、安装包名称、Git Commit、SSH 认证方式和测试结果。SSH、SFTP 与凭据按以下文档执行：
-
-- `docs/testing/cross-platform-smoke.md`；
-- `docs/testing/sftp-smoke.md`。
-
-只有在目标系统真实运行后，才能更新能力矩阵中的平台验收状态。浏览器预览、单元测试、CI 或另一平台的结果不能代替目标安装包验收。
+验收分别记录操作系统版本、CPU 架构、安装包名称、Git Commit、SSH 认证方式和测试结果，并统一执行 `docs/testing.md`。只有在目标系统真实运行后才能声明对应平台通过；浏览器预览、单元测试、CI 或另一平台的结果不能代替目标安装包验收。
 
 每个准备分发的候选版本必须创建或维护一条“发布验收”Issue，集中记录 Git Tag、完整 Commit SHA、CI Run、全部安装包 SHA-256、逐平台真实运行结果、已知问题等级和最终发布决定。该 Issue 在 Draft 产物生成前可以先建立，但只有最终产物与证据齐全后才能完成验收。
 
@@ -232,7 +227,7 @@ corepack pnpm release:build:windows
 9. 创建或更新本候选版本的“发布验收”Issue，记录 Tag、Commit、CI Run、六个资产名称与 SHA-256；
 10. 下载 Draft 中的最终安装包，在 macOS、Windows 执行对应冒烟与业务验收，并把真实结果和已知问题写入验收 Issue；
 11. 验收通过并获得最终发布授权后，由仓库维护者公开 Draft；Alpha、Beta、RC 标记为 Pre-release，正式版不得标记为 Pre-release；
-12. 记录发布决定，关闭验收 Issue，并只按真实证据更新能力矩阵。
+12. 记录发布决定和未验证范围，关闭验收 Issue，并确保 Release Notes 与真实验收证据一致。
 
 ### 10.1 候选版本失败与收敛
 
@@ -288,7 +283,7 @@ Tag 推送会同时运行版本门禁和发布工作流。若 CI 平台检出的
 新发布 Tag 只能通过维护者从 `main` 手动运行 `Create Release Tag` 工作流创建，例如：
 
 ```bash
-gh workflow run create-release-tag.yml --ref main -f release_tag=v0.1.0-beta.3
+gh workflow run create-release-tag.yml --ref main -f release_tag='v<next-version>'
 ```
 
 该工作流使用 `RELEASE_PLEASE_TOKEN` 推送 Tag，以便正常触发 Tag CI 与 Draft Release；它在远程 Tag 出现前校验输入格式、目标是当前远程 `main`、同一提交已有成功的 `main` push CI、同名 Tag 不存在，并创建 annotated Tag 后执行完整版本门禁。不得在本地使用 `git tag` 和 `git push` 绕过该入口。工作流只准备 Tag，不公开 Release；触发前仍必须对本次 Tag 创建与远程推送取得单独授权。
@@ -296,8 +291,8 @@ gh workflow run create-release-tag.yml --ref main -f release_tag=v0.1.0-beta.3
 修复工作流后重验已有不可变 Tag 时，维护者从 `main` 手动运行 CI 和 Release 工作流，并传入 `release_tag`；手动任务使用受保护 `main` 上的最新校验工具读取并校验 Tag 指向的版本和提交，但平台构建仍固定检出该 Tag 解引用后的 Commit SHA。例如：
 
 ```bash
-gh workflow run ci.yml --ref main -f release_tag=v0.1.0-beta.2
-gh workflow run release.yml --ref main -f release_tag=v0.1.0-beta.2
+gh workflow run ci.yml --ref main -f release_tag='<existing-tag>'
+gh workflow run release.yml --ref main -f release_tag='<existing-tag>'
 ```
 
 第一条命令只重新验证现有 Tag；第二条命令从该 Tag 自动构建并准备 Draft Release。两者都不创建、移动或覆盖 Tag，也不公开发布版本。
