@@ -299,6 +299,12 @@ gh workflow run release.yml --ref main -f release_tag='<existing-tag>'
 
 仓库维护者必须创建名为 `RELEASE_PLEASE_TOKEN` 的 GitHub Actions Secret。推荐使用限定到本仓库、设置有效期的 fine-grained PAT，最小授予 Contents、Pull requests 和 Issues 的读写权限；不得把 Token 写入仓库、日志或 PR。不能使用默认 `GITHUB_TOKEN` 替代，因为它创建的发布 Pull Request 不会触发本仓库的后续 CI 工作流。
 
-Beta 阶段配置使用 `versioning=prerelease`、`prerelease-type=beta`。切换到 RC 或 GA 必须通过独立维护 PR 修改发布通道配置，并在提交正文加入明确的 `Release-As: <目标版本>`；例如 `0.1.0-rc.1` 或 `0.1.0`，不得依赖工具猜测跨通道版本。
+Beta 阶段配置使用 `versioning=prerelease`、`prerelease-type=beta`。同一基础版本内的 Beta 修复会由 Release Please 递增序号；如果发布范围形成新的 Minor 基线，也必须通过独立维护 PR 在提交正文加入明确的 `Release-As: <目标版本>`，不得依赖工具猜测跨 Minor 版本。例如当前 `0.1.0-beta.3` 进入 AI 工作区这一新的兼容能力范围时，目标版本应明确写为：
+
+```text
+Release-As: 0.2.0-beta.1
+```
+
+该指令必须出现在 Release Please 能读取的维护提交正文中（通常是 Squash merge 后进入 `main` 的提交正文），而不是手工修改 `package.json` 或 `.release-please-manifest.json`。切换到 RC 或 GA 同样必须通过独立维护 PR 使用 `Release-As: <目标版本>`；例如 `0.1.0-rc.1` 或 `0.1.0`，不得依赖工具猜测跨通道版本。
 
 自动化不得代替版本范围确认、问题定级、真实设备验收、签名凭据操作、Tag 创建和最终发布授权。确认推送 Tag 时必须同时说明它会自动创建或更新 Draft Release；公开 Draft 仍需单独授权。
