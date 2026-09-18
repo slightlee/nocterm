@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 
 import { ConnectionList } from '../../features/connections';
+import { AiPanel, useAiStore } from '../../features/ai';
 import { useTopWindowDrag } from '../../shared/hooks/useWindowDrag';
 import { isWindowsDesktopRuntime } from '../../shared/lib/desktop-platform';
 import { ActivityBar } from './ActivityBar';
@@ -19,6 +20,8 @@ export function AppShell() {
   const settingsRoute = location.pathname.startsWith('/settings');
   const handleTopWindowDrag = useTopWindowDrag();
   const windowsDesktop = isWindowsDesktopRuntime();
+  const aiOpen = useAiStore((state) => state.open);
+  const toggleAi = useAiStore((state) => state.toggle);
 
   /** 桌面客户端统一禁用 WebView 原生菜单；业务右键菜单仍由后续冒泡事件打开。 */
   const suppressBrowserContextMenu = (event: MouseEvent<HTMLDivElement>) => {
@@ -65,7 +68,22 @@ export function AppShell() {
           />
         ) : null}
         {!settingsRoute ? <StatusBar /> : null}
+        {connectionRoute && !aiOpen ? (
+          <button
+            aria-label="显示 AI 助手"
+            className={styles.aiReveal}
+            onClick={toggleAi}
+            title="显示 AI 助手"
+            type="button"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m14 7-5 5 5 5" />
+            </svg>
+          </button>
+        ) : null}
       </section>
+      {/* Runtime 常驻以承接后台输出和审批；visible 只控制工作台是否渲染。 */}
+      <AiPanel visible={connectionRoute && aiOpen} />
     </div>
   );
 }

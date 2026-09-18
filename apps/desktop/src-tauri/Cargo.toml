@@ -14,10 +14,13 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+getrandom.workspace = true
 nocterm-application = { path = "../../../crates/nocterm-application" }
 nocterm-domain = { path = "../../../crates/nocterm-domain" }
 nocterm-infrastructure = { path = "../../../crates/nocterm-infrastructure" }
 serde.workspace = true
+serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true
+toml.workspace = true

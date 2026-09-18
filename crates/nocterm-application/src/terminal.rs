@@ -1,7 +1,10 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicBool};
 
 use nocterm_domain::terminal::{LocalTerminalPort, SshTerminalPort};
-use nocterm_domain::{connection::ConnectionProfile, terminal::OpenedTerminal};
+use nocterm_domain::{
+    connection::ConnectionProfile,
+    terminal::{OpenedSshExecution, OpenedTerminal},
+};
 
 use crate::error::AppError;
 
@@ -50,6 +53,18 @@ impl TerminalService {
             .close_connection(connection_id)
             .map_err(terminal_error)
     }
+
+    /// 优先复用当前已认证 SSH 连接；没有活跃会话时由调用方决定是否重新认证。
+    pub fn exec_existing(
+        &self,
+        connection_id: i64,
+        command: &str,
+        cancellation: &AtomicBool,
+    ) -> Result<Option<OpenedSshExecution>, AppError> {
+        self.backend
+            .exec_existing(connection_id, command, cancellation)
+            .map_err(terminal_error)
+    }
 }
 
 /// 基础设施层返回的都是已归一化、可直接展示的中文提示（不含口令、密钥或原始协议转储），
@@ -80,6 +95,12 @@ impl LocalTerminalService {
             .map_err(local_terminal_error)
     }
 
+    pub fn completion_command(&self, terminal_id: &str, marker: &str) -> Result<String, AppError> {
+        self.backend
+            .completion_command(terminal_id, marker)
+            .map_err(local_terminal_error)
+    }
+
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), AppError> {
         self.backend
             .resize(terminal_id, cols, rows)
@@ -103,11 +124,14 @@ fn local_terminal_error(error: String) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{Cursor, Read};
 
     use nocterm_domain::{
         connection::{AuthenticationMethod, ConnectionProfile},
-        terminal::{LocalTerminalPort, OpenedTerminal, SshTerminalPort},
+        terminal::{
+            LocalTerminalPort, OpenedSshExecution, OpenedTerminal, SshExecutionCompletion,
+            SshTerminalPort,
+        },
     };
 
     use super::*;
@@ -115,6 +139,7 @@ mod tests {
     #[derive(Default)]
     struct FakeTerminal {
         fail_open: bool,
+        provide_exec: bool,
     }
 
     impl SshTerminalPort for FakeTerminal {
@@ -150,6 +175,26 @@ mod tests {
         fn close_connection(&self, _connection_id: i64) -> Result<(), String> {
             Ok(())
         }
+
+        fn exec_existing(
+            &self,
+            _connection_id: i64,
+            _command: &str,
+            _cancellation: &AtomicBool,
+        ) -> Result<Option<OpenedSshExecution>, String> {
+            if self.provide_exec {
+                let (completion_tx, completion) = std::sync::mpsc::channel();
+                completion_tx
+                    .send(SshExecutionCompletion { exit_code: Some(0) })
+                    .expect("send fake completion");
+                return Ok(Some(OpenedSshExecution {
+                    id: "exec-1".to_string(),
+                    reader: Box::new(Cursor::new(b"reused output".to_vec())),
+                    completion,
+                }));
+            }
+            Ok(None)
+        }
     }
 
     impl LocalTerminalPort for FakeTerminal {
@@ -165,6 +210,10 @@ mod tests {
 
         fn write(&self, _terminal_id: &str, _data: &str) -> Result<(), String> {
             Ok(())
+        }
+
+        fn completion_command(&self, _terminal_id: &str, marker: &str) -> Result<String, String> {
+            Ok(format!("echo {marker}0"))
         }
 
         fn resize(&self, _terminal_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
@@ -211,7 +260,10 @@ mod tests {
         service.resize(&opened.id, 100, 30).expect("resize");
         service.close(&opened.id).expect("close");
 
-        let failing = TerminalService::new(Arc::new(FakeTerminal { fail_open: true }));
+        let failing = TerminalService::new(Arc::new(FakeTerminal {
+            fail_open: true,
+            provide_exec: false,
+        }));
         let error = match failing.open(&profile(), 80, 24, None, None) {
             Ok(_) => panic!("open must fail"),
             Err(error) => error,
@@ -219,6 +271,25 @@ mod tests {
         assert_eq!(error.code, "SSH_TERMINAL_FAILED");
         // 后端原因必须原样透出：UI 已负责渲染"连接失败："前缀，用例层再加前缀会重复。
         assert_eq!(error.message, "backend unavailable");
+    }
+
+    #[test]
+    fn exposes_an_exec_channel_reused_by_the_ssh_backend() {
+        let service = TerminalService::new(Arc::new(FakeTerminal {
+            fail_open: false,
+            provide_exec: true,
+        }));
+        let mut opened = service
+            .exec_existing(7, "docker ps", &AtomicBool::new(false))
+            .expect("exec channel lookup")
+            .expect("active connection should be reused");
+        let mut output = String::new();
+        opened
+            .reader
+            .read_to_string(&mut output)
+            .expect("read exec output");
+        assert_eq!(opened.id, "exec-1");
+        assert_eq!(output, "reused output");
     }
 
     #[test]
@@ -230,7 +301,10 @@ mod tests {
         service.resize(&opened.id, 100, 30).expect("resize");
         service.close(&opened.id).expect("close");
 
-        let failing = LocalTerminalService::new(Arc::new(FakeTerminal { fail_open: true }));
+        let failing = LocalTerminalService::new(Arc::new(FakeTerminal {
+            fail_open: true,
+            provide_exec: false,
+        }));
         let error = match failing.open(80, 24) {
             Ok(_) => panic!("open must fail"),
             Err(error) => error,

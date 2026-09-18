@@ -2,7 +2,7 @@
 
 ## 指令范围与必读文档
 
-本文件约束仓库内所有 AI 与人工开发。开始工作前先读取与任务直接相关的源码、测试和文档，不得仅依据文件名、过期方案或经验推断实现。架构或新功能任务必须阅读 `docs/technical-architecture.md`、`docs/development.md` 和 `docs/ai-development-policy.md`；涉及 SSH/SFTP、凭据或跨平台能力时，还必须阅读对应 ADR、`docs/testing/` 和 `docs/roadmap/capability-matrix.md`。详细审查规则见 `docs/code-review.md`。
+本文件约束仓库内所有 AI 与人工开发。开始工作前先读取与任务直接相关的源码、测试和文档，不得仅依据文件名、过期方案或经验推断实现。架构或新功能任务必须阅读 `docs/technical-architecture.md` 和 `docs/development.md`；涉及 SSH/SFTP、凭据、跨平台或 AI Provider 时，还必须阅读 `docs/testing.md`。评审、验证和安全操作规则统一维护在 `docs/development.md`。
 
 ## 项目结构
 
@@ -14,7 +14,7 @@ Nocterm 是模块化单体。`apps/desktop/src` 是 React UI，按 `app → feat
 2. 复杂、跨模块或存在架构取舍的任务先给出计划；需求明确的小改动直接实施。
 3. 只修改完成当前目标必需的内容；禁止顺手重构、猜测性修复和无消费者的未来抽象。
 4. 优先修复根因；新增行为必须补充测试，Bug 修复原则上增加回归测试。
-5. 修改后检查 diff、运行与风险相称的验证；实现影响架构、协议或验收方式时，同步对应技术方案、ADR、能力矩阵或测试说明。
+5. 修改后检查 diff、运行与风险相称的验证；实现影响架构、协议或验收方式时，同步技术架构、测试说明或发布验收记录。
 6. 最终报告区分“已检查”“已构建”“已自动测试”“已真实运行”和“未验证”。不得把静态通过表述为功能已验收。
 
 ## 架构与代码边界
@@ -48,7 +48,7 @@ Nocterm 是模块化单体。`apps/desktop/src` 是 React UI，按 `app → feat
 - `corepack pnpm check`：前端格式、Lint、样式、测试和构建。
 - `corepack pnpm cargo:check`：Rust 格式、Clippy 和测试。
 
-UI 修改必须做浏览器或 Tauri 真实运行检查；终端、凭据、SSH/SFTP 必须执行 `docs/testing/` 中对应流程。只在实际目标系统运行后才能声称 macOS 或 Windows 已验收。任务只有在需求实现、架构边界保持、相关检查通过、必要运行验证完成、文档同步且未验证范围明确时才算完成。
+UI 修改必须做浏览器或 Tauri 真实运行检查；终端、凭据、SSH/SFTP 和 AI Provider 必须执行 `docs/testing.md` 中对应流程。只在实际目标系统运行后才能声称 macOS 或 Windows 已验收。任务只有在需求实现、架构边界保持、相关检查通过、必要运行验证完成、文档同步且未验证范围明确时才算完成。
 
 涉及产品版本修改、安装包构建、Git Tag 或发布时，必须先读取并遵循 `docs/release-process.md`。
 

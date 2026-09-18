@@ -1,0 +1,98 @@
+/* Provider 输出使用受限 Markdown；样式仅负责可读性，不开放原始 HTML。 */
+.markdown {
+  min-width: 0;
+  color: var(--term-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.markdown li {
+  margin: 2px 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 10px 0 6px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.markdown code {
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+}
+
+.markdown pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  background: var(--bg-hover);
+  border-radius: 7px;
+}
+
+.markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown a {
+  color: var(--term-blue);
+  text-decoration: none;
+}
+
+.markdown a:hover {
+  color: var(--accent-blue-hover);
+  text-decoration: underline;
+}
+
+.markdown blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  color: var(--term-muted);
+  border-left: 2px solid var(--term-border);
+}
+
+.markdown img {
+  max-width: 100%;
+  border-radius: 7px;
+}
+
+.markdown table {
+  margin: 0 0 8px;
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  padding: 3px 8px;
+  border: 1px solid var(--term-border);
+}
+
+.markdown hr {
+  border-top: 1px solid var(--term-border);
+}

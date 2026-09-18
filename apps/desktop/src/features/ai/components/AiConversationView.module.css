@@ -1,0 +1,409 @@
+/* 空态提示在会话区垂直居中；发出首条消息后整块移除。 */
+.emptyState {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px 12px;
+  text-align: center;
+}
+
+.emptyState h3 {
+  color: var(--term-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.messageList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.message {
+  display: flex;
+  align-self: flex-start;
+  max-width: 94%;
+  padding: 0;
+  background: transparent;
+}
+
+.userMessage {
+  align-self: flex-end;
+  max-width: 86%;
+  padding: 9px 11px;
+  background: var(--accent-blue-soft);
+  border-radius: 12px 12px 4px;
+}
+
+.assistantMessage {
+  width: 100%;
+  max-width: 100%;
+  align-items: flex-start;
+}
+
+.messageBody {
+  min-width: 0;
+}
+
+.assistantMessage .messageBody {
+  width: 100%;
+}
+
+.messageRole {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--term-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.userMessage .messageRole {
+  margin-bottom: 3px;
+  text-align: right;
+}
+
+.assistantMessage .messageRole {
+  margin-bottom: 6px;
+  color: color-mix(in srgb, var(--term-text) 58%, var(--term-muted));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.message p {
+  color: var(--term-text);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.executionStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-start;
+  color: var(--term-muted);
+  font-size: 10px;
+}
+
+.executionDot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--term-yellow);
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+/* 执行过程采用轻量时间线，不与最终回答争夺视觉层级。 */
+.activityDisclosure {
+  width: 100%;
+  margin: 0;
+}
+
+.activityToggle {
+  display: grid;
+  width: 100%;
+  min-height: 26px;
+  grid-template-columns: 7px auto 1fr 16px;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  color: var(--term-muted);
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.activityToggle:hover {
+  color: var(--term-text);
+}
+
+.activityToggle:focus-visible {
+  outline: 2px solid var(--term-blue);
+  outline-offset: 2px;
+}
+
+.activityStatus {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.activityStatusRunning {
+  background: var(--term-yellow);
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+.activityStatusComplete {
+  background: color-mix(in srgb, var(--term-green) 78%, var(--term-muted));
+}
+
+.activityTitle {
+  color: currentcolor;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.activityMeta {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityChevron {
+  width: 14px;
+  height: 14px;
+  justify-self: end;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform var(--dur-fast);
+}
+
+.activityChevronExpanded {
+  transform: rotate(180deg);
+}
+
+.activityList {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 1px 0 3px 3px;
+  padding: 4px 0 5px 14px;
+  border-left: 1px solid color-mix(in srgb, var(--term-muted) 32%, transparent);
+  animation: activity-reveal var(--dur-fast) ease-out;
+}
+
+.activityLine {
+  position: relative;
+  min-width: 0;
+  color: var(--term-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.activityMarker {
+  position: absolute;
+  top: 6px;
+  left: -18px;
+  width: 7px;
+  height: 7px;
+  background: var(--term-panel);
+  border: 1px solid var(--term-muted);
+  border-radius: 50%;
+}
+
+.activityMarkerTool {
+  border-color: color-mix(in srgb, var(--term-blue) 76%, var(--term-muted));
+}
+
+.activityMarkerProgress {
+  width: 5px;
+  height: 5px;
+  top: 7px;
+  left: -17px;
+  border-color: color-mix(in srgb, var(--term-muted) 54%, transparent);
+}
+
+.activityText {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.answerContent {
+  margin-top: 6px;
+}
+
+@keyframes activity-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 命令审批是终端写操作的安全边界，目标与原始命令必须同时完整可见。 */
+.approvalCard {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  color: var(--term-text);
+  background: var(--term-panel);
+  border: 1px solid var(--term-border);
+  border-left: 2px solid color-mix(in srgb, var(--term-blue) 72%, var(--term-border));
+  border-radius: 7px;
+}
+
+.approvalHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.approvalTarget {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--term-muted);
+  font-size: 10px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approvalCommand {
+  max-height: 136px;
+  padding: 9px;
+  overflow: auto;
+  color: var(--term-text);
+  font: 11px/1.55 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--term);
+  border: 1px solid var(--term-border);
+  border-radius: 6px;
+}
+
+.approvalCard p {
+  margin: 0;
+  color: var(--term-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.approvalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.approvalActions button {
+  height: 26px;
+  padding: 0 10px;
+  color: var(--term-muted);
+  font: inherit;
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--term-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast),
+    background var(--dur-fast),
+    border-color var(--dur-fast);
+}
+
+.approvalActions button:focus-visible {
+  outline: 2px solid var(--term-blue);
+  outline-offset: 2px;
+}
+
+.approvalActions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.approvalActions button:hover:not(:disabled) {
+  color: var(--term-text);
+  background: color-mix(in srgb, var(--term-text) 6%, transparent);
+  border-color: color-mix(in srgb, var(--term-text) 24%, var(--term-border));
+}
+
+.approvalActions .approveButton {
+  color: var(--term);
+  background: var(--term-blue);
+  border-color: var(--term-blue);
+}
+
+.approvalActions .approveButton:hover:not(:disabled) {
+  color: var(--term);
+  background: color-mix(in srgb, var(--term-blue) 86%, var(--term-text));
+  border-color: color-mix(in srgb, var(--term-blue) 86%, var(--term-text));
+}
+
+.approvalActions .approveButton:active:not(:disabled) {
+  background: color-mix(in srgb, var(--term-blue) 76%, var(--term-text));
+  border-color: color-mix(in srgb, var(--term-blue) 76%, var(--term-text));
+}
+
+/* 失败提示跟随用户消息右对齐，重试动作与被重发内容保持视觉绑定。 */
+.noticeRow {
+  display: flex;
+  align-self: flex-end;
+  align-items: center;
+  gap: 8px;
+  max-width: 86%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.notice {
+  padding: 0;
+  color: var(--term-yellow);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.retryButton {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  color: var(--term-blue);
+  font: inherit;
+  font-size: 10px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.retryButton:hover {
+  background: var(--accent-blue-soft);
+}
+
+.retryButton:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.retryButton svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
