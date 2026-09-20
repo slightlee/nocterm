@@ -139,12 +139,8 @@ jobs:
       matrix:
         include:
           - runner: macos-15
-            target: aarch64-apple-darwin
-            source_arch: aarch64
             artifact_arch: aarch64
           - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            source_arch: x64
             artifact_arch: x86_64
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -154,8 +150,6 @@ jobs:
       RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
       RELEASE_VERSION: ${{ needs.validate.outputs.release_version }}
       MACOSX_DEPLOYMENT_TARGET: '14.0'
-      RUST_TARGET: ${{ matrix.target }}
-      SOURCE_ARCH: ${{ matrix.source_arch }}
       ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
     steps:
       - uses: actions/checkout@v4
@@ -169,29 +163,26 @@ jobs:
           node-version: 22
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: pnpm install --frozen-lockfile
+      # 与 Windows 一致：构建、命名和校验和统一由产物脚本负责，工作流只做上传。
       - name: Build macOS DMG
-        run: pnpm tauri build --target "$RUST_TARGET" --config '{"bundle":{"active":true}}' --bundles dmg --ci
-      - name: Prepare and upload macOS release assets
+        run: pnpm release:build:macos
+      - name: Upload macOS release assets
         run: |
-          SOURCE_PATH="target/${RUST_TARGET}/release/bundle/dmg/Nocterm_${RELEASE_VERSION}_${SOURCE_ARCH}.dmg"
           ARTIFACT_PATH="target/release/artifacts/Nocterm_${RELEASE_VERSION}_macos_${ARTIFACT_ARCH}.dmg"
-          if [ ! -s "$SOURCE_PATH" ]; then
-            echo "Expected non-empty macOS DMG was not produced: $SOURCE_PATH" >&2
-            exit 1
-          fi
-          mkdir -p "$(dirname "$ARTIFACT_PATH")"
-          cp "$SOURCE_PATH" "$ARTIFACT_PATH"
-          CHECKSUM="$(shasum -a 256 "$ARTIFACT_PATH" | awk '{print $1}')"
-          printf '%s  %s\n' "$CHECKSUM" "$(basename "$ARTIFACT_PATH")" > "$ARTIFACT_PATH.sha256"
+          CHECKSUM_PATH="${ARTIFACT_PATH}.sha256"
+          for path in "$ARTIFACT_PATH" "$CHECKSUM_PATH"; do
+            if [ ! -s "$path" ]; then
+              echo "Expected non-empty macOS release asset was not produced: $path" >&2
+              exit 1
+            fi
+          done
           if [ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]; then
             echo "Release $RELEASE_TAG is no longer a draft; refusing to upload assets." >&2
             exit 1
           fi
-          gh release upload "$RELEASE_TAG" "$ARTIFACT_PATH" "$ARTIFACT_PATH.sha256" \
+          gh release upload "$RELEASE_TAG" "$ARTIFACT_PATH" "$CHECKSUM_PATH" \
             --repo "$GITHUB_REPOSITORY" --clobber
 
   build-windows:
