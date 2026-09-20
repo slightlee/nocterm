@@ -134,7 +134,9 @@ impl CodexAppServer {
                 &json!({
                     "id": 1,
                     "method": "initialize",
-                    "params": {"clientInfo": {"name": "nocterm", "version": env!("CARGO_PKG_VERSION")}}
+                    // 对外标识必须报告产品版本（唯一源 package.json，经 build.rs 注入）；
+                    // CARGO_PKG_VERSION 是内部 crate 版本，规范禁止用作产品版本。
+                    "params": {"clientInfo": {"name": "nocterm", "version": env!("NOCTERM_PRODUCT_VERSION")}}
                 }),
             )?;
             wait_for_response(

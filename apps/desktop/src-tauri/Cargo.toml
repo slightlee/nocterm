@@ -11,6 +11,7 @@ name = "nocterm_desktop_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
+serde_json.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]

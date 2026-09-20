@@ -63,6 +63,8 @@ Alpha 只在大功能需要早期验证时使用，不要求为了流程完整�
 
 `apps/desktop/package.json` 是私有前端工作区包，不声明独立版本；`Cargo.toml` 的 `[workspace.package].version` 只描述不会单独发布的内部 Rust crate，不得用作产品版本。这样可以避免一次发布人工同步多个文件，也不会因为产品发版而制造无意义的 npm 或 Cargo 锁文件变更。
 
+Rust 代码需要对外报告产品版本时（如 AI 协议的 `clientInfo`），使用构建脚本从根 `package.json` 注入的编译期常量 `NOCTERM_PRODUCT_VERSION`，禁止使用 `CARGO_PKG_VERSION` 代替产品版本。
+
 Git Tag 使用 `v` 前缀，例如 `v0.1.0-beta.1`。Tag 必须指向用于生成安装包的同一提交。产品版本由 Release Please 更新；锁文件若被工具更新，应与版本变更一并审查，禁止为制造一致性而手工修改生成内容。
 
 Git Tag 是“已经发布”的唯一版本基线。版本递增必须高于目标分支可达的最新有效发布 Tag，Tag 推送还会与仓库已有的全部有效发布 Tag 比较，防止给旧提交补发低版本 Tag。仓库尚无发布 Tag 时允许建立首个预发布版本。因此，尚未发布阶段源码中的 `0.1.0` 开发占位值不会阻止首次 `0.1.0-beta.1`，但一旦存在 `v0.1.0-beta.1`，后续版本就必须严格高于它。CI 必须获取完整 Git 历史与 Tag，禁止在浅克隆且 Tag 不完整的环境中作发布判定。
