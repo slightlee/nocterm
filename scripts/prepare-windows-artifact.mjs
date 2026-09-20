@@ -99,15 +99,26 @@ export function main() {
     version,
     architecture: process.arch,
     runBuild: () => {
-      // 使用当前 pnpm 进程的精确 CLI，避免 Windows PATHEXT 对 .cmd 解析产生差异。
+      // 前端构建与 Tauri 都通过当前 pnpm CLI（npm_execpath）直接调用：
+      // 任何经 PATH 解析的嵌套 pnpm 都可能命中其他版本，在 Corepack 环境下会因
+      // 版本不一致直接报 ERR_PNPM_BAD_PM_VERSION。
+      execFileSync(process.execPath, [pnpmCli, '--filter', '@nocterm/desktop', 'build'], {
+        cwd: REPOSITORY_ROOT,
+        stdio: 'inherit',
+      });
+      // 前端产物已由上一步生成；显式跳过 beforeBuildCommand，避免 Tauri 内部
+      // 再经 PATH 调用 pnpm。使用 PATHEXT 精确 CLI 规避 .cmd 解析差异。
       execFileSync(
         process.execPath,
         [
           pnpmCli,
+          '--filter',
+          '@nocterm/desktop',
+          'exec',
           'tauri',
           'build',
           '--config',
-          '{"bundle":{"active":true}}',
+          '{"bundle":{"active":true},"build":{"beforeBuildCommand":""}}',
           '--bundles',
           'nsis',
           '--ci',
