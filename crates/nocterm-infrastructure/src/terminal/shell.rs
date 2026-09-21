@@ -35,9 +35,48 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     // macOS 与其它 Unix 走 portable-pty 的默认程序解析（读 `SHELL`，回落到 passwd 项）。
     #[cfg(not(windows))]
     {
-        let command = CommandBuilder::new_default_prog();
+        let command = apply_default_term(CommandBuilder::new_default_prog());
         let kind = detect_shell_kind(&command.get_shell());
         (command, kind)
+    }
+}
+
+/// PTY 内 Shell 的默认 TERM 值，与前端 xterm.js 的能力对齐。
+#[cfg(not(windows))]
+pub(super) const DEFAULT_TERM: &str = "xterm-256color";
+
+/// 从 Finder/Dock 启动的 GUI 进程只继承 launchd 最小环境，常没有 `TERM`。
+/// zsh 的 ZLE 在 TERM 缺失时会在提示符的多字节字符（如 ➜、✗）前输出字面 `?`，
+/// 因此仅在进程环境未提供 TERM 时补默认值；显式设置的值原样保留。
+#[cfg(not(windows))]
+fn apply_default_term(mut command: CommandBuilder) -> CommandBuilder {
+    if command.get_env("TERM").is_none() {
+        command.env("TERM", DEFAULT_TERM);
+    }
+    command
+}
+
+#[cfg(all(test, not(windows)))]
+mod term_default_tests {
+    use super::{DEFAULT_TERM, apply_default_term};
+    use portable_pty::CommandBuilder;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn fills_term_only_when_the_process_env_does_not_provide_one() {
+        let mut command = CommandBuilder::new("zsh");
+        command.env_clear();
+        let command = apply_default_term(command);
+        assert_eq!(command.get_env("TERM"), Some(OsStr::new(DEFAULT_TERM)));
+    }
+
+    #[test]
+    fn keeps_an_explicit_term_from_the_parent_environment() {
+        let mut command = CommandBuilder::new("zsh");
+        command.env_clear();
+        command.env("TERM", "screen-256color");
+        let command = apply_default_term(command);
+        assert_eq!(command.get_env("TERM"), Some(OsStr::new("screen-256color")));
     }
 }
 
