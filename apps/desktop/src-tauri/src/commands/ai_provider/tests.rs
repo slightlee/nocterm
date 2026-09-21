@@ -1,8 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{
     ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
-    ProviderToolTransport, find_provider_executable_in, provider_adapter,
+    ProviderToolTransport, combined_search_path, find_provider_executable_in, provider_adapter,
+    supplementary_search_directories,
 };
 
 fn identity() -> ProviderSessionIdentity {
@@ -188,4 +189,110 @@ fn codex_uses_its_persistent_protocol_adapter() {
         .prepare_launch(launch("inspect", None, &identity))
         .unwrap();
     assert!(matches!(prepared, ProviderLaunchPlan::Persistent));
+}
+
+/// 构造隔离的模拟家目录；测试结束后整体删除，不污染真实用户环境。
+struct FakeHome {
+    root: PathBuf,
+}
+
+impl FakeHome {
+    fn create(label: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "nocterm-ai-provider-test-{}-{label}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create fake home root");
+        Self { root }
+    }
+
+    fn touch(&self, relative: &str) -> PathBuf {
+        let path = self.root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("parent directory"))
+            .expect("create parent directory");
+        std::fs::write(&path, b"#!/bin/sh\n").expect("write fake executable");
+        path
+    }
+}
+
+impl Drop for FakeHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn supplementary_directories_cover_user_cli_locations_without_home_fallback() {
+    let home = FakeHome::create("supplementary");
+    home.touch(".local/bin/claude");
+    home.touch(".nvm/versions/node/v22.17.1/bin/codex");
+    home.touch(".nvm/versions/node/v20.19.0/bin/codex");
+
+    let directories = supplementary_search_directories(Some(&home.root));
+    // 用户目录在前，固定系统目录居中，nvm 版本目录按名称排序在后，保证确定性。
+    assert_eq!(
+        directories[..7],
+        [
+            home.root.join(".local/bin"),
+            home.root.join("bin"),
+            home.root.join(".cargo/bin"),
+            home.root.join(".grok/bin"),
+            home.root.join(".volta/bin"),
+            home.root.join(".asdf/shims"),
+            home.root.join("Library/pnpm"),
+        ]
+    );
+    assert!(directories.contains(&PathBuf::from("/usr/local/bin")));
+    assert!(directories.contains(&PathBuf::from("/opt/homebrew/bin")));
+    let nvm_bins: Vec<_> = directories
+        .iter()
+        .filter(|directory| directory.starts_with(home.root.join(".nvm")))
+        .cloned()
+        .collect();
+    assert_eq!(
+        nvm_bins,
+        vec![
+            home.root.join(".nvm/versions/node/v20.19.0/bin"),
+            home.root.join(".nvm/versions/node/v22.17.1/bin"),
+        ]
+    );
+    assert!(supplementary_search_directories(None).is_empty());
+}
+
+#[test]
+fn discovery_finds_clis_installed_outside_the_gui_path() {
+    let home = FakeHome::create("discovery");
+    let claude = home.touch(".local/bin/claude");
+    let codex = home.touch(".nvm/versions/node/v22.17.1/bin/codex");
+
+    // GUI 进程可能没有 PATH；补充目录必须独立完成发现。
+    let search_path = combined_search_path(None, Some(home.root.clone())).expect("search path");
+    assert_eq!(
+        find_provider_executable_in("claude", Some(search_path.clone()), None),
+        Some(claude)
+    );
+    assert_eq!(
+        find_provider_executable_in("codex", Some(search_path), None),
+        Some(codex)
+    );
+}
+
+#[test]
+fn combined_search_path_keeps_the_process_path_first() {
+    let home = FakeHome::create("combined");
+    let process_directory = std::env::temp_dir().join(format!(
+        "nocterm-ai-provider-test-{}-combined-path",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&process_directory).expect("create process path directory");
+    let process_path = std::env::join_paths([&process_directory]).expect("join process path");
+
+    let combined = combined_search_path(Some(process_path.clone()), Some(home.root.clone()))
+        .expect("combined search path");
+    let directories: Vec<_> = std::env::split_paths(&combined).collect();
+    assert_eq!(directories.first(), Some(&process_directory));
+    assert!(directories.contains(&home.root.join(".local/bin")));
+
+    std::fs::remove_dir_all(&process_directory).expect("cleanup process path directory");
 }

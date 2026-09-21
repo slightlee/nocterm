@@ -193,6 +193,7 @@ SFTP 使用 russh-sftp，不通过系统 `sftp`、远程 Shell 或 `tar` 模拟�
 Nocterm 不重新实现模型、Agent loop、登录或通用 MCP 客户端。Codex、Claude Code 和 Grok 继续负责模型与推理；Nocterm 负责：
 
 - Provider 发现、启动、协议适配、流式输出、取消和回收；
+- Provider 发现只做文件系统检查，不启动探测子进程。macOS 图形界面启动的进程只继承 launchd 最小 PATH，因此发现与 Provider 子进程共用"进程 PATH + 固定用户级 CLI 目录"的合成搜索路径，目录列表固定在代码中，不提供用户可执行路径配置；
 - 把每轮任务绑定到发送时的本地终端或 SSH 连接；
 - 提供统一工具、参数校验、权限、审批、审计和限流；
 - 在当前本地 PTY 或已认证 SSH 连接中执行并返回真实结果；

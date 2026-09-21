@@ -102,6 +102,11 @@ impl CodexAppServer {
         } else {
             process.env_remove("NOCTERM_MCP_TOKEN");
         }
+        // GUI 启动时进程只继承 launchd 最小 PATH，codex 可能需要调用 node 等
+        // 用户级工具；注入探测同源的合成 PATH，它是进程 PATH 的固定超集。
+        if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
+            process.env("PATH", path);
+        }
         let mut child = process
             .spawn()
             .map_err(|error| format!("启动 codex app-server 失败：{error}"))?;
