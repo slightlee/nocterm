@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0-beta.2](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.1...v0.2.0-beta.2) (2026-09-21)
+
+
+### Features
+
+* stabilize release packaging and provider discovery ([#31](https://github.com/slightlee/nocterm/issues/31)) ([c97d836](https://github.com/slightlee/nocterm/commit/c97d83690b4bcc967596b7a18cdddaa513ddb437))
+
 ## [0.2.0-beta.1](https://github.com/slightlee/nocterm/compare/v0.1.0-beta.3...v0.2.0-beta.1) (2026-09-18)
 
 
