@@ -68,6 +68,12 @@ pub(super) fn start_headless_session(
             .iter()
             .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
     );
+    // GUI 进程从 launchd 继承最小 PATH，Provider 脚本（如 claude 的 env node
+    // shebang）会因此无法解析解释器。注入探测同源的合成 PATH：它是进程 PATH
+    // 的超集，目录列表固定在代码中，不引入外部配置来源。
+    if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
+        process.env("PATH", path);
+    }
     if let Some(directory) = prepared.current_directory.as_ref() {
         process.current_dir(directory);
     } else if let Some(directory) = working_directory {

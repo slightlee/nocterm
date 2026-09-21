@@ -105,6 +105,11 @@ impl GrokAcpServer {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // env_clear 后白名单里的 PATH 在 GUI 启动下仍是 launchd 最小值；用探测
+        // 同源的合成 PATH 覆盖为固定超集，保证 grok 运行期能解析 node 等工具。
+        if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
+            process.env("PATH", path);
+        }
         let mut child = process
             .spawn()
             .map_err(|error| format!("启动 Grok ACP 失败：{error}"))?;

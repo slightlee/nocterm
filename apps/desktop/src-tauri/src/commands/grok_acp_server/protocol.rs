@@ -85,7 +85,9 @@ pub(super) fn initialize_request() -> Value {
             },
             "clientInfo": {
                 "name": "nocterm",
-                "version": env!("CARGO_PKG_VERSION")
+                // 对外标识必须报告产品版本（唯一源 package.json，经 build.rs 注入）；
+                // CARGO_PKG_VERSION 是内部 crate 版本，规范禁止用作产品版本。
+                "version": env!("NOCTERM_PRODUCT_VERSION")
             }
         }
     })

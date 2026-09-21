@@ -31,6 +31,28 @@ fn initialization_denies_client_filesystem_and_terminal_capabilities() {
 }
 
 #[test]
+fn initialization_reports_product_version_not_crate_version() {
+    let request = initialize_request();
+    let version = request["params"]["clientInfo"]["version"]
+        .as_str()
+        .expect("clientInfo.version 必须是字符串");
+    // 产品版本必须来自唯一源 package.json（build.rs 注入），禁止回退到内部 crate 版本。
+    assert_eq!(version, env!("NOCTERM_PRODUCT_VERSION"));
+    assert_ne!(version, env!("CARGO_PKG_VERSION"));
+    // 版本格式与 docs/release-process.md 定义的发布格式一致：x.y.z[-{alpha|beta|rc}.n]。
+    let segments: Vec<&str> = version.split(['.', '-']).collect();
+    assert!(
+        segments.len() == 3 || segments.len() == 5,
+        "非法产品版本：{version}"
+    );
+    assert!(segments[..3].iter().all(|s| s.parse::<u32>().is_ok()));
+    if segments.len() == 5 {
+        assert!(matches!(segments[3], "alpha" | "beta" | "rc"));
+        assert!(segments[4].parse::<u32>().is_ok());
+    }
+}
+
+#[test]
 fn session_registers_only_the_in_process_nocterm_mcp() {
     let request = session_new_request("/private/runtime", &identity());
     let encoded = request.to_string();

@@ -124,12 +124,72 @@ pub trait ProviderAdapter: Send + Sync {
 }
 
 /// 直接解析当前进程的 PATH/PATHEXT，避免为状态探测启动 `which`/`where` 子进程。
+/// macOS 从 Finder/Dock 启动的 GUI 进程只继承 launchd 的最小 PATH，用户通过
+/// npm、Homebrew、cargo 等安装的 Provider CLI 会探测不到，因此进程 PATH 之外
+/// 还要补充一组用户级 CLI 目录；补充目录同样只做文件系统检查。
 fn find_provider_executable(command: &str) -> Option<PathBuf> {
-    find_provider_executable_in(
-        command,
-        std::env::var_os("PATH"),
-        std::env::var_os("PATHEXT"),
-    )
+    let search_path = combined_search_path(std::env::var_os("PATH"), user_home_directory())?;
+    find_provider_executable_in(command, Some(search_path), std::env::var_os("PATHEXT"))
+}
+
+/// 用户的家目录是补充 CLI 目录的唯一来源；Windows 使用 USERPROFILE 表达同一概念。
+fn user_home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+/// 供 Provider 子进程注入的 PATH：与探测使用同一份合成路径，保证"探测到什么
+/// 就用什么启动"。Provider 脚本普遍使用 `#!/usr/bin/env node` 一类 shebang，
+/// GUI 启动时的最小 PATH 会让它们即使被发现也无法执行。
+pub(crate) fn provider_environment_path() -> Option<OsString> {
+    combined_search_path(std::env::var_os("PATH"), user_home_directory())
+}
+
+/// 合成探测与子进程共用的搜索路径：进程 PATH 优先，保证开发环境行为不变，
+/// 其后是补充目录；合成失败时回退到原始进程 PATH，不因单个非法路径项而失效。
+fn combined_search_path(process_path: Option<OsString>, home: Option<PathBuf>) -> Option<OsString> {
+    let mut directories = process_path
+        .as_ref()
+        .map(|value| std::env::split_paths(value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    directories.extend(supplementary_search_directories(home.as_deref()));
+    match std::env::join_paths(&directories) {
+        Ok(joined) => Some(joined),
+        // join_paths 只在路径项含平台分隔符时失败，此时仍可退回进程 PATH 探测。
+        Err(_) => process_path,
+    }
+}
+
+/// 用户级 CLI 的常见安装位置。列表是固定的代码来源，不读取任何外部配置，
+/// 因此不会引入不可信搜索路径；不存在的目录由上层 is_file 检查自然跳过。
+/// nvm-windows 把 node 符号链接写入系统 PATH，GUI 进程天然可见，无需在此覆盖。
+fn supplementary_search_directories(home: Option<&Path>) -> Vec<PathBuf> {
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let mut directories = vec![
+        home.join(".local/bin"),
+        home.join("bin"),
+        home.join(".cargo/bin"),
+        home.join(".grok/bin"),
+        home.join(".volta/bin"),
+        home.join(".asdf/shims"),
+        home.join("Library/pnpm"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+    ];
+    // nvm 把 node 全局 CLI 放在版本化目录中，无法静态枚举，只能扫描已有版本；
+    // 排序保证结果确定性，避免探测结果随目录枚举顺序漂移。
+    if let Ok(entries) = fs::read_dir(home.join(".nvm/versions/node")) {
+        let mut version_bins: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path().join("bin"))
+            .collect();
+        version_bins.sort();
+        directories.extend(version_bins);
+    }
+    directories
 }
 
 fn find_provider_executable_in(

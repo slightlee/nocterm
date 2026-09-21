@@ -32,6 +32,14 @@ corepack pnpm cargo:check
 
 涉及 UI、终端、凭据、SSH、SFTP 或 AI Provider 的变更，还必须执行 `docs/testing.md` 中对应的真实运行流程。CI 或浏览器预览不能替代 macOS / Windows Tauri 验收。
 
+本地需要点开验证 Release 构建产物的可运行性时，在 macOS 执行：
+
+```bash
+corepack pnpm build:app
+```
+
+它构建并保留可直接双击运行的 `target/release/bundle/macos/Nocterm.app`，不产出 DMG。注意 `release:build:macos` 与 CI 的 DMG 构建只产出可分发的安装包，会在结束后自动清理中间产物 `.app`（Tauri 设计行为）；`target/release/artifacts/` 是唯一稳定的发布产物目录。
+
 ## 提交与 Pull Request
 
 提交信息和 Pull Request 标题使用英文 Conventional Commits，格式为：

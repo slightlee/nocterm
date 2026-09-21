@@ -115,10 +115,11 @@ describe('release workflow contract', () => {
       /actions\/workflows\/ci\.yml\/runs[\s\S]*?-f branch=main[\s\S]*?-f event=push[\s\S]*?-f head_sha="\$REQUIRED_CI_SHA"[\s\S]*?-f status=success/
     );
     assert.match(workflow, /if \[ "\$SUCCESSFUL_MAIN_RUNS" -lt 1 \]; then/);
-    assert.match(workflow, /runner: macos-15\n {12}target: aarch64-apple-darwin/);
-    assert.match(workflow, /runner: macos-15-intel\n {12}target: x86_64-apple-darwin/);
+    assert.match(workflow, /runner: macos-15\n {12}artifact_arch: aarch64/);
+    assert.match(workflow, /runner: macos-15-intel\n {12}artifact_arch: x86_64/);
     assert.match(workflow, /MACOSX_DEPLOYMENT_TARGET: '14\.0'/);
-    assert.match(workflow, /pnpm tauri build --target "\$RUST_TARGET" .* --bundles dmg --ci/);
+    // macOS 与 Windows 一样通过产物脚本构建，命名与校验和不内联在工作流里。
+    assert.match(workflow, /pnpm release:build:macos/);
     assert.match(workflow, /pnpm release:build:windows/);
     assert.match(workflow, /release create "\$RELEASE_TAG"/);
     assert.match(workflow, /gh "\$\{RELEASE_ARGS\[@\]\}"/);

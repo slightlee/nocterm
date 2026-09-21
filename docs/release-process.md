@@ -63,6 +63,8 @@ Alpha 只在大功能需要早期验证时使用，不要求为了流程完整�
 
 `apps/desktop/package.json` 是私有前端工作区包，不声明独立版本；`Cargo.toml` 的 `[workspace.package].version` 只描述不会单独发布的内部 Rust crate，不得用作产品版本。这样可以避免一次发布人工同步多个文件，也不会因为产品发版而制造无意义的 npm 或 Cargo 锁文件变更。
 
+Rust 代码需要对外报告产品版本时（如 AI 协议的 `clientInfo`），使用构建脚本从根 `package.json` 注入的编译期常量 `NOCTERM_PRODUCT_VERSION`，禁止使用 `CARGO_PKG_VERSION` 代替产品版本。
+
 Git Tag 使用 `v` 前缀，例如 `v0.1.0-beta.1`。Tag 必须指向用于生成安装包的同一提交。产品版本由 Release Please 更新；锁文件若被工具更新，应与版本变更一并审查，禁止为制造一致性而手工修改生成内容。
 
 Git Tag 是“已经发布”的唯一版本基线。版本递增必须高于目标分支可达的最新有效发布 Tag，Tag 推送还会与仓库已有的全部有效发布 Tag 比较，防止给旧提交补发低版本 Tag。仓库尚无发布 Tag 时允许建立首个预发布版本。因此，尚未发布阶段源码中的 `0.1.0` 开发占位值不会阻止首次 `0.1.0-beta.1`，但一旦存在 `v0.1.0-beta.1`，后续版本就必须严格高于它。CI 必须获取完整 Git 历史与 Tag，禁止在浅克隆且 Tag 不完整的环境中作发布判定。
@@ -174,6 +176,14 @@ Nocterm_0.1.0-beta.1_macos_x86_64.dmg
 Nocterm_0.1.0-beta.1_windows_x86_64-setup.exe
 ```
 
+macOS 的 Tauri DMG 使用运行时架构命名（`aarch64`、`x64`），不直接作为发布产物。在 macOS 本机生成最终 DMG 产物时，在仓库根目录执行：
+
+```bash
+corepack pnpm release:build:macos
+```
+
+脚本从根 `package.json` 读取产品版本，只接受宿主原生架构（Apple Silicon 生成 aarch64，Intel 生成 x86_64），精确删除当前版本的旧 DMG 源文件、规范副本和校验文件，再执行 Tauri 构建。只有构建成功且新源文件存在、非空时，才会在 `target/release/artifacts/` 生成符合上述命名规则的 DMG 副本和同名 `.sha256` 校验文件；未显式指定时最低运行版本固定为 macOS 14.0，与 CI 一致。脚本当前只接受本机 macOS aarch64 与 x86_64 产物；新增架构时必须先在对应平台验证 Tauri 原始命名和安装行为。
+
 Tauri 的 Windows NSIS 默认文件名使用 `x64`，不直接作为发布产物。在 Windows x64 本机生成最终 NSIS 产物时，在仓库根目录执行：
 
 ```powershell
@@ -182,7 +192,7 @@ corepack pnpm release:build:windows
 
 脚本从根 `package.json` 读取产品版本，精确删除当前版本的旧 NSIS 源文件、规范副本和校验文件，再执行 Tauri 构建。只有构建成功且新源文件存在、非空时，才会在 `target/release/artifacts/` 生成符合上述命名规则的 NSIS 副本和同名 `.sha256` 校验文件。脚本当前只接受本机 Windows x64 产物；新增架构时必须先在对应平台验证 Tauri 原始命名和安装行为。
 
-推送有效发布 Tag 后，`.github/workflows/release.yml` 从 Tag 解引用后的固定提交构建三个原生产物：在 `macos-15` ARM64 Runner 构建 macOS aarch64 DMG，在 `macos-15-intel` Runner 构建 macOS x86_64 DMG，并在 `windows-latest` 构建 Windows x86_64 NSIS。两个 macOS 构建都将最低运行版本固定为 macOS 14.0；Runner 系统版本只描述构建环境，不代表安装包只能在 macOS 15 运行。工作流创建或复用同 Tag 的 Draft Release，上传三个安装包及各自的 `.sha256`，最后核对六个资产齐全。自动化只准备 Draft，不公开发布；任一平台失败时 Draft 保持不可见，修复后可重跑并安全覆盖同名资产。
+推送有效发布 Tag 后，`.github/workflows/release.yml` 从 Tag 解引用后的固定提交构建三个原生产物：在 `macos-15` ARM64 Runner 通过 `pnpm release:build:macos` 构建 macOS aarch64 DMG，在 `macos-15-intel` Runner 通过同一脚本构建 macOS x86_64 DMG，并在 `windows-latest` 通过 `pnpm release:build:windows` 构建 Windows x86_64 NSIS。两个 macOS 构建都将最低运行版本固定为 macOS 14.0；Runner 系统版本只描述构建环境，不代表安装包只能在 macOS 15 运行。工作流创建或复用同 Tag 的 Draft Release，上传三个安装包及各自的 `.sha256`，最后核对六个资产齐全。自动化只准备 Draft，不公开发布；任一平台失败时 Draft 保持不可见，修复后可重跑并安全覆盖同名资产。
 
 每次分发至少记录：
 
