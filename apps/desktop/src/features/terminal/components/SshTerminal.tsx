@@ -1,7 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import type { ConnectionProfile } from '../../connections';
@@ -21,6 +21,7 @@ import {
   reducePasswordPrompt,
 } from '../model/password-prompt';
 import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
+import { REMOTE_COLORIZE_COMMAND } from '../model/remote-colorize';
 import {
   applyTerminalAppearance,
   observeTerminalAppearance,
@@ -43,6 +44,13 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
   const fitTerminalRef = useRef<(() => void) | null>(null);
   const setSessionStatus = useTerminalStore((state) => state.setSessionStatus);
   const markSessionConnected = useTerminalStore((state) => state.markSessionConnected);
+  // 「一键彩色」只在会话建立后可见；写通道由 effect 填充，避免闭包读到旧 terminalId。
+  const [connected, setConnected] = useState(false);
+  const writeRef = useRef<((data: string) => void) | null>(null);
+
+  const sendColorize = () => {
+    writeRef.current?.(`${REMOTE_COLORIZE_COMMAND}\n`);
+  };
 
   useEffect(() => {
     if (active) fitTerminalRef.current?.();
@@ -196,6 +204,8 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
 
     /** 会话收尾的统一落点：失败与正常结束的状态迁移只在这里做一次。 */
     const applyExit = (reason: string) => {
+      setConnected(false);
+      writeRef.current = null;
       if (reason === 'failed') {
         const message = 'SSH 连接已失败，请检查认证、主机指纹和网络';
         terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`);
@@ -258,6 +268,11 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       }
       terminalId = opened.terminalId;
       markSessionConnected(connection.id);
+      // 会话可用后放开「一键彩色」入口；写通道按最新 terminalId 闭包转发。
+      writeRef.current = (data) => {
+        if (terminalId) void writeSshTerminal(terminalId, data);
+      };
+      setConnected(true);
       // 回放放在 markSessionConnected 之后：若会话已经失败，失败状态应当覆盖已连接。
       flushPending(opened.terminalId);
       terminal.focus();
@@ -271,6 +286,8 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       disposed = true;
       // 卸载时先兑现挂起的口令提示，否则等待它的 Promise 永远不会落地。
       settlePrompt(null);
+      setConnected(false);
+      writeRef.current = null;
       detachPaste();
       observer.disconnect();
       stopObservingAppearance();
@@ -283,7 +300,22 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     };
   }, [connection, markSessionConnected, setSessionStatus]);
 
-  return <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />;
+  return (
+    <div className={styles.terminalWrapper}>
+      <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />
+      {connected ? (
+        <button
+          aria-label="为远程会话开启彩色提示符与 ls/grep 颜色（仅当前会话生效）"
+          className={styles.colorizeButton}
+          onClick={sendColorize}
+          title="向远程 Shell 发送彩色提示符与 ls/grep 颜色别名（仅当前会话生效，不修改远端文件）"
+          type="button"
+        >
+          一键彩色
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function getErrorMessage(error: unknown): string {

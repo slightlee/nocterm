@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { Fragment, useState, type CSSProperties } from 'react';
 
 import type { AppTheme } from '../types/settings-types';
 import { useSettings } from '../model/use-settings';
@@ -7,6 +7,7 @@ import {
   TERMINAL_FONT_SIZE_MIN,
   resolveTerminalTheme,
   terminalColorSchemes,
+  terminalSchemeGroups,
 } from '../model/terminal-appearance';
 import styles from './AppearanceSettingsPage.module.css';
 
@@ -213,34 +214,44 @@ export function AppearanceSettingsPage() {
               </div>
               <div className={styles.paletteViewport} aria-label="终端配色方案列表" role="region">
                 <div className={styles.paletteGrid} role="group" aria-label="终端配色">
-                  {terminalColorSchemes.map((scheme) => {
-                    const selected = !followingApp && terminalAppearance.colorScheme === scheme.id;
-                    return (
-                      <button
-                        aria-pressed={selected}
-                        className={`${styles.paletteOption} ${styles[scheme.previewClass]} ${selected ? styles.selectedPalette : ''}`}
-                        disabled={loading || saving}
-                        key={scheme.id}
-                        onClick={() =>
-                          void updateTerminalAppearance({
-                            ...terminalAppearance,
-                            colorScheme: scheme.id,
-                          })
-                        }
-                        title={scheme.description}
-                        type="button"
-                      >
-                        <span className={styles.paletteSwatch} aria-hidden="true">
-                          <i />
-                          <i />
-                          <i />
-                          <i />
-                          <i />
-                        </span>
-                        <span>{scheme.label}</span>
-                      </button>
-                    );
-                  })}
+                  {terminalSchemeGroups.map((group) => (
+                    <Fragment key={group.id}>
+                      <div className={styles.paletteGroupTitle} role="presentation">
+                        {group.label}
+                      </div>
+                      {terminalColorSchemes
+                        .filter((scheme) => scheme.group === group.id)
+                        .map((scheme) => {
+                          const selected =
+                            !followingApp && terminalAppearance.colorScheme === scheme.id;
+                          return (
+                            <button
+                              aria-pressed={selected}
+                              className={`${styles.paletteOption} ${styles[scheme.previewClass]} ${selected ? styles.selectedPalette : ''}`}
+                              disabled={loading || saving}
+                              key={scheme.id}
+                              onClick={() =>
+                                void updateTerminalAppearance({
+                                  ...terminalAppearance,
+                                  colorScheme: scheme.id,
+                                })
+                              }
+                              title={scheme.description}
+                              type="button"
+                            >
+                              <span className={styles.paletteSwatch} aria-hidden="true">
+                                <i />
+                                <i />
+                                <i />
+                                <i />
+                                <i />
+                              </span>
+                              <span>{scheme.label}</span>
+                            </button>
+                          );
+                        })}
+                    </Fragment>
+                  ))}
                 </div>
               </div>
             </div>

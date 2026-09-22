@@ -433,6 +433,231 @@
   --preview-selection: var(--terminal-preset-material-ocean-selection);
 }
 
+.mobaxtermVivid {
+  --preview-bg: var(--terminal-preset-mobaxterm-vivid-bg);
+  --preview-panel: var(--terminal-preset-mobaxterm-vivid-panel);
+  --preview-border: var(--terminal-preset-mobaxterm-vivid-border);
+  --preview-text: var(--terminal-preset-mobaxterm-vivid-text);
+  --preview-muted: var(--terminal-preset-mobaxterm-vivid-muted);
+  --preview-green: var(--terminal-preset-mobaxterm-vivid-green);
+  --preview-blue: var(--terminal-preset-mobaxterm-vivid-blue);
+  --preview-red: var(--terminal-preset-mobaxterm-vivid-red);
+  --preview-yellow: var(--terminal-preset-mobaxterm-vivid-yellow);
+  --preview-magenta: var(--terminal-preset-mobaxterm-vivid-magenta);
+  --preview-cyan: var(--terminal-preset-mobaxterm-vivid-cyan);
+  --preview-selection: var(--terminal-preset-mobaxterm-vivid-selection);
+}
+
+.catppuccinLatte {
+  --preview-bg: var(--terminal-preset-catppuccin-latte-bg);
+  --preview-panel: var(--terminal-preset-catppuccin-latte-panel);
+  --preview-border: var(--terminal-preset-catppuccin-latte-border);
+  --preview-text: var(--terminal-preset-catppuccin-latte-text);
+  --preview-muted: var(--terminal-preset-catppuccin-latte-muted);
+  --preview-green: var(--terminal-preset-catppuccin-latte-green);
+  --preview-blue: var(--terminal-preset-catppuccin-latte-blue);
+  --preview-red: var(--terminal-preset-catppuccin-latte-red);
+  --preview-yellow: var(--terminal-preset-catppuccin-latte-yellow);
+  --preview-magenta: var(--terminal-preset-catppuccin-latte-magenta);
+  --preview-cyan: var(--terminal-preset-catppuccin-latte-cyan);
+  --preview-selection: var(--terminal-preset-catppuccin-latte-selection);
+}
+
+.catppuccinFrappe {
+  --preview-bg: var(--terminal-preset-catppuccin-frappe-bg);
+  --preview-panel: var(--terminal-preset-catppuccin-frappe-panel);
+  --preview-border: var(--terminal-preset-catppuccin-frappe-border);
+  --preview-text: var(--terminal-preset-catppuccin-frappe-text);
+  --preview-muted: var(--terminal-preset-catppuccin-frappe-muted);
+  --preview-green: var(--terminal-preset-catppuccin-frappe-green);
+  --preview-blue: var(--terminal-preset-catppuccin-frappe-blue);
+  --preview-red: var(--terminal-preset-catppuccin-frappe-red);
+  --preview-yellow: var(--terminal-preset-catppuccin-frappe-yellow);
+  --preview-magenta: var(--terminal-preset-catppuccin-frappe-magenta);
+  --preview-cyan: var(--terminal-preset-catppuccin-frappe-cyan);
+  --preview-selection: var(--terminal-preset-catppuccin-frappe-selection);
+}
+
+.catppuccinMacchiato {
+  --preview-bg: var(--terminal-preset-catppuccin-macchiato-bg);
+  --preview-panel: var(--terminal-preset-catppuccin-macchiato-panel);
+  --preview-border: var(--terminal-preset-catppuccin-macchiato-border);
+  --preview-text: var(--terminal-preset-catppuccin-macchiato-text);
+  --preview-muted: var(--terminal-preset-catppuccin-macchiato-muted);
+  --preview-green: var(--terminal-preset-catppuccin-macchiato-green);
+  --preview-blue: var(--terminal-preset-catppuccin-macchiato-blue);
+  --preview-red: var(--terminal-preset-catppuccin-macchiato-red);
+  --preview-yellow: var(--terminal-preset-catppuccin-macchiato-yellow);
+  --preview-magenta: var(--terminal-preset-catppuccin-macchiato-magenta);
+  --preview-cyan: var(--terminal-preset-catppuccin-macchiato-cyan);
+  --preview-selection: var(--terminal-preset-catppuccin-macchiato-selection);
+}
+
+.rosePine {
+  --preview-bg: var(--terminal-preset-rose-pine-bg);
+  --preview-panel: var(--terminal-preset-rose-pine-panel);
+  --preview-border: var(--terminal-preset-rose-pine-border);
+  --preview-text: var(--terminal-preset-rose-pine-text);
+  --preview-muted: var(--terminal-preset-rose-pine-muted);
+  --preview-green: var(--terminal-preset-rose-pine-green);
+  --preview-blue: var(--terminal-preset-rose-pine-blue);
+  --preview-red: var(--terminal-preset-rose-pine-red);
+  --preview-yellow: var(--terminal-preset-rose-pine-yellow);
+  --preview-magenta: var(--terminal-preset-rose-pine-magenta);
+  --preview-cyan: var(--terminal-preset-rose-pine-cyan);
+  --preview-selection: var(--terminal-preset-rose-pine-selection);
+}
+
+.rosePineDawn {
+  --preview-bg: var(--terminal-preset-rose-pine-dawn-bg);
+  --preview-panel: var(--terminal-preset-rose-pine-dawn-panel);
+  --preview-border: var(--terminal-preset-rose-pine-dawn-border);
+  --preview-text: var(--terminal-preset-rose-pine-dawn-text);
+  --preview-muted: var(--terminal-preset-rose-pine-dawn-muted);
+  --preview-green: var(--terminal-preset-rose-pine-dawn-green);
+  --preview-blue: var(--terminal-preset-rose-pine-dawn-blue);
+  --preview-red: var(--terminal-preset-rose-pine-dawn-red);
+  --preview-yellow: var(--terminal-preset-rose-pine-dawn-yellow);
+  --preview-magenta: var(--terminal-preset-rose-pine-dawn-magenta);
+  --preview-cyan: var(--terminal-preset-rose-pine-dawn-cyan);
+  --preview-selection: var(--terminal-preset-rose-pine-dawn-selection);
+}
+
+.rosePineMoon {
+  --preview-bg: var(--terminal-preset-rose-pine-moon-bg);
+  --preview-panel: var(--terminal-preset-rose-pine-moon-panel);
+  --preview-border: var(--terminal-preset-rose-pine-moon-border);
+  --preview-text: var(--terminal-preset-rose-pine-moon-text);
+  --preview-muted: var(--terminal-preset-rose-pine-moon-muted);
+  --preview-green: var(--terminal-preset-rose-pine-moon-green);
+  --preview-blue: var(--terminal-preset-rose-pine-moon-blue);
+  --preview-red: var(--terminal-preset-rose-pine-moon-red);
+  --preview-yellow: var(--terminal-preset-rose-pine-moon-yellow);
+  --preview-magenta: var(--terminal-preset-rose-pine-moon-magenta);
+  --preview-cyan: var(--terminal-preset-rose-pine-moon-cyan);
+  --preview-selection: var(--terminal-preset-rose-pine-moon-selection);
+}
+
+.everforestDark {
+  --preview-bg: var(--terminal-preset-everforest-dark-bg);
+  --preview-panel: var(--terminal-preset-everforest-dark-panel);
+  --preview-border: var(--terminal-preset-everforest-dark-border);
+  --preview-text: var(--terminal-preset-everforest-dark-text);
+  --preview-muted: var(--terminal-preset-everforest-dark-muted);
+  --preview-green: var(--terminal-preset-everforest-dark-green);
+  --preview-blue: var(--terminal-preset-everforest-dark-blue);
+  --preview-red: var(--terminal-preset-everforest-dark-red);
+  --preview-yellow: var(--terminal-preset-everforest-dark-yellow);
+  --preview-magenta: var(--terminal-preset-everforest-dark-magenta);
+  --preview-cyan: var(--terminal-preset-everforest-dark-cyan);
+  --preview-selection: var(--terminal-preset-everforest-dark-selection);
+}
+
+.kanagawa {
+  --preview-bg: var(--terminal-preset-kanagawa-bg);
+  --preview-panel: var(--terminal-preset-kanagawa-panel);
+  --preview-border: var(--terminal-preset-kanagawa-border);
+  --preview-text: var(--terminal-preset-kanagawa-text);
+  --preview-muted: var(--terminal-preset-kanagawa-muted);
+  --preview-green: var(--terminal-preset-kanagawa-green);
+  --preview-blue: var(--terminal-preset-kanagawa-blue);
+  --preview-red: var(--terminal-preset-kanagawa-red);
+  --preview-yellow: var(--terminal-preset-kanagawa-yellow);
+  --preview-magenta: var(--terminal-preset-kanagawa-magenta);
+  --preview-cyan: var(--terminal-preset-kanagawa-cyan);
+  --preview-selection: var(--terminal-preset-kanagawa-selection);
+}
+
+.ayuDark {
+  --preview-bg: var(--terminal-preset-ayu-dark-bg);
+  --preview-panel: var(--terminal-preset-ayu-dark-panel);
+  --preview-border: var(--terminal-preset-ayu-dark-border);
+  --preview-text: var(--terminal-preset-ayu-dark-text);
+  --preview-muted: var(--terminal-preset-ayu-dark-muted);
+  --preview-green: var(--terminal-preset-ayu-dark-green);
+  --preview-blue: var(--terminal-preset-ayu-dark-blue);
+  --preview-red: var(--terminal-preset-ayu-dark-red);
+  --preview-yellow: var(--terminal-preset-ayu-dark-yellow);
+  --preview-magenta: var(--terminal-preset-ayu-dark-magenta);
+  --preview-cyan: var(--terminal-preset-ayu-dark-cyan);
+  --preview-selection: var(--terminal-preset-ayu-dark-selection);
+}
+
+.ayuLight {
+  --preview-bg: var(--terminal-preset-ayu-light-bg);
+  --preview-panel: var(--terminal-preset-ayu-light-panel);
+  --preview-border: var(--terminal-preset-ayu-light-border);
+  --preview-text: var(--terminal-preset-ayu-light-text);
+  --preview-muted: var(--terminal-preset-ayu-light-muted);
+  --preview-green: var(--terminal-preset-ayu-light-green);
+  --preview-blue: var(--terminal-preset-ayu-light-blue);
+  --preview-red: var(--terminal-preset-ayu-light-red);
+  --preview-yellow: var(--terminal-preset-ayu-light-yellow);
+  --preview-magenta: var(--terminal-preset-ayu-light-magenta);
+  --preview-cyan: var(--terminal-preset-ayu-light-cyan);
+  --preview-selection: var(--terminal-preset-ayu-light-selection);
+}
+
+.oxocarbonDark {
+  --preview-bg: var(--terminal-preset-oxocarbon-dark-bg);
+  --preview-panel: var(--terminal-preset-oxocarbon-dark-panel);
+  --preview-border: var(--terminal-preset-oxocarbon-dark-border);
+  --preview-text: var(--terminal-preset-oxocarbon-dark-text);
+  --preview-muted: var(--terminal-preset-oxocarbon-dark-muted);
+  --preview-green: var(--terminal-preset-oxocarbon-dark-green);
+  --preview-blue: var(--terminal-preset-oxocarbon-dark-blue);
+  --preview-red: var(--terminal-preset-oxocarbon-dark-red);
+  --preview-yellow: var(--terminal-preset-oxocarbon-dark-yellow);
+  --preview-magenta: var(--terminal-preset-oxocarbon-dark-magenta);
+  --preview-cyan: var(--terminal-preset-oxocarbon-dark-cyan);
+  --preview-selection: var(--terminal-preset-oxocarbon-dark-selection);
+}
+
+.oneHalfLight {
+  --preview-bg: var(--terminal-preset-one-half-light-bg);
+  --preview-panel: var(--terminal-preset-one-half-light-panel);
+  --preview-border: var(--terminal-preset-one-half-light-border);
+  --preview-text: var(--terminal-preset-one-half-light-text);
+  --preview-muted: var(--terminal-preset-one-half-light-muted);
+  --preview-green: var(--terminal-preset-one-half-light-green);
+  --preview-blue: var(--terminal-preset-one-half-light-blue);
+  --preview-red: var(--terminal-preset-one-half-light-red);
+  --preview-yellow: var(--terminal-preset-one-half-light-yellow);
+  --preview-magenta: var(--terminal-preset-one-half-light-magenta);
+  --preview-cyan: var(--terminal-preset-one-half-light-cyan);
+  --preview-selection: var(--terminal-preset-one-half-light-selection);
+}
+
+.githubLight {
+  --preview-bg: var(--terminal-preset-github-light-bg);
+  --preview-panel: var(--terminal-preset-github-light-panel);
+  --preview-border: var(--terminal-preset-github-light-border);
+  --preview-text: var(--terminal-preset-github-light-text);
+  --preview-muted: var(--terminal-preset-github-light-muted);
+  --preview-green: var(--terminal-preset-github-light-green);
+  --preview-blue: var(--terminal-preset-github-light-blue);
+  --preview-red: var(--terminal-preset-github-light-red);
+  --preview-yellow: var(--terminal-preset-github-light-yellow);
+  --preview-magenta: var(--terminal-preset-github-light-magenta);
+  --preview-cyan: var(--terminal-preset-github-light-cyan);
+  --preview-selection: var(--terminal-preset-github-light-selection);
+}
+
+.synthwave84 {
+  --preview-bg: var(--terminal-preset-synthwave-84-bg);
+  --preview-panel: var(--terminal-preset-synthwave-84-panel);
+  --preview-border: var(--terminal-preset-synthwave-84-border);
+  --preview-text: var(--terminal-preset-synthwave-84-text);
+  --preview-muted: var(--terminal-preset-synthwave-84-muted);
+  --preview-green: var(--terminal-preset-synthwave-84-green);
+  --preview-blue: var(--terminal-preset-synthwave-84-blue);
+  --preview-red: var(--terminal-preset-synthwave-84-red);
+  --preview-yellow: var(--terminal-preset-synthwave-84-yellow);
+  --preview-magenta: var(--terminal-preset-synthwave-84-magenta);
+  --preview-cyan: var(--terminal-preset-synthwave-84-cyan);
+  --preview-selection: var(--terminal-preset-synthwave-84-selection);
+}
+
 .previewToolbar {
   display: flex;
   height: 34px;
@@ -641,6 +866,21 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
+}
+
+.paletteGroupTitle {
+  grid-column: 1 / -1;
+  padding-top: 4px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.paletteGroupTitle:not(:first-child) {
+  margin-top: 6px;
+  border-top: 1px solid var(--border-primary);
+  padding-top: 8px;
 }
 
 .followControl,

@@ -8,3 +8,35 @@
   background: var(--term);
   overflow: hidden;
 }
+
+/* 包一层以承载悬浮操作；层内尺寸契约与原先裸 .terminal 一致。 */
+.terminalWrapper {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.colorizeButton {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 2;
+  padding: 3px 10px;
+  color: var(--term-muted);
+  font-size: 11px;
+  background: color-mix(in srgb, var(--term-panel) 86%, transparent);
+  border: 1px solid var(--term-border);
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  opacity: 0.82;
+  transition:
+    color var(--ds-dur-fast, 100ms) ease,
+    opacity var(--ds-dur-fast, 100ms) ease;
+}
+
+.colorizeButton:hover,
+.colorizeButton:focus-visible {
+  color: var(--term-text);
+  opacity: 1;
+}

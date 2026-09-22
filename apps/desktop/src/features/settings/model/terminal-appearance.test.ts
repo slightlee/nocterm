@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveTerminalTheme, terminalColorSchemes } from './terminal-appearance';
+import {
+  resolveTerminalTheme,
+  terminalColorSchemes,
+  terminalSchemeGroups,
+} from './terminal-appearance';
 
 describe('resolveTerminalTheme', () => {
   it('offers the complete curated terminal palette set', () => {
@@ -20,6 +24,21 @@ describe('resolveTerminalTheme', () => {
       'one_dark',
       'catppuccin_mocha',
       'material_ocean',
+      'mobaxterm_vivid',
+      'catppuccin_latte',
+      'catppuccin_frappe',
+      'catppuccin_macchiato',
+      'rose_pine',
+      'rose_pine_dawn',
+      'rose_pine_moon',
+      'everforest_dark',
+      'kanagawa',
+      'ayu_dark',
+      'ayu_light',
+      'oxocarbon_dark',
+      'one_half_light',
+      'github_light',
+      'synthwave_84',
     ]);
     expect(terminalColorSchemes.map((scheme) => scheme.label)).toEqual([
       '明亮',
@@ -37,7 +56,36 @@ describe('resolveTerminalTheme', () => {
       '原子暗色',
       '摩卡',
       '材质海洋',
+      '鲜亮',
+      '拿铁',
+      '法布奇诺',
+      '玛奇朵',
+      '玫瑰松',
+      '玫瑰松·晨',
+      '玫瑰松·月',
+      '暮林',
+      '神奈川',
+      'Ayu 暗',
+      'Ayu 亮',
+      '氧碳黑',
+      '一半亮',
+      'GitHub 亮',
+      '合成波',
     ]);
+  });
+
+  it('groups every scheme into exactly one curated group', () => {
+    const groupIds = new Set(terminalSchemeGroups.map((group) => group.id));
+    for (const scheme of terminalColorSchemes) {
+      expect(groupIds.has(scheme.group), `${scheme.id} group`).toBe(true);
+    }
+    // 每个分组都至少有一个方案，避免出现空分组标题。
+    for (const group of terminalSchemeGroups) {
+      expect(
+        terminalColorSchemes.some((scheme) => scheme.group === group.id),
+        `${group.id} non-empty`
+      ).toBe(true);
+    }
   });
 
   it('resolves the follow-app scheme at runtime', () => {
@@ -61,5 +109,8 @@ describe('resolveTerminalTheme', () => {
     expect(resolveTerminalTheme('one_dark', 'light')).toBe('one_dark');
     expect(resolveTerminalTheme('catppuccin_mocha', 'dark')).toBe('catppuccin_mocha');
     expect(resolveTerminalTheme('material_ocean', 'light')).toBe('material_ocean');
+    expect(resolveTerminalTheme('mobaxterm_vivid', 'light')).toBe('mobaxterm_vivid');
+    expect(resolveTerminalTheme('rose_pine_dawn', 'dark')).toBe('rose_pine_dawn');
+    expect(resolveTerminalTheme('github_light', 'dark')).toBe('github_light');
   });
 });
