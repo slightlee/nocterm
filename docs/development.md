@@ -56,6 +56,8 @@ corepack pnpm cargo:check
 
 - 可复现的 Bug 原则上先创建 Issue，记录影响平台、复现步骤、预期行为、实际行为和脱敏后的证据；涉及凭据泄露、远程代码执行或数据损坏的安全问题必须使用 GitHub Private Security Advisory，不得创建公开 Issue；
 - 非平凡功能先通过 Issue 明确用户问题、范围、非目标和验收标准；拼写、纯格式等无需独立跟踪的小改动可以不创建 Issue，但 Pull Request 必须说明原因；
+- **Issue 先行是默认流程**：发现缺陷或规划功能时，先创建 Issue 再开始修复或实现，使后续 Pull Request 有可关联、可追溯的对象；AI 与自动化工具在提交任何修复前，必须先检查打开的 Issue 是否覆盖本次变更，避免出现“修了但无记录”的孤儿修复；
+- 验收（发布验收或缺陷回归）过程中发现的缺陷必须记录到对应验收 Issue 或独立 Issue：缺陷现象、根因、修复 PR/commit 与对验收的影响，禁止只修不记；
 - Issue 描述问题和验收边界，不预先锁死实现；一个 Issue 可以经过讨论后拆分为多个独立交付的 Pull Request。
 - 发布候选版本使用“发布验收”Issue 记录 Tag、Commit、CI Run、产物哈希、目标平台实测和最终发布决定；该 Issue 是验收记录，不替代 Release Please Pull Request、Git Tag 或发布授权。
 
@@ -75,7 +77,10 @@ Pull Request 标题必须符合第 6 节的 Conventional Commits 规范，并作
 - 默认使用 `Refs #123`，表示变更与 Issue 相关，但合并时不自动关闭；
 - 只有 Pull Request 合并本身即可满足 Issue 全部验收标准时，才使用 `Closes #123` 或 `Fixes #123`；
 - 如果仍需合并后的目标平台、最终安装包或人工验收，必须使用 `Refs #123`，补齐证据后再手动关闭 Issue；
-- 一个 Issue 拆分为多个 Pull Request 时，前置 Pull Request 使用 `Refs`，仅最终完成全部验收标准的 Pull Request 可以使用 `Closes` 或 `Fixes`。
+- 一个 Issue 拆分为多个 Pull Request 时，前置 Pull Request 使用 `Refs`，仅最终完成全部验收标准的 Pull Request 可以使用 `Closes` 或 `Fixes`；
+- Pull Request 合并后，作者必须在关联 Issue 上补充记录：修复 commit、影响范围与剩余验证要求；Squash merge 与自动化流程不会替你回写 Issue；
+- 关联 Issue 只能在验收标准全部满足并附证据（真实平台验收、回归测试记录等）后关闭；**修复代码合并不等于 Issue 可以关闭**；
+- 修复尚未包含在当前候选版本的发布产物中时，验收 Issue 保持打开，并注明该回归项归属的下一候选版本。
 
 仓库只允许 Squash merge，禁止 Merge Commit 和 Rebase merge，以保持一个 Pull Request 对应 `main` 上一个可回滚的逻辑提交。合并前应在 Pull Request 中分别记录已检查、已自动测试、已构建、已真实运行和未验证范围，不得用 CI 通过代替真实平台验收。
 
