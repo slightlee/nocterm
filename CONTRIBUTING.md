@@ -56,6 +56,6 @@ Pull Request 应说明：
 - 关键实现和安全边界；
 - 已执行的静态检查、自动测试、构建和真实运行；
 - 未验证的平台、环境或场景；
-- 关联 Issue，未完成全部验收时使用 `Refs #123`，完成时才使用 `Closes #123`。
+- 关联 Issue，未完成全部验收时使用 `Refs #123`，完成时才使用 `Closes #123`；缺陷与非平凡功能默认 Issue 先行，Pull Request 合并后在关联 Issue 上记录修复 commit 与验证进展，验收证据齐备后才关闭 Issue。
 
-更完整的分支、提交、语言与合并规则只在[开发规范](docs/development.md)中维护。
+更完整的分支、提交、语言、Issue 闭环与合并规则只在[开发规范](docs/development.md)中维护。
