@@ -63,6 +63,10 @@ corepack pnpm cargo:check
 
 ### 5.2 分支与 Pull Request
 
+两条主线的关系如下图：日常迭代循环随时发生，版本发布流程只在维护者决定发版时启动；验收中发现的缺陷回到迭代循环独立建档，修复经 `main` 汇入下一版本。
+
+![Issue 闭环与版本发布流程](assets/process-loop.svg)
+
 - 一个分支和 Pull Request 表达一个逻辑完整的变更，不与单个 Git 提交一一对应；
 - 同一任务可以在原分支上多次提交和推送，已打开的 Pull Request 会自动更新，不得为每次修改重复创建 Pull Request；
 - 同一轮验收发现的高度相关问题，优先收敛到一个临时稳定化分支和 Draft Pull Request；无关变更、需要独立回滚或不能互相等待的修复才拆分；
