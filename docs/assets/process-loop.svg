@@ -1,0 +1,92 @@
+<svg viewBox="0 0 680 490" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Nocterm 完整流程闭环：日常迭代与版本发布</title>
+  <desc>上方为日常迭代循环：Issue 先行、修复 PR 关联、合并后回写并验证关闭；下方为版本发布流程：手动触发 Release Please、验收清单逐项勾选后发布。两条线通过 main 分支与缺陷回流相连。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="680" height="490" fill="#FFFFFF"/>
+  <g>
+    <rect x="40" y="64" width="600" height="184" rx="20" fill="#F4FBF8" stroke="#0F6E56" stroke-width="0.5"/>
+    <text x="56" y="88" font-size="14" font-weight="500" fill="#085041" dominant-baseline="central" font-family="-apple-system,'PingFang SC',sans-serif">日常迭代循环（随时发生）</text>
+    <g>
+      <rect x="56" y="100" width="176" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+      <text x="144" y="121" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041" font-family="-apple-system,'PingFang SC',sans-serif">发现问题 / 新需求</text>
+      <text x="144" y="139" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="-apple-system,'PingFang SC',sans-serif">使用或验收中发现</text>
+    </g>
+    <path d="M234 126 L248 126" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="252" y="100" width="176" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+      <text x="340" y="121" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041" font-family="-apple-system,'PingFang SC',sans-serif">Issue 先行建档</text>
+      <text x="340" y="139" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="-apple-system,'PingFang SC',sans-serif">先有跟踪再动代码</text>
+    </g>
+    <path d="M430 126 L444 126" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="448" y="100" width="176" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+      <text x="536" y="121" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041" font-family="-apple-system,'PingFang SC',sans-serif">修复 PR 关联 Issue</text>
+      <text x="536" y="139" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="-apple-system,'PingFang SC',sans-serif">Refs / Fixes #N</text>
+    </g>
+    <path d="M536 152 L536 164 L144 164 L144 176" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="56" y="176" width="176" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+      <text x="144" y="197" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041" font-family="-apple-system,'PingFang SC',sans-serif">CI + Squash 合并</text>
+      <text x="144" y="215" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="-apple-system,'PingFang SC',sans-serif">合入 main</text>
+    </g>
+    <path d="M234 202 L248 202" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="252" y="176" width="176" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+      <text x="340" y="197" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041" font-family="-apple-system,'PingFang SC',sans-serif">回写 Issue</text>
+      <text x="340" y="215" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="-apple-system,'PingFang SC',sans-serif">记录 commit / 影响</text>
+    </g>
+    <path d="M430 202 L444 202" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="448" y="176" width="176" height="52" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+      <text x="536" y="197" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041" font-family="-apple-system,'PingFang SC',sans-serif">验证通过后关闭</text>
+      <text x="536" y="215" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56" font-family="-apple-system,'PingFang SC',sans-serif">证据齐备才关</text>
+    </g>
+  </g>
+  <path d="M250 248 L250 280" fill="none" stroke="#D85A30" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="260" y="264" dominant-baseline="central" font-size="12" fill="#993C1D" font-family="-apple-system,'PingFang SC',sans-serif">main 汇集修复，进入下一版本</text>
+  <path d="M430 280 L430 248" fill="none" stroke="#D85A30" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="440" y="264" dominant-baseline="central" font-size="12" fill="#993C1D" font-family="-apple-system,'PingFang SC',sans-serif">验收中发现缺陷 → 回到迭代</text>
+  <g>
+    <rect x="40" y="280" width="600" height="188" rx="20" fill="#F5F9FD" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="56" y="304" font-size="14" font-weight="500" fill="#0C447C" dominant-baseline="central" font-family="-apple-system,'PingFang SC',sans-serif">版本发布流程（决定发版时才走）</text>
+    <g>
+      <rect x="56" y="316" width="176" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+      <text x="144" y="337" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="-apple-system,'PingFang SC',sans-serif">触发 Release Please</text>
+      <text x="144" y="355" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="-apple-system,'PingFang SC',sans-serif">维护者手动 dispatch</text>
+    </g>
+    <path d="M234 342 L248 342" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="252" y="316" width="176" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+      <text x="340" y="337" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="-apple-system,'PingFang SC',sans-serif">合并 bump PR</text>
+      <text x="340" y="355" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="-apple-system,'PingFang SC',sans-serif">打 Tag + Draft Release</text>
+    </g>
+    <path d="M430 342 L444 342" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="448" y="316" width="176" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+      <text x="536" y="337" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="-apple-system,'PingFang SC',sans-serif">建版本验收 Issue</text>
+      <text x="536" y="355" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="-apple-system,'PingFang SC',sans-serif">SHA / 平台 / 冒烟清单</text>
+    </g>
+    <path d="M536 368 L536 380 L144 380 L144 392" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="56" y="392" width="176" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+      <text x="144" y="413" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="-apple-system,'PingFang SC',sans-serif">逐项实测勾选</text>
+      <text x="144" y="431" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="-apple-system,'PingFang SC',sans-serif">真实证据才能勾</text>
+    </g>
+    <path d="M234 418 L248 418" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="252" y="392" width="176" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+      <text x="340" y="413" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="-apple-system,'PingFang SC',sans-serif">已知问题 + 决定</text>
+      <text x="340" y="431" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="-apple-system,'PingFang SC',sans-serif">未测平台如实记录</text>
+    </g>
+    <path d="M430 418 L444 418" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <g>
+      <rect x="448" y="392" width="176" height="52" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+      <text x="536" y="413" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C" font-family="-apple-system,'PingFang SC',sans-serif">发布 Draft</text>
+      <text x="536" y="431" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" font-family="-apple-system,'PingFang SC',sans-serif">关闭验收 Issue</text>
+    </g>
+  </g>
+</svg>
