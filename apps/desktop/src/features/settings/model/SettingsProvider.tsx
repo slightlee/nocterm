@@ -13,6 +13,8 @@ import type { AppTheme, TerminalAppearance } from '../types/settings-types';
 import { resolveAppTheme, toNativeAppTheme } from './app-theme';
 import { SettingsContext } from './settings-context';
 import { DEFAULT_TERMINAL_FONT_SIZE, resolveTerminalTheme } from './terminal-appearance';
+import { applyTerminalHighlightConfig } from '../../terminal/model/highlight-config';
+import { parseHighlightOverrides } from '../../terminal/model/highlight-roles';
 
 /**
  * 设置 Provider 是应用主题的唯一写入者：AppShell 和页面不再各自监听系统主题，
@@ -24,6 +26,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [terminalAppearance, setTerminalAppearanceState] = useState<TerminalAppearance>({
     fontSize: DEFAULT_TERMINAL_FONT_SIZE,
     colorScheme: 'follow_app',
+    highlightPreset: 'theme',
+    highlightOverrides: '',
   });
   const [loading, setLoading] = useState(persistenceAvailable);
   const [saving, setSaving] = useState(false);
@@ -59,6 +63,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         resolvedAppTheme
       );
       document.documentElement.dataset.terminalFontSize = String(terminalAppearance.fontSize);
+      applyTerminalHighlightConfig({
+        preset: terminalAppearance.highlightPreset,
+        overrides: parseHighlightOverrides(terminalAppearance.highlightOverrides),
+      });
     };
     applyTheme();
     if (appTheme !== 'system') return;

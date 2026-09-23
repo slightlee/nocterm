@@ -6,7 +6,7 @@ use nocterm_domain::connection::{
     NewConnectionGroup, NewConnectionProfile,
 };
 use nocterm_domain::settings::{
-    AppTheme, SettingsRepository, SettingsRepositoryError, TerminalColorScheme,
+    AppTheme, HighlightPreset, SettingsRepository, SettingsRepositoryError, TerminalColorScheme,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -455,10 +455,22 @@ impl SettingsRepository for SqliteConnectionRepository {
             .transpose()
     }
 
+    fn highlight_preset(&self) -> Result<Option<HighlightPreset>, SettingsRepositoryError> {
+        self.setting_value("terminal_highlight_preset")?
+            .map(|value| HighlightPreset::parse(&value).map_err(settings_error))
+            .transpose()
+    }
+
+    fn highlight_overrides(&self) -> Result<Option<String>, SettingsRepositoryError> {
+        self.setting_value("terminal_highlight_overrides")
+    }
+
     fn set_terminal_appearance(
         &self,
         font_size: u8,
         color_scheme: TerminalColorScheme,
+        highlight_preset: HighlightPreset,
+        highlight_overrides: &str,
     ) -> Result<(), SettingsRepositoryError> {
         let mut connection = self
             .connection
@@ -468,6 +480,14 @@ impl SettingsRepository for SqliteConnectionRepository {
         for (key, value) in [
             ("terminal_font_size", font_size.to_string()),
             ("terminal_color_scheme", color_scheme.as_str().to_string()),
+            (
+                "terminal_highlight_preset",
+                highlight_preset.as_str().to_string(),
+            ),
+            (
+                "terminal_highlight_overrides",
+                highlight_overrides.to_string(),
+            ),
         ] {
             transaction
                 .execute(
@@ -868,7 +888,12 @@ mod tests {
 
         assert_eq!(repository.terminal_font_size().expect("read font"), None);
         repository
-            .set_terminal_appearance(16, TerminalColorScheme::NoctermDark)
+            .set_terminal_appearance(
+                16,
+                TerminalColorScheme::NoctermDark,
+                HighlightPreset::MobaXterm,
+                "directory=12",
+            )
             .expect("save terminal appearance");
         assert_eq!(
             repository.terminal_font_size().expect("read saved font"),
@@ -879,6 +904,16 @@ mod tests {
                 .terminal_color_scheme()
                 .expect("read saved color scheme"),
             Some(TerminalColorScheme::NoctermDark)
+        );
+        assert_eq!(
+            repository.highlight_preset().expect("read saved preset"),
+            Some(HighlightPreset::MobaXterm)
+        );
+        assert_eq!(
+            repository
+                .highlight_overrides()
+                .expect("read saved overrides"),
+            Some("directory=12".to_string())
         );
     }
 

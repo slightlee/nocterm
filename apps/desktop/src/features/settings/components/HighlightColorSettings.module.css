@@ -1,0 +1,232 @@
+.highlightPanel {
+  display: grid;
+  gap: 14px;
+  padding: 14px 16px 16px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-primary);
+}
+
+.panelHeading {
+  display: grid;
+  gap: 2px;
+}
+
+.panelTitle {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.panelHeading small {
+  color: var(--text-tertiary);
+  font-size: 9px;
+}
+
+.presetRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.presetCard {
+  display: grid;
+  gap: 7px;
+  justify-items: start;
+  padding: 9px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--dur-normal) var(--ease-out);
+}
+
+.presetCard:focus-visible {
+  outline: 2px solid var(--accent-primary, var(--border-primary));
+  outline-offset: 1px;
+}
+
+.presetCard:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.presetCard strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.selectedPreset {
+  border-color: var(--accent-primary, var(--text-secondary));
+}
+
+.presetSwatch {
+  display: flex;
+  gap: 3px;
+}
+
+.presetSwatch i {
+  width: 12px;
+  height: 12px;
+  border: 1px solid color-mix(in srgb, var(--border-primary) 60%, transparent);
+  border-radius: 3px;
+}
+
+.customToggle {
+  align-self: stretch;
+  padding: 0 14px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.customToggle:hover,
+.customToggle:focus-visible {
+  border-color: var(--border-strong, var(--text-tertiary));
+}
+
+.customOpen {
+  color: var(--text-primary);
+  border-color: var(--accent-primary, var(--text-secondary));
+}
+
+.roleList {
+  display: grid;
+  gap: 14px;
+}
+
+.roleGroup {
+  display: grid;
+  gap: 7px;
+}
+
+.groupTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+/* 分组标题自带色条与延伸分隔线，与下方独占一行的角色行明确区分，避免被当成没有色块的空行。 */
+.groupTitle::before {
+  width: 3px;
+  height: 10px;
+  background: var(--accent-primary, var(--text-tertiary));
+  border-radius: 2px;
+  content: '';
+}
+
+.groupTitle::after {
+  flex: 1;
+  height: 1px;
+  background: var(--border-primary);
+  content: '';
+}
+
+.roleRow {
+  display: grid;
+  grid-template-columns: minmax(96px, 140px) 1fr;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 22px;
+}
+
+.roleMain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.roleLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overrideDot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  background: var(--accent-primary, var(--text-secondary));
+  border-radius: 50%;
+}
+
+.slotRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.slotChip {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border-primary) 70%, transparent);
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.slotChip:focus-visible {
+  outline: 2px solid var(--accent-primary, var(--text-secondary));
+  outline-offset: 1px;
+}
+
+.slotChip:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.selectedChip {
+  box-shadow:
+    0 0 0 1.5px var(--bg-primary),
+    0 0 0 3px var(--text-primary);
+}
+
+.disabledChip {
+  /* 不用 opacity——白色等浅色槽在浅色面板上会整块隐形，看起来像缺了一个色块；
+     改用半透明蒙版压暗，色相隐约可辨、边框保持清晰。 */
+  cursor: not-allowed;
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--bg-primary) 55%, transparent);
+}
+
+.resetButton {
+  padding: 2px 8px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+}
+
+.resetButton:hover,
+.resetButton:focus-visible {
+  color: var(--text-primary);
+}
+
+.conflictHint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--warning-text, #a6700c);
+  font-size: 9px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

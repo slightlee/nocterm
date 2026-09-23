@@ -21,6 +21,8 @@ impl From<AppTheme> for AppThemeResponse {
 pub struct TerminalAppearanceResponse {
     font_size: u8,
     color_scheme: &'static str,
+    highlight_preset: &'static str,
+    highlight_overrides: String,
 }
 
 impl From<TerminalAppearance> for TerminalAppearanceResponse {
@@ -28,6 +30,12 @@ impl From<TerminalAppearance> for TerminalAppearanceResponse {
         Self {
             font_size: value.font_size,
             color_scheme: value.color_scheme.as_str(),
+            highlight_preset: match value.highlight_preset.as_str() {
+                "mobaxterm" => "mobaxterm",
+                "high_contrast" => "high_contrast",
+                _ => "theme",
+            },
+            highlight_overrides: value.highlight_overrides,
         }
     }
 }
@@ -37,4 +45,6 @@ impl From<TerminalAppearance> for TerminalAppearanceResponse {
 pub struct SetTerminalAppearanceRequest {
     pub font_size: u8,
     pub color_scheme: String,
+    pub highlight_preset: String,
+    pub highlight_overrides: String,
 }

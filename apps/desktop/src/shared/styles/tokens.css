@@ -106,26 +106,33 @@
   --ds-term-selection: #ddf4ff;
 
   /* ---- Fixed terminal presets（不随应用主题变化）---- */
+
+  /* 浅色 16 槽设计约束（2026-09 调整，改值前需重新验证）：
+     ① 每槽与 #fff 背景对比度 ≥ 4.5:1（对比度守卫会禁选不达标槽位）；
+     ② 同族基色/亮色对 Lab ΔE ≥ 18——否则基色槽与亮色槽视觉近同，
+        预设间落在基色↔亮色对上的差异会被抹平（设置页预览"点了没反应"）；
+     ③ 任意两槽 ΔE ≥ 20，避免跨族撞色。
+     验证脚本思路：WCAG ratio + CIE Lab ΔE 双指标全对校验。 */
   --ds-term-light-bg: #fff;
   --ds-term-light-panel: #f7f8fb;
   --ds-term-light-border: #e7ebf0;
   --ds-term-light-text: #24292f;
   --ds-term-light-muted: #6e7781;
-  --ds-term-light-green: #14823b;
-  --ds-term-light-blue: #0969da;
-  --ds-term-light-red: #d1242f;
-  --ds-term-light-yellow: #9a6700;
+  --ds-term-light-green: #125c2e;
+  --ds-term-light-blue: #093d85;
+  --ds-term-light-red: #ab1f2c;
+  --ds-term-light-yellow: #8a4a00;
   --ds-term-light-black: #24292f;
-  --ds-term-light-magenta: #8250df;
-  --ds-term-light-cyan: #1b7c83;
+  --ds-term-light-magenta: #6d3fc0;
+  --ds-term-light-cyan: #0d5f5f;
   --ds-term-light-white: #f6f8fa;
   --ds-term-light-bright-black: #57606a;
-  --ds-term-light-bright-red: #a40e26;
-  --ds-term-light-bright-green: #116329;
-  --ds-term-light-bright-yellow: #7d4e00;
-  --ds-term-light-bright-blue: #0550ae;
-  --ds-term-light-bright-magenta: #6639ba;
-  --ds-term-light-bright-cyan: #0a6f76;
+  --ds-term-light-bright-red: #d63c2a;
+  --ds-term-light-bright-green: #0d8038;
+  --ds-term-light-bright-yellow: #8f6c00;
+  --ds-term-light-bright-blue: #1c6fd4;
+  --ds-term-light-bright-magenta: #a630b8;
+  --ds-term-light-bright-cyan: #0d7f9a;
   --ds-term-light-bright-white: #fff;
   --ds-term-light-selection: #ddf4ff;
   --ds-term-dark-bg: #0d1117;
@@ -463,29 +470,30 @@
   --ds-term-material-ocean-bright-white: #c8cbe0;
   --ds-term-material-ocean-selection: #2b3b55;
 
-  /* 鲜亮：MobaXterm 风格高饱和 16 色，粗体自动渲染为亮色变体 */
-  --ds-term-mobaxterm-vivid-bg: #0e1626;
-  --ds-term-mobaxterm-vivid-panel: #0a101c;
-  --ds-term-mobaxterm-vivid-border: #24405e;
-  --ds-term-mobaxterm-vivid-text: #e6edf3;
-  --ds-term-mobaxterm-vivid-muted: #7d8ca3;
-  --ds-term-mobaxterm-vivid-black: #1c2940;
-  --ds-term-mobaxterm-vivid-red: #ff5c57;
-  --ds-term-mobaxterm-vivid-green: #39d353;
-  --ds-term-mobaxterm-vivid-yellow: #ffd75e;
-  --ds-term-mobaxterm-vivid-blue: #57a8ff;
-  --ds-term-mobaxterm-vivid-magenta: #e959ff;
-  --ds-term-mobaxterm-vivid-cyan: #3de0e0;
-  --ds-term-mobaxterm-vivid-white: #d9e2ef;
-  --ds-term-mobaxterm-vivid-bright-black: #6e7f99;
-  --ds-term-mobaxterm-vivid-bright-red: #ff8a85;
-  --ds-term-mobaxterm-vivid-bright-green: #6ee780;
-  --ds-term-mobaxterm-vivid-bright-yellow: #ffe599;
-  --ds-term-mobaxterm-vivid-bright-blue: #8ac2ff;
-  --ds-term-mobaxterm-vivid-bright-magenta: #f08aff;
-  --ds-term-mobaxterm-vivid-bright-cyan: #7cecec;
+  /* 鲜亮：MobaXterm 官方默认 ANSI 16 色（mobatek 出厂调色板），
+     粗体自动渲染为亮色变体——目录 1;34 即呈现 MobaXterm 同款亮蓝 */
+  --ds-term-mobaxterm-vivid-bg: #0a0f1e;
+  --ds-term-mobaxterm-vivid-panel: #060b18;
+  --ds-term-mobaxterm-vivid-border: #2a4a75;
+  --ds-term-mobaxterm-vivid-text: #f2f6ff;
+  --ds-term-mobaxterm-vivid-muted: #8494ad;
+  --ds-term-mobaxterm-vivid-black: #232b45;
+  --ds-term-mobaxterm-vivid-red: #ff6060;
+  --ds-term-mobaxterm-vivid-green: #60ff60;
+  --ds-term-mobaxterm-vivid-yellow: #ffff36;
+  --ds-term-mobaxterm-vivid-blue: #6060ff;
+  --ds-term-mobaxterm-vivid-magenta: #ff36ff;
+  --ds-term-mobaxterm-vivid-cyan: #36ffff;
+  --ds-term-mobaxterm-vivid-white: #ececec;
+  --ds-term-mobaxterm-vivid-bright-black: #565e74;
+  --ds-term-mobaxterm-vivid-bright-red: #ff8080;
+  --ds-term-mobaxterm-vivid-bright-green: #80ff80;
+  --ds-term-mobaxterm-vivid-bright-yellow: #ffff80;
+  --ds-term-mobaxterm-vivid-bright-blue: #8080ff;
+  --ds-term-mobaxterm-vivid-bright-magenta: #ff80ff;
+  --ds-term-mobaxterm-vivid-bright-cyan: #80ffff;
   --ds-term-mobaxterm-vivid-bright-white: #fff;
-  --ds-term-mobaxterm-vivid-selection: #2b4a6f;
+  --ds-term-mobaxterm-vivid-selection: #2f5487;
 
   /* 拿铁：Catppuccin Latte 的清爽亮色粉彩 */
   --ds-term-catppuccin-latte-bg: #eff1f5;

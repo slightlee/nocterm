@@ -1,5 +1,8 @@
 import type { ITheme, Terminal } from '@xterm/xterm';
 
+import { readTerminalHighlightConfig } from './highlight-config';
+import type { TerminalHighlightConfig } from './highlight-config';
+
 export const TERMINAL_FONT_FAMILY = "'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace";
 const DEFAULT_FONT_SIZE = 13;
 
@@ -66,16 +69,23 @@ export function applyTerminalAppearance(terminal: Terminal, container: HTMLEleme
 export function observeTerminalAppearance(
   terminal: Terminal,
   container: HTMLElement,
-  fit: () => void
+  fit: () => void,
+  onHighlightChange?: (config: TerminalHighlightConfig) => void
 ): () => void {
   const apply = () => {
     applyTerminalAppearance(terminal, container);
+    onHighlightChange?.(readTerminalHighlightConfig());
     fit();
   };
   const observer = new MutationObserver(apply);
   observer.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['data-theme', 'data-terminal-theme', 'data-terminal-font-size'],
+    attributeFilter: [
+      'data-theme',
+      'data-terminal-theme',
+      'data-terminal-font-size',
+      'data-terminal-highlight',
+    ],
   });
   return () => observer.disconnect();
 }

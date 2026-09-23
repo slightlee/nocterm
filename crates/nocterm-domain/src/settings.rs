@@ -32,6 +32,21 @@ pub enum TerminalColorScheme {
     OneDark,
     CatppuccinMocha,
     MaterialOcean,
+    MobaXtermVivid,
+    CatppuccinLatte,
+    CatppuccinFrappe,
+    CatppuccinMacchiato,
+    RosePine,
+    RosePineDawn,
+    RosePineMoon,
+    EverforestDark,
+    Kanagawa,
+    AyuDark,
+    AyuLight,
+    OxocarbonDark,
+    OneHalfLight,
+    GithubLight,
+    Synthwave84,
 }
 
 impl TerminalColorScheme {
@@ -53,6 +68,21 @@ impl TerminalColorScheme {
             Self::OneDark => "one_dark",
             Self::CatppuccinMocha => "catppuccin_mocha",
             Self::MaterialOcean => "material_ocean",
+            Self::MobaXtermVivid => "mobaxterm_vivid",
+            Self::CatppuccinLatte => "catppuccin_latte",
+            Self::CatppuccinFrappe => "catppuccin_frappe",
+            Self::CatppuccinMacchiato => "catppuccin_macchiato",
+            Self::RosePine => "rose_pine",
+            Self::RosePineDawn => "rose_pine_dawn",
+            Self::RosePineMoon => "rose_pine_moon",
+            Self::EverforestDark => "everforest_dark",
+            Self::Kanagawa => "kanagawa",
+            Self::AyuDark => "ayu_dark",
+            Self::AyuLight => "ayu_light",
+            Self::OxocarbonDark => "oxocarbon_dark",
+            Self::OneHalfLight => "one_half_light",
+            Self::GithubLight => "github_light",
+            Self::Synthwave84 => "synthwave_84",
         }
     }
 
@@ -74,12 +104,138 @@ impl TerminalColorScheme {
             "one_dark" => Ok(Self::OneDark),
             "catppuccin_mocha" => Ok(Self::CatppuccinMocha),
             "material_ocean" => Ok(Self::MaterialOcean),
+            "mobaxterm_vivid" => Ok(Self::MobaXtermVivid),
+            "catppuccin_latte" => Ok(Self::CatppuccinLatte),
+            "catppuccin_frappe" => Ok(Self::CatppuccinFrappe),
+            "catppuccin_macchiato" => Ok(Self::CatppuccinMacchiato),
+            "rose_pine" => Ok(Self::RosePine),
+            "rose_pine_dawn" => Ok(Self::RosePineDawn),
+            "rose_pine_moon" => Ok(Self::RosePineMoon),
+            "everforest_dark" => Ok(Self::EverforestDark),
+            "kanagawa" => Ok(Self::Kanagawa),
+            "ayu_dark" => Ok(Self::AyuDark),
+            "ayu_light" => Ok(Self::AyuLight),
+            "oxocarbon_dark" => Ok(Self::OxocarbonDark),
+            "one_half_light" => Ok(Self::OneHalfLight),
+            "github_light" => Ok(Self::GithubLight),
+            "synthwave_84" => Ok(Self::Synthwave84),
             _ => Err(SettingsValidationError::new(
                 "SETTINGS_TERMINAL_COLOR_SCHEME_INVALID",
                 "请选择受支持的终端配色",
             )),
         }
     }
+}
+
+/// 终端字体高亮的语义配色预设；`Theme` 即当前主题的出厂角色配色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighlightPreset {
+    Theme,
+    MobaXterm,
+    HighContrast,
+}
+
+impl HighlightPreset {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Theme => "theme",
+            Self::MobaXterm => "mobaxterm",
+            Self::HighContrast => "high_contrast",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, SettingsValidationError> {
+        match value {
+            "theme" => Ok(Self::Theme),
+            "mobaxterm" => Ok(Self::MobaXterm),
+            "high_contrast" => Ok(Self::HighContrast),
+            _ => Err(SettingsValidationError::new(
+                "SETTINGS_HIGHLIGHT_PRESET_INVALID",
+                "请选择受支持的字体配色预设",
+            )),
+        }
+    }
+}
+
+/// 可自定义颜色的语义角色，前后端共用同一份稳定标识。
+pub const HIGHLIGHT_ROLE_IDS: [&str; 18] = [
+    "prompt_user_host",
+    "prompt_path",
+    "permissions",
+    "date",
+    "directory",
+    "executable",
+    "symlink",
+    "device",
+    "archive",
+    "log",
+    "config",
+    "script",
+    "media",
+    "kw_error",
+    "kw_warn",
+    "kw_success",
+    "kw_info",
+    "ip",
+];
+
+pub fn is_valid_highlight_role(value: &str) -> bool {
+    HIGHLIGHT_ROLE_IDS.contains(&value)
+}
+
+/// 角色颜色存 ANSI 色槽（0-15），最终 RGB 由主题调色板翻译。
+pub const MAX_HIGHLIGHT_SLOT: u8 = 15;
+
+/// 覆盖项的紧凑序列化：`role=slot` 以 `,` 相连。domain 保持零依赖，
+/// 不引入 JSON，解析与校验都在这里完成。
+pub fn parse_highlight_overrides(
+    value: &str,
+) -> Result<Vec<(&'static str, u8)>, SettingsValidationError> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for part in value.split(',') {
+        let Some((role, slot)) = part.split_once('=') else {
+            return Err(invalid_overrides());
+        };
+        let Some(role_id) = HIGHLIGHT_ROLE_IDS.iter().find(|id| **id == role) else {
+            return Err(invalid_overrides());
+        };
+        let Ok(slot) = slot.parse::<u8>() else {
+            return Err(invalid_overrides());
+        };
+        if slot > MAX_HIGHLIGHT_SLOT {
+            return Err(invalid_overrides());
+        }
+        entries.push((*role_id, slot));
+    }
+    Ok(entries)
+}
+
+fn invalid_overrides() -> SettingsValidationError {
+    SettingsValidationError::new(
+        "SETTINGS_HIGHLIGHT_OVERRIDES_INVALID",
+        "字体颜色覆盖项格式不正确",
+    )
+}
+
+/// 归一化：同一角色后者覆盖前者，按角色标识排序，保证同输入同存储。
+pub fn canonicalize_highlight_overrides(entries: &[(&'static str, u8)]) -> String {
+    let mut deduped: Vec<(&'static str, u8)> = Vec::new();
+    for (role, slot) in entries {
+        if let Some(existing) = deduped.iter_mut().find(|(r, _)| r == role) {
+            existing.1 = *slot;
+        } else {
+            deduped.push((role, *slot));
+        }
+    }
+    deduped.sort_unstable_by_key(|(role, _)| *role);
+    deduped
+        .iter()
+        .map(|(role, slot)| format!("{role}={slot}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 pub fn validate_terminal_font_size(value: u8) -> Result<u8, SettingsValidationError> {
@@ -142,10 +298,14 @@ pub trait SettingsRepository: Send + Sync {
     fn terminal_font_size(&self) -> Result<Option<u8>, SettingsRepositoryError>;
     fn terminal_color_scheme(&self)
     -> Result<Option<TerminalColorScheme>, SettingsRepositoryError>;
+    fn highlight_preset(&self) -> Result<Option<HighlightPreset>, SettingsRepositoryError>;
+    fn highlight_overrides(&self) -> Result<Option<String>, SettingsRepositoryError>;
     fn set_terminal_appearance(
         &self,
         font_size: u8,
         color_scheme: TerminalColorScheme,
+        highlight_preset: HighlightPreset,
+        highlight_overrides: &str,
     ) -> Result<(), SettingsRepositoryError>;
 }
 
@@ -247,6 +407,107 @@ mod tests {
             TerminalColorScheme::parse("material_ocean"),
             Ok(TerminalColorScheme::MaterialOcean)
         );
+        assert_eq!(
+            TerminalColorScheme::parse("mobaxterm_vivid"),
+            Ok(TerminalColorScheme::MobaXtermVivid)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("catppuccin_latte"),
+            Ok(TerminalColorScheme::CatppuccinLatte)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("catppuccin_frappe"),
+            Ok(TerminalColorScheme::CatppuccinFrappe)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("catppuccin_macchiato"),
+            Ok(TerminalColorScheme::CatppuccinMacchiato)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("rose_pine"),
+            Ok(TerminalColorScheme::RosePine)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("rose_pine_dawn"),
+            Ok(TerminalColorScheme::RosePineDawn)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("rose_pine_moon"),
+            Ok(TerminalColorScheme::RosePineMoon)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("everforest_dark"),
+            Ok(TerminalColorScheme::EverforestDark)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("kanagawa"),
+            Ok(TerminalColorScheme::Kanagawa)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("ayu_dark"),
+            Ok(TerminalColorScheme::AyuDark)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("ayu_light"),
+            Ok(TerminalColorScheme::AyuLight)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("oxocarbon_dark"),
+            Ok(TerminalColorScheme::OxocarbonDark)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("one_half_light"),
+            Ok(TerminalColorScheme::OneHalfLight)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("github_light"),
+            Ok(TerminalColorScheme::GithubLight)
+        );
+        assert_eq!(
+            TerminalColorScheme::parse("synthwave_84"),
+            Ok(TerminalColorScheme::Synthwave84)
+        );
         assert!(TerminalColorScheme::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn parses_highlight_presets_and_rejects_unknown() {
+        assert_eq!(HighlightPreset::parse("theme"), Ok(HighlightPreset::Theme));
+        assert_eq!(
+            HighlightPreset::parse("mobaxterm"),
+            Ok(HighlightPreset::MobaXterm)
+        );
+        assert_eq!(
+            HighlightPreset::parse("high_contrast"),
+            Ok(HighlightPreset::HighContrast)
+        );
+        assert_eq!(HighlightPreset::Theme.as_str(), "theme");
+        assert_eq!(
+            HighlightPreset::parse("custom")
+                .expect_err("unsupported preset")
+                .code,
+            "SETTINGS_HIGHLIGHT_PRESET_INVALID"
+        );
+    }
+
+    #[test]
+    fn parses_and_canonicalizes_highlight_overrides() {
+        assert_eq!(parse_highlight_overrides(""), Ok(Vec::new()));
+        assert_eq!(
+            parse_highlight_overrides("directory=4,kw_error=9"),
+            Ok(vec![("directory", 4), ("kw_error", 9)])
+        );
+        assert!(parse_highlight_overrides("unknown_role=3").is_err());
+        assert!(parse_highlight_overrides("directory=16").is_err());
+        assert!(parse_highlight_overrides("directory=17").is_err());
+        assert!(parse_highlight_overrides("directory").is_err());
+        assert_eq!(
+            canonicalize_highlight_overrides(&[
+                ("kw_error", 9),
+                ("directory", 1),
+                ("directory", 4)
+            ]),
+            "directory=4,kw_error=9"
+        );
     }
 }

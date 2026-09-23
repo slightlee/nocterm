@@ -676,34 +676,30 @@
   opacity: 0.55;
 }
 
+/* 当前字体颜色方案徽标：预设/自定义切换时立即更新，给操作一个可见落点。 */
+.schemeBadge {
+  margin-left: auto;
+  color: var(--preview-muted);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--preview-border);
+  border-radius: 4px;
+  padding: 1px 7px;
+}
+
 .terminalScreen {
-  padding: 24px 22px;
+  padding: 14px 20px;
+  overflow-y: auto;
 }
 
 .terminalScreen p {
   margin: 0;
   white-space: nowrap;
+  line-height: 1.5;
 }
 
-.executable {
-  color: var(--preview-green);
-}
-
-.directory {
-  color: var(--preview-blue);
-}
-
-.symlink {
-  color: var(--preview-cyan);
-}
-
-.warning {
-  color: var(--preview-yellow);
-}
-
-.terminalError {
-  color: var(--preview-red);
-}
+/* 角色颜色（目录/权限位/关键词等）由内联样式按字体颜色设置实时下发，
+   预览不再复用主题的 --preview-* 语义色。 */
 
 .muted {
   color: var(--preview-muted);
