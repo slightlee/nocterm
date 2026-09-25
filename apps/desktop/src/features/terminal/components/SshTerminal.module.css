@@ -8,3 +8,11 @@
   background: var(--term);
   overflow: hidden;
 }
+
+/* 包一层以约束终端层尺寸契约，与原先裸 .terminal 一致。 */
+.terminalWrapper {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}

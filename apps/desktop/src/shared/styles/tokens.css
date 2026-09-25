@@ -106,26 +106,33 @@
   --ds-term-selection: #ddf4ff;
 
   /* ---- Fixed terminal presets（不随应用主题变化）---- */
+
+  /* 浅色 16 槽设计约束（2026-09 调整，改值前需重新验证）：
+     ① 每槽与 #fff 背景对比度 ≥ 4.5:1（对比度守卫会禁选不达标槽位）；
+     ② 同族基色/亮色对 Lab ΔE ≥ 18——否则基色槽与亮色槽视觉近同，
+        预设间落在基色↔亮色对上的差异会被抹平（设置页预览"点了没反应"）；
+     ③ 任意两槽 ΔE ≥ 20，避免跨族撞色。
+     验证脚本思路：WCAG ratio + CIE Lab ΔE 双指标全对校验。 */
   --ds-term-light-bg: #fff;
   --ds-term-light-panel: #f7f8fb;
   --ds-term-light-border: #e7ebf0;
   --ds-term-light-text: #24292f;
   --ds-term-light-muted: #6e7781;
-  --ds-term-light-green: #14823b;
-  --ds-term-light-blue: #0969da;
-  --ds-term-light-red: #d1242f;
-  --ds-term-light-yellow: #9a6700;
+  --ds-term-light-green: #125c2e;
+  --ds-term-light-blue: #093d85;
+  --ds-term-light-red: #ab1f2c;
+  --ds-term-light-yellow: #8a4a00;
   --ds-term-light-black: #24292f;
-  --ds-term-light-magenta: #8250df;
-  --ds-term-light-cyan: #1b7c83;
+  --ds-term-light-magenta: #6d3fc0;
+  --ds-term-light-cyan: #0d5f5f;
   --ds-term-light-white: #f6f8fa;
   --ds-term-light-bright-black: #57606a;
-  --ds-term-light-bright-red: #a40e26;
-  --ds-term-light-bright-green: #116329;
-  --ds-term-light-bright-yellow: #7d4e00;
-  --ds-term-light-bright-blue: #0550ae;
-  --ds-term-light-bright-magenta: #6639ba;
-  --ds-term-light-bright-cyan: #0a6f76;
+  --ds-term-light-bright-red: #d63c2a;
+  --ds-term-light-bright-green: #0d8038;
+  --ds-term-light-bright-yellow: #8f6c00;
+  --ds-term-light-bright-blue: #1c6fd4;
+  --ds-term-light-bright-magenta: #a630b8;
+  --ds-term-light-bright-cyan: #0d7f9a;
   --ds-term-light-bright-white: #fff;
   --ds-term-light-selection: #ddf4ff;
   --ds-term-dark-bg: #0d1117;
@@ -462,6 +469,367 @@
   --ds-term-material-ocean-bright-cyan: #a2e8ff;
   --ds-term-material-ocean-bright-white: #c8cbe0;
   --ds-term-material-ocean-selection: #2b3b55;
+
+  /* 鲜亮：MobaXterm 官方默认 ANSI 16 色（mobatek 出厂调色板），
+     粗体自动渲染为亮色变体——目录 1;34 即呈现 MobaXterm 同款亮蓝 */
+  --ds-term-mobaxterm-vivid-bg: #0a0f1e;
+  --ds-term-mobaxterm-vivid-panel: #060b18;
+  --ds-term-mobaxterm-vivid-border: #2a4a75;
+  --ds-term-mobaxterm-vivid-text: #f2f6ff;
+  --ds-term-mobaxterm-vivid-muted: #8494ad;
+  --ds-term-mobaxterm-vivid-black: #232b45;
+  --ds-term-mobaxterm-vivid-red: #ff6060;
+  --ds-term-mobaxterm-vivid-green: #60ff60;
+  --ds-term-mobaxterm-vivid-yellow: #ffff36;
+  --ds-term-mobaxterm-vivid-blue: #6060ff;
+  --ds-term-mobaxterm-vivid-magenta: #ff36ff;
+  --ds-term-mobaxterm-vivid-cyan: #36ffff;
+  --ds-term-mobaxterm-vivid-white: #ececec;
+  --ds-term-mobaxterm-vivid-bright-black: #565e74;
+  --ds-term-mobaxterm-vivid-bright-red: #ff8080;
+  --ds-term-mobaxterm-vivid-bright-green: #80ff80;
+  --ds-term-mobaxterm-vivid-bright-yellow: #ffff80;
+  --ds-term-mobaxterm-vivid-bright-blue: #8080ff;
+  --ds-term-mobaxterm-vivid-bright-magenta: #ff80ff;
+  --ds-term-mobaxterm-vivid-bright-cyan: #80ffff;
+  --ds-term-mobaxterm-vivid-bright-white: #fff;
+  --ds-term-mobaxterm-vivid-selection: #2f5487;
+
+  /* 拿铁：Catppuccin Latte 的清爽亮色粉彩 */
+  --ds-term-catppuccin-latte-bg: #eff1f5;
+  --ds-term-catppuccin-latte-panel: #e6e9ef;
+  --ds-term-catppuccin-latte-border: #bcc0cc;
+  --ds-term-catppuccin-latte-text: #4c4f69;
+  --ds-term-catppuccin-latte-muted: #8c8fa1;
+  --ds-term-catppuccin-latte-black: #bcc0cc;
+  --ds-term-catppuccin-latte-red: #d20f39;
+  --ds-term-catppuccin-latte-green: #40a02b;
+  --ds-term-catppuccin-latte-yellow: #df8e1d;
+  --ds-term-catppuccin-latte-blue: #1e66f5;
+  --ds-term-catppuccin-latte-magenta: #8839ef;
+  --ds-term-catppuccin-latte-cyan: #179299;
+  --ds-term-catppuccin-latte-white: #5c5f77;
+  --ds-term-catppuccin-latte-bright-black: #acb0be;
+  --ds-term-catppuccin-latte-bright-red: #d20f39;
+  --ds-term-catppuccin-latte-bright-green: #40a02b;
+  --ds-term-catppuccin-latte-bright-yellow: #df8e1d;
+  --ds-term-catppuccin-latte-bright-blue: #1e66f5;
+  --ds-term-catppuccin-latte-bright-magenta: #8839ef;
+  --ds-term-catppuccin-latte-bright-cyan: #179299;
+  --ds-term-catppuccin-latte-bright-white: #6c6f85;
+  --ds-term-catppuccin-latte-selection: #ccd0da;
+
+  /* 法布奇诺：Catppuccin Frappé 的柔和蓝灰粉彩 */
+  --ds-term-catppuccin-frappe-bg: #303446;
+  --ds-term-catppuccin-frappe-panel: #292c3c;
+  --ds-term-catppuccin-frappe-border: #51576d;
+  --ds-term-catppuccin-frappe-text: #c6d0f5;
+  --ds-term-catppuccin-frappe-muted: #737994;
+  --ds-term-catppuccin-frappe-black: #51576d;
+  --ds-term-catppuccin-frappe-red: #e78284;
+  --ds-term-catppuccin-frappe-green: #a6d189;
+  --ds-term-catppuccin-frappe-yellow: #e5c890;
+  --ds-term-catppuccin-frappe-blue: #8caaee;
+  --ds-term-catppuccin-frappe-magenta: #ca9ee6;
+  --ds-term-catppuccin-frappe-cyan: #81c8be;
+  --ds-term-catppuccin-frappe-white: #b5bfe2;
+  --ds-term-catppuccin-frappe-bright-black: #626880;
+  --ds-term-catppuccin-frappe-bright-red: #e78284;
+  --ds-term-catppuccin-frappe-bright-green: #a6d189;
+  --ds-term-catppuccin-frappe-bright-yellow: #e5c890;
+  --ds-term-catppuccin-frappe-bright-blue: #8caaee;
+  --ds-term-catppuccin-frappe-bright-magenta: #ca9ee6;
+  --ds-term-catppuccin-frappe-bright-cyan: #81c8be;
+  --ds-term-catppuccin-frappe-bright-white: #a5adce;
+  --ds-term-catppuccin-frappe-selection: #414559;
+
+  /* 玛奇朵：Catppuccin Macchiato 的深蓝粉彩 */
+  --ds-term-catppuccin-macchiato-bg: #24273a;
+  --ds-term-catppuccin-macchiato-panel: #1e2030;
+  --ds-term-catppuccin-macchiato-border: #494d64;
+  --ds-term-catppuccin-macchiato-text: #cad3f5;
+  --ds-term-catppuccin-macchiato-muted: #6e738d;
+  --ds-term-catppuccin-macchiato-black: #494d64;
+  --ds-term-catppuccin-macchiato-red: #ed8796;
+  --ds-term-catppuccin-macchiato-green: #a6da95;
+  --ds-term-catppuccin-macchiato-yellow: #eed49f;
+  --ds-term-catppuccin-macchiato-blue: #8aadf4;
+  --ds-term-catppuccin-macchiato-magenta: #c6a0f6;
+  --ds-term-catppuccin-macchiato-cyan: #8bd5ca;
+  --ds-term-catppuccin-macchiato-white: #b8c0e0;
+  --ds-term-catppuccin-macchiato-bright-black: #5b6078;
+  --ds-term-catppuccin-macchiato-bright-red: #ed8796;
+  --ds-term-catppuccin-macchiato-bright-green: #a6da95;
+  --ds-term-catppuccin-macchiato-bright-yellow: #eed49f;
+  --ds-term-catppuccin-macchiato-bright-blue: #8aadf4;
+  --ds-term-catppuccin-macchiato-bright-magenta: #c6a0f6;
+  --ds-term-catppuccin-macchiato-bright-cyan: #8bd5ca;
+  --ds-term-catppuccin-macchiato-bright-white: #a5adcb;
+  --ds-term-catppuccin-macchiato-selection: #363a4f;
+
+  /* 玫瑰松：Rosé Pine 的柔和低对比紫调 */
+  --ds-term-rose-pine-bg: #191724;
+  --ds-term-rose-pine-panel: #1f1d2e;
+  --ds-term-rose-pine-border: #403d52;
+  --ds-term-rose-pine-text: #e0def4;
+  --ds-term-rose-pine-muted: #6e6a86;
+  --ds-term-rose-pine-black: #26233a;
+  --ds-term-rose-pine-red: #eb6f92;
+  --ds-term-rose-pine-green: #31748f;
+  --ds-term-rose-pine-yellow: #f6c177;
+  --ds-term-rose-pine-blue: #9ccfd8;
+  --ds-term-rose-pine-magenta: #c4a7e7;
+  --ds-term-rose-pine-cyan: #ebbcba;
+  --ds-term-rose-pine-white: #e0def4;
+  --ds-term-rose-pine-bright-black: #6e6a86;
+  --ds-term-rose-pine-bright-red: #eb6f92;
+  --ds-term-rose-pine-bright-green: #31748f;
+  --ds-term-rose-pine-bright-yellow: #f6c177;
+  --ds-term-rose-pine-bright-blue: #9ccfd8;
+  --ds-term-rose-pine-bright-magenta: #c4a7e7;
+  --ds-term-rose-pine-bright-cyan: #ebbcba;
+  --ds-term-rose-pine-bright-white: #e0def4;
+  --ds-term-rose-pine-selection: #403d52;
+
+  /* 玫瑰松·晨：Rosé Pine Dawn 的暖纸色亮色主题 */
+  --ds-term-rose-pine-dawn-bg: #faf4ed;
+  --ds-term-rose-pine-dawn-panel: #fffaf3;
+  --ds-term-rose-pine-dawn-border: #dfdad9;
+  --ds-term-rose-pine-dawn-text: #575279;
+  --ds-term-rose-pine-dawn-muted: #9893a5;
+  --ds-term-rose-pine-dawn-black: #f2e9e1;
+  --ds-term-rose-pine-dawn-red: #b4637a;
+  --ds-term-rose-pine-dawn-green: #286983;
+  --ds-term-rose-pine-dawn-yellow: #ea9d34;
+  --ds-term-rose-pine-dawn-blue: #56949f;
+  --ds-term-rose-pine-dawn-magenta: #907aa9;
+  --ds-term-rose-pine-dawn-cyan: #d7827e;
+  --ds-term-rose-pine-dawn-white: #575279;
+  --ds-term-rose-pine-dawn-bright-black: #797593;
+  --ds-term-rose-pine-dawn-bright-red: #b4637a;
+  --ds-term-rose-pine-dawn-bright-green: #286983;
+  --ds-term-rose-pine-dawn-bright-yellow: #ea9d34;
+  --ds-term-rose-pine-dawn-bright-blue: #56949f;
+  --ds-term-rose-pine-dawn-bright-magenta: #907aa9;
+  --ds-term-rose-pine-dawn-bright-cyan: #d7827e;
+  --ds-term-rose-pine-dawn-bright-white: #575279;
+  --ds-term-rose-pine-dawn-selection: #f2e9e1;
+
+  /* 玫瑰松·月：Rosé Pine Moon 的更高对比月夜紫调 */
+  --ds-term-rose-pine-moon-bg: #232136;
+  --ds-term-rose-pine-moon-panel: #2a273f;
+  --ds-term-rose-pine-moon-border: #433b5e;
+  --ds-term-rose-pine-moon-text: #e0def4;
+  --ds-term-rose-pine-moon-muted: #6e6a86;
+  --ds-term-rose-pine-moon-black: #393552;
+  --ds-term-rose-pine-moon-red: #eb6f92;
+  --ds-term-rose-pine-moon-green: #3e8fb0;
+  --ds-term-rose-pine-moon-yellow: #f6c177;
+  --ds-term-rose-pine-moon-blue: #9ccfd8;
+  --ds-term-rose-pine-moon-magenta: #c4a7e7;
+  --ds-term-rose-pine-moon-cyan: #ea9a97;
+  --ds-term-rose-pine-moon-white: #e0def4;
+  --ds-term-rose-pine-moon-bright-black: #817c9c;
+  --ds-term-rose-pine-moon-bright-red: #eb6f92;
+  --ds-term-rose-pine-moon-bright-green: #3e8fb0;
+  --ds-term-rose-pine-moon-bright-yellow: #f6c177;
+  --ds-term-rose-pine-moon-bright-blue: #9ccfd8;
+  --ds-term-rose-pine-moon-bright-magenta: #c4a7e7;
+  --ds-term-rose-pine-moon-bright-cyan: #ea9a97;
+  --ds-term-rose-pine-moon-bright-white: #e0def4;
+  --ds-term-rose-pine-moon-selection: #433b5e;
+
+  /* 暮林：Everforest 的柔和森林绿与暖沙前景 */
+  --ds-term-everforest-dark-bg: #2d353b;
+  --ds-term-everforest-dark-panel: #343f44;
+  --ds-term-everforest-dark-border: #475258;
+  --ds-term-everforest-dark-text: #d3c6aa;
+  --ds-term-everforest-dark-muted: #7a8478;
+  --ds-term-everforest-dark-black: #343f44;
+  --ds-term-everforest-dark-red: #e67e80;
+  --ds-term-everforest-dark-green: #a7c080;
+  --ds-term-everforest-dark-yellow: #dbbc7f;
+  --ds-term-everforest-dark-blue: #7fbbb3;
+  --ds-term-everforest-dark-magenta: #d699b6;
+  --ds-term-everforest-dark-cyan: #83c092;
+  --ds-term-everforest-dark-white: #9da9a0;
+  --ds-term-everforest-dark-bright-black: #859289;
+  --ds-term-everforest-dark-bright-red: #e67e80;
+  --ds-term-everforest-dark-bright-green: #a7c080;
+  --ds-term-everforest-dark-bright-yellow: #dbbc7f;
+  --ds-term-everforest-dark-bright-blue: #7fbbb3;
+  --ds-term-everforest-dark-bright-magenta: #d699b6;
+  --ds-term-everforest-dark-bright-cyan: #83c092;
+  --ds-term-everforest-dark-bright-white: #d3c6aa;
+  --ds-term-everforest-dark-selection: #475258;
+
+  /* 神奈川：Kanagawa 的葛饰北斋浮世绘配色 */
+  --ds-term-kanagawa-bg: #1f1f28;
+  --ds-term-kanagawa-panel: #16161d;
+  --ds-term-kanagawa-border: #2a2a37;
+  --ds-term-kanagawa-text: #dcd7ba;
+  --ds-term-kanagawa-muted: #727169;
+  --ds-term-kanagawa-black: #16161d;
+  --ds-term-kanagawa-red: #c34043;
+  --ds-term-kanagawa-green: #76946a;
+  --ds-term-kanagawa-yellow: #c0a36e;
+  --ds-term-kanagawa-blue: #7e9cd8;
+  --ds-term-kanagawa-magenta: #957fb8;
+  --ds-term-kanagawa-cyan: #7aa89f;
+  --ds-term-kanagawa-white: #c8c093;
+  --ds-term-kanagawa-bright-black: #727169;
+  --ds-term-kanagawa-bright-red: #e82424;
+  --ds-term-kanagawa-bright-green: #98bb6c;
+  --ds-term-kanagawa-bright-yellow: #dca561;
+  --ds-term-kanagawa-bright-blue: #7fb4ca;
+  --ds-term-kanagawa-bright-magenta: #938aa9;
+  --ds-term-kanagawa-bright-cyan: #7aa89f;
+  --ds-term-kanagawa-bright-white: #dcd7ba;
+  --ds-term-kanagawa-selection: #2d4f67;
+
+  /* Ayu 暗：Ayu Dark 的深邃底色与明亮强调 */
+  --ds-term-ayu-dark-bg: #0b0e14;
+  --ds-term-ayu-dark-panel: #0d1017;
+  --ds-term-ayu-dark-border: #1a1f29;
+  --ds-term-ayu-dark-text: #bfbdb6;
+  --ds-term-ayu-dark-muted: #565b66;
+  --ds-term-ayu-dark-black: #01060e;
+  --ds-term-ayu-dark-red: #f07178;
+  --ds-term-ayu-dark-green: #aad94c;
+  --ds-term-ayu-dark-yellow: #ffb454;
+  --ds-term-ayu-dark-blue: #59c2ff;
+  --ds-term-ayu-dark-magenta: #d2a6ff;
+  --ds-term-ayu-dark-cyan: #95e6cb;
+  --ds-term-ayu-dark-white: #bfbdb6;
+  --ds-term-ayu-dark-bright-black: #565b66;
+  --ds-term-ayu-dark-bright-red: #f28779;
+  --ds-term-ayu-dark-bright-green: #b8e45c;
+  --ds-term-ayu-dark-bright-yellow: #ffc46b;
+  --ds-term-ayu-dark-bright-blue: #7cc4ff;
+  --ds-term-ayu-dark-bright-magenta: #e0b0ff;
+  --ds-term-ayu-dark-bright-cyan: #a9eada;
+  --ds-term-ayu-dark-bright-white: #eaeaea;
+  --ds-term-ayu-dark-selection: #1c2940;
+
+  /* Ayu 亮：Ayu Light 的干净亮色与柔和强调 */
+  --ds-term-ayu-light-bg: #fafafa;
+  --ds-term-ayu-light-panel: #f3f4f6;
+  --ds-term-ayu-light-border: #e2e5ea;
+  --ds-term-ayu-light-text: #5c6166;
+  --ds-term-ayu-light-muted: #8a9199;
+  --ds-term-ayu-light-black: #565b66;
+  --ds-term-ayu-light-red: #f07171;
+  --ds-term-ayu-light-green: #86b300;
+  --ds-term-ayu-light-yellow: #f2ae49;
+  --ds-term-ayu-light-blue: #399ee6;
+  --ds-term-ayu-light-magenta: #a37acc;
+  --ds-term-ayu-light-cyan: #4cbf99;
+  --ds-term-ayu-light-white: #c9cdd3;
+  --ds-term-ayu-light-bright-black: #8a9199;
+  --ds-term-ayu-light-bright-red: #e6504a;
+  --ds-term-ayu-light-bright-green: #9bcc3c;
+  --ds-term-ayu-light-bright-yellow: #ffbe45;
+  --ds-term-ayu-light-bright-blue: #54b1ff;
+  --ds-term-ayu-light-bright-magenta: #b58df0;
+  --ds-term-ayu-light-bright-cyan: #62d0ad;
+  --ds-term-ayu-light-bright-white: #fafafa;
+  --ds-term-ayu-light-selection: #cfe8ff;
+
+  /* 氧碳黑：Oxocarbon 的 IBM 碳黑与霓虹强调 */
+  --ds-term-oxocarbon-dark-bg: #161616;
+  --ds-term-oxocarbon-dark-panel: #101010;
+  --ds-term-oxocarbon-dark-border: #2c2c2c;
+  --ds-term-oxocarbon-dark-text: #f2f4f8;
+  --ds-term-oxocarbon-dark-muted: #6e6e6e;
+  --ds-term-oxocarbon-dark-black: #282828;
+  --ds-term-oxocarbon-dark-red: #ee5396;
+  --ds-term-oxocarbon-dark-green: #42be65;
+  --ds-term-oxocarbon-dark-yellow: #ffab1a;
+  --ds-term-oxocarbon-dark-blue: #33b1ff;
+  --ds-term-oxocarbon-dark-magenta: #ff7eb6;
+  --ds-term-oxocarbon-dark-cyan: #3ddbd9;
+  --ds-term-oxocarbon-dark-white: #f2f4f8;
+  --ds-term-oxocarbon-dark-bright-black: #6e6e6e;
+  --ds-term-oxocarbon-dark-bright-red: #fa4d56;
+  --ds-term-oxocarbon-dark-bright-green: #58da75;
+  --ds-term-oxocarbon-dark-bright-yellow: #ffd75e;
+  --ds-term-oxocarbon-dark-bright-blue: #82cfff;
+  --ds-term-oxocarbon-dark-bright-magenta: #ff9ad5;
+  --ds-term-oxocarbon-dark-bright-cyan: #84f0ec;
+  --ds-term-oxocarbon-dark-bright-white: #fff;
+  --ds-term-oxocarbon-dark-selection: #2a3f52;
+
+  /* 一半亮：One Half Light 的平衡亮色编辑器配色 */
+  --ds-term-one-half-light-bg: #fafafa;
+  --ds-term-one-half-light-panel: #f0f0f0;
+  --ds-term-one-half-light-border: #d4d4d4;
+  --ds-term-one-half-light-text: #383a42;
+  --ds-term-one-half-light-muted: #a0a1a7;
+  --ds-term-one-half-light-black: #383a42;
+  --ds-term-one-half-light-red: #e45649;
+  --ds-term-one-half-light-green: #50a14f;
+  --ds-term-one-half-light-yellow: #c18401;
+  --ds-term-one-half-light-blue: #0184bc;
+  --ds-term-one-half-light-magenta: #a626a4;
+  --ds-term-one-half-light-cyan: #0997b3;
+  --ds-term-one-half-light-white: #fafafa;
+  --ds-term-one-half-light-bright-black: #4f525e;
+  --ds-term-one-half-light-bright-red: #e06c75;
+  --ds-term-one-half-light-bright-green: #98c379;
+  --ds-term-one-half-light-bright-yellow: #e5c07b;
+  --ds-term-one-half-light-bright-blue: #61afef;
+  --ds-term-one-half-light-bright-magenta: #c678dd;
+  --ds-term-one-half-light-bright-cyan: #56b6c2;
+  --ds-term-one-half-light-bright-white: #fff;
+  --ds-term-one-half-light-selection: #d6e6f4;
+
+  /* GitHub 亮：GitHub Light 的官方亮色语法配色 */
+  --ds-term-github-light-bg: #fff;
+  --ds-term-github-light-panel: #f6f8fa;
+  --ds-term-github-light-border: #d0d7de;
+  --ds-term-github-light-text: #24292f;
+  --ds-term-github-light-muted: #6e7781;
+  --ds-term-github-light-black: #24292f;
+  --ds-term-github-light-red: #cf222e;
+  --ds-term-github-light-green: #116329;
+  --ds-term-github-light-yellow: #9a6700;
+  --ds-term-github-light-blue: #0969da;
+  --ds-term-github-light-magenta: #8250df;
+  --ds-term-github-light-cyan: #1b7c83;
+  --ds-term-github-light-white: #6e7781;
+  --ds-term-github-light-bright-black: #57606a;
+  --ds-term-github-light-bright-red: #a40e26;
+  --ds-term-github-light-bright-green: #1a7f37;
+  --ds-term-github-light-bright-yellow: #bf8700;
+  --ds-term-github-light-bright-blue: #218bff;
+  --ds-term-github-light-bright-magenta: #a475f9;
+  --ds-term-github-light-bright-cyan: #3192aa;
+  --ds-term-github-light-bright-white: #8c959f;
+  --ds-term-github-light-selection: #cfe8ff;
+
+  /* 合成波：Synthwave '84 的复古霓虹夜色 */
+  --ds-term-synthwave-84-bg: #262335;
+  --ds-term-synthwave-84-panel: #1f1b2e;
+  --ds-term-synthwave-84-border: #3d3559;
+  --ds-term-synthwave-84-text: #f8f8f2;
+  --ds-term-synthwave-84-muted: #6f5fa5;
+  --ds-term-synthwave-84-black: #1a142c;
+  --ds-term-synthwave-84-red: #fe4450;
+  --ds-term-synthwave-84-green: #72f1b8;
+  --ds-term-synthwave-84-yellow: #fede5d;
+  --ds-term-synthwave-84-blue: #36f9f6;
+  --ds-term-synthwave-84-magenta: #ff7edb;
+  --ds-term-synthwave-84-cyan: #03edf9;
+  --ds-term-synthwave-84-white: #d0cce0;
+  --ds-term-synthwave-84-bright-black: #443a68;
+  --ds-term-synthwave-84-bright-red: #ff6a74;
+  --ds-term-synthwave-84-bright-green: #93f5c9;
+  --ds-term-synthwave-84-bright-yellow: #ffe98a;
+  --ds-term-synthwave-84-bright-blue: #6ff0f4;
+  --ds-term-synthwave-84-bright-magenta: #ff9de2;
+  --ds-term-synthwave-84-bright-cyan: #5ff2f8;
+  --ds-term-synthwave-84-bright-white: #fff;
+  --ds-term-synthwave-84-selection: #3a3159;
 
   /* ---- Radius ---- */
   --ds-r-sm: 8px;

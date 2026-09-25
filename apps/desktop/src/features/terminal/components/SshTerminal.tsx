@@ -20,6 +20,8 @@ import {
   type PasswordPromptState,
   reducePasswordPrompt,
 } from '../model/password-prompt';
+import { createKeywordHighlighter } from '../model/keyword-highlight';
+import { readTerminalHighlightConfig } from '../model/highlight-config';
 import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
 import {
   applyTerminalAppearance,
@@ -62,6 +64,15 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(new WebLinksAddon());
+    // 每个会话独立的高亮状态机：跨写入块跟踪 SGR，避免污染既有颜色。
+    // 尾部持有的 token 由延迟冲刷兜底送达：交互回显（每键一块）不会被扣住。
+    // 角色配色来自设置（预设 + 用户覆盖），设置变化经 observer 热更新。
+    const highlighter = createKeywordHighlighter({
+      onDeferred: (text) => {
+        if (!disposed) terminal.write(text);
+      },
+      highlight: readTerminalHighlightConfig(),
+    });
     terminal.open(container);
     fitAddon.fit();
     fitTerminalRef.current = () => {
@@ -167,10 +178,15 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     });
     observer.observe(container);
 
-    const stopObservingAppearance = observeTerminalAppearance(terminal, container, () => {
-      fitAddon.fit();
-      if (terminalId) void resizeSshTerminal(terminalId, terminal.cols, terminal.rows);
-    });
+    const stopObservingAppearance = observeTerminalAppearance(
+      terminal,
+      container,
+      () => {
+        fitAddon.fit();
+        if (terminalId) void resizeSshTerminal(terminalId, terminal.cols, terminal.rows);
+      },
+      (config) => highlighter.setHighlight(config.preset, config.overrides)
+    );
 
     /**
      * 先按后端已有的凭据尝试建连，只有后端明确返回 SSH_PASSWORD_REQUIRED 时才提示输入。
@@ -211,7 +227,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       const buffered = pendingOutput;
       pendingOutput = [];
       for (const item of buffered) {
-        if (item.terminalId === ownId) terminal.write(item.data);
+        if (item.terminalId === ownId) terminal.write(highlighter.transform(item.data));
       }
       const exit = pendingExit;
       pendingExit = null;
@@ -221,7 +237,8 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     void (async () => {
       const outputListener = await onSshTerminalOutput((payload) => {
         if (terminalId) {
-          if (payload.terminalId === terminalId) terminal.write(payload.data);
+          if (payload.terminalId === terminalId)
+            terminal.write(highlighter.transform(payload.data));
           return;
         }
         if (payload.connectionId !== connection.id) return;
@@ -268,6 +285,8 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     });
 
     return () => {
+      // 先冲刷高亮器仍持有的尾部文本，再标记 disposed 停止后续写入。
+      highlighter.dispose();
       disposed = true;
       // 卸载时先兑现挂起的口令提示，否则等待它的 Promise 永远不会落地。
       settlePrompt(null);
@@ -283,7 +302,11 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     };
   }, [connection, markSessionConnected, setSessionStatus]);
 
-  return <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />;
+  return (
+    <div className={styles.terminalWrapper}>
+      <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />
+    </div>
+  );
 }
 
 function getErrorMessage(error: unknown): string {

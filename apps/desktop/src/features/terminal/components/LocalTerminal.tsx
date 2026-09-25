@@ -12,6 +12,8 @@ import {
   resizeLocalTerminal,
   writeLocalTerminal,
 } from '../api/local-terminal-client';
+import { createKeywordHighlighter } from '../model/keyword-highlight';
+import { readTerminalHighlightConfig } from '../model/highlight-config';
 import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
 import {
   applyTerminalAppearance,
@@ -54,6 +56,15 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(new WebLinksAddon());
+    // 每个会话独立的高亮状态机：跨写入块跟踪 SGR，避免污染既有颜色。
+    // 尾部持有的 token 由延迟冲刷兜底送达：交互回显（每键一块）不会被扣住。
+    // 角色配色来自设置（预设 + 用户覆盖），设置变化经 observer 热更新。
+    const highlighter = createKeywordHighlighter({
+      onDeferred: (text) => {
+        if (!disposed) terminal.write(text);
+      },
+      highlight: readTerminalHighlightConfig(),
+    });
     terminal.open(container);
     fitAddon.fit();
     fitTerminalRef.current = () => {
@@ -89,14 +100,19 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
       if (terminalId) void resizeLocalTerminal(terminalId, terminal.cols, terminal.rows);
     });
     observer.observe(container);
-    const stopObservingAppearance = observeTerminalAppearance(terminal, container, () => {
-      fitAddon.fit();
-      if (terminalId) void resizeLocalTerminal(terminalId, terminal.cols, terminal.rows);
-    });
+    const stopObservingAppearance = observeTerminalAppearance(
+      terminal,
+      container,
+      () => {
+        fitAddon.fit();
+        if (terminalId) void resizeLocalTerminal(terminalId, terminal.cols, terminal.rows);
+      },
+      (config) => highlighter.setHighlight(config.preset, config.overrides)
+    );
 
     void (async () => {
       const outputListener = await onLocalTerminalOutput((payload) => {
-        if (payload.sessionId === sessionId) terminal.write(payload.data);
+        if (payload.sessionId === sessionId) terminal.write(highlighter.transform(payload.data));
       });
       if (disposed) {
         outputListener();
@@ -131,6 +147,8 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
     });
 
     return () => {
+      // 先冲刷高亮器仍持有的尾部文本，再标记 disposed 停止后续写入。
+      highlighter.dispose();
       disposed = true;
       detachPaste();
       observer.disconnect();

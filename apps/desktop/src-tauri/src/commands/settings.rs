@@ -50,7 +50,12 @@ pub fn settings_terminal_appearance_set(
 ) -> Result<TerminalAppearanceResponse, ErrorResponse> {
     state
         .settings_service()
-        .set_terminal_appearance(request.font_size, &request.color_scheme)
+        .set_terminal_appearance(
+            request.font_size,
+            &request.color_scheme,
+            &request.highlight_preset,
+            &request.highlight_overrides,
+        )
         .map(TerminalAppearanceResponse::from)
         .map_err(ErrorResponse::from)
 }

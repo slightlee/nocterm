@@ -1,5 +1,15 @@
-/* 远程终端工作区保留旧客户端 TerminalTabs 的尺寸与层级。 */
+/* 远程终端工作区保留旧客户端 TerminalTabs 的尺寸与层级。
+   外层只承载布局与主题作用域属性；终端配色变量由内层 .themeScope
+   （挂 nocterm-terminal-surface 类）承接，见组件内的拆层说明。 */
 .container {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.themeScope {
   display: flex;
   min-width: 0;
   min-height: 0;

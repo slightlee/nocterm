@@ -26,16 +26,23 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     {
         for shell in windows_shell_candidates(std::env::var("COMSPEC").ok()).iter() {
             if windows_command_available(shell) {
-                return (CommandBuilder::new(shell), detect_shell_kind(shell));
+                return (
+                    apply_terminal_identity(CommandBuilder::new(shell)),
+                    detect_shell_kind(shell),
+                );
             }
         }
-        (CommandBuilder::new("cmd.exe"), LocalShellKind::Cmd)
+        (
+            apply_terminal_identity(CommandBuilder::new("cmd.exe")),
+            LocalShellKind::Cmd,
+        )
     }
 
     // macOS 与其它 Unix 走 portable-pty 的默认程序解析（读 `SHELL`，回落到 passwd 项）。
     #[cfg(not(windows))]
     {
-        let command = apply_default_term(CommandBuilder::new_default_prog());
+        let command =
+            apply_default_term(apply_terminal_identity(CommandBuilder::new_default_prog()));
         let kind = detect_shell_kind(&command.get_shell());
         (command, kind)
     }
@@ -44,6 +51,18 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
 /// PTY 内 Shell 的默认 TERM 值，与前端 xterm.js 的能力对齐。
 #[cfg(not(windows))]
 pub(super) const DEFAULT_TERM: &str = "xterm-256color";
+
+/// 终端身份声明：`TERM_PROGRAM` 必须覆写为 Nocterm 自己，而不是继承启动方。
+/// 从 Apple Terminal 里启动 Nocterm 时若继承 `Apple_Terminal`，`/etc/zshrc`
+/// 会 source `/etc/zshrc_Apple_Terminal` 并重放 `~/.zsh_sessions/*.session`，
+/// 把上一个会话的命令当作新终端的启动输出（典型报错：`command not found: Saving`）。
+/// iTerm2 / VS Code 等同类终端均无条件声明自己的 `TERM_PROGRAM`。
+pub(super) const TERM_PROGRAM_VALUE: &str = "Nocterm";
+
+fn apply_terminal_identity(mut command: CommandBuilder) -> CommandBuilder {
+    command.env("TERM_PROGRAM", TERM_PROGRAM_VALUE);
+    command
+}
 
 /// 从 Finder/Dock 启动的 GUI 进程只继承 launchd 最小环境，常没有 `TERM`。
 /// zsh 的 ZLE 在 TERM 缺失时会在提示符的多字节字符（如 ➜、✗）前输出字面 `?`，
@@ -105,6 +124,33 @@ pub(super) fn completion_command(kind: LocalShellKind, marker: &str) -> String {
             "$__nocterm_ok = $?; $__nocterm_code = if ($__nocterm_ok) {{ 0 }} elseif ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }}; Write-Output \"{marker}$__nocterm_code\""
         ),
         LocalShellKind::Cmd => format!("echo {marker}%ERRORLEVEL%"),
+    }
+}
+
+#[cfg(test)]
+mod terminal_identity_tests {
+    use super::{TERM_PROGRAM_VALUE, apply_terminal_identity};
+    use portable_pty::CommandBuilder;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn overrides_an_inherited_term_program_from_the_launching_terminal() {
+        let mut command = CommandBuilder::new("zsh");
+        command.env("TERM_PROGRAM", "Apple_Terminal");
+        let command = apply_terminal_identity(command);
+        assert_eq!(
+            command.get_env("TERM_PROGRAM"),
+            Some(OsStr::new(TERM_PROGRAM_VALUE))
+        );
+    }
+
+    #[test]
+    fn sets_identity_even_when_the_launch_environment_has_none() {
+        let command = apply_terminal_identity(CommandBuilder::new("zsh"));
+        assert_eq!(
+            command.get_env("TERM_PROGRAM"),
+            Some(OsStr::new(TERM_PROGRAM_VALUE))
+        );
     }
 }
 
