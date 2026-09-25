@@ -108,6 +108,17 @@ describe('file type coloring (client-side, no server LS_COLORS needed)', () => {
   });
 });
 
+describe('hot update (settings change without reconnecting)', () => {
+  it('re-colors subsequent output after setHighlight', () => {
+    const { transform, setHighlight } = createKeywordHighlighter();
+    // 经典预设：目录 = 加粗槽 4（基色蓝）。
+    expect(transform('drwxr-xr-x  2 me me 64 Apr 22 09:15 docs\n')).toContain('\x1b[1;34mdocs');
+    // 用户覆盖目录 → 槽 12 后，只有新输出换色（既有屏内容按设计不重着色）。
+    setHighlight('theme', { directory: 12 });
+    expect(transform('drwxr-xr-x  2 me me 64 Apr 22 09:15 docs\n')).toContain('\x1b[1;94mdocs');
+  });
+});
+
 describe('prompt and ls -l metadata coloring (zero-injection, MobaXterm-style)', () => {
   it('colors user@host and path segments of the prompt with distinct colors', () => {
     const { transform } = createKeywordHighlighter();

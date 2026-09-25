@@ -65,7 +65,23 @@ export function applyTerminalAppearance(terminal: Terminal, container: HTMLEleme
   terminal.options.fontSize = readTerminalFontSize();
 }
 
-/** 监听根设置属性而不重建 React 会话 effect，避免外观切换触发 SSH 重连。 */
+/**
+ * 主题作用域属性（data-terminal-theme）挂在终端工作区容器上而非根节点：
+ * 根属性变化时容器可能尚未提交新值，observer 会读到旧变量。因此主题改由
+ * 工作区在属性提交完成后广播本事件驱动，事件时序保证 CSS 变量已是新主题。
+ */
+export const TERMINAL_APPEARANCE_EVENT = 'nocterm:terminal-appearance-changed';
+
+/** 主题作用域属性提交到 DOM 后由工作区调用，通知全部终端实例重读外观。 */
+export function notifyTerminalAppearanceChanged(): void {
+  window.dispatchEvent(new Event(TERMINAL_APPEARANCE_EVENT));
+}
+
+/**
+ * 监听外观变化而不重建 React 会话 effect，避免外观切换触发 SSH 重连。
+ * 字号与字体颜色配置仍走根属性通道（SettingsProvider 直接写根）；
+ * 主题经 TERMINAL_APPEARANCE_EVENT 事件驱动。
+ */
 export function observeTerminalAppearance(
   terminal: Terminal,
   container: HTMLElement,
@@ -80,12 +96,11 @@ export function observeTerminalAppearance(
   const observer = new MutationObserver(apply);
   observer.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: [
-      'data-theme',
-      'data-terminal-theme',
-      'data-terminal-font-size',
-      'data-terminal-highlight',
-    ],
+    attributeFilter: ['data-terminal-font-size', 'data-terminal-highlight'],
   });
-  return () => observer.disconnect();
+  window.addEventListener(TERMINAL_APPEARANCE_EVENT, apply);
+  return () => {
+    observer.disconnect();
+    window.removeEventListener(TERMINAL_APPEARANCE_EVENT, apply);
+  };
 }

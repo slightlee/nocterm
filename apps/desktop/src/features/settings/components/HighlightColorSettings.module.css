@@ -1,25 +1,23 @@
 .highlightPanel {
   display: grid;
-  gap: 14px;
-  padding: 14px 16px 16px;
-  background: var(--bg-primary);
-  border-top: 1px solid var(--border-primary);
+  gap: 12px;
 }
 
 .panelHeading {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
 .panelTitle {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 750;
 }
 
 .panelHeading small {
   color: var(--text-tertiary);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .presetRow {
@@ -29,21 +27,26 @@
   gap: 8px;
 }
 
+/* 与配色方案卡同一套卡片语言：色杠小样在上、名称在下，
+   选中态同为蓝边 + 同色淡环，两类「选色」操作视觉一致。 */
 .presetCard {
   display: grid;
-  gap: 7px;
+  gap: 6px;
   justify-items: start;
-  padding: 9px 12px;
-  background: var(--bg-secondary);
+  padding: 8px;
+  color: var(--text-secondary);
+  background: transparent;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: border-color var(--dur-normal) var(--ease-out);
+  transition:
+    border-color var(--dur-normal) var(--ease-out),
+    box-shadow var(--dur-normal) var(--ease-out);
 }
 
 .presetCard:focus-visible {
-  outline: 2px solid var(--accent-primary, var(--border-primary));
-  outline-offset: 1px;
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 
 .presetCard:disabled {
@@ -51,26 +54,34 @@
   cursor: default;
 }
 
+.presetCard:hover:not(:disabled) {
+  border-color: var(--accent-blue);
+}
+
 .presetCard strong {
   color: var(--text-primary);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 700;
 }
 
 .selectedPreset {
-  border-color: var(--accent-primary, var(--text-secondary));
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-blue) 22%, transparent);
 }
 
 .presetSwatch {
   display: flex;
   gap: 3px;
+  padding: 5px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 5px;
 }
 
 .presetSwatch i {
   width: 12px;
-  height: 12px;
-  border: 1px solid color-mix(in srgb, var(--border-primary) 60%, transparent);
-  border-radius: 3px;
+  height: 3px;
+  border-radius: var(--radius-full);
 }
 
 .customToggle {
@@ -78,25 +89,80 @@
   padding: 0 14px;
   color: var(--text-secondary);
   font-size: 11px;
-  background: var(--bg-secondary);
+  background: transparent;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   cursor: pointer;
+  transition: border-color var(--dur-normal) var(--ease-out);
+}
+
+/* 预设行下方的轻说明：仅收起态出现，交代预设与自定义的分工。 */
+.presetHint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .customToggle:hover,
 .customToggle:focus-visible {
-  border-color: var(--border-strong, var(--text-tertiary));
+  border-color: var(--accent-blue);
 }
 
 .customOpen {
   color: var(--text-primary);
-  border-color: var(--accent-primary, var(--text-secondary));
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-blue) 22%, transparent);
 }
 
-.roleList {
+/* 主从式自定义区：共享色板钉在顶部，下方角色列表只做选择与浏览，
+   两块随角色行高亮联动，布局不随操作变化。 */
+.customArea {
+  display: grid;
+  gap: 10px;
+}
+
+.masterHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+}
+
+.masterLabel {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.masterLabel strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+/* 共享色板：16 槽一行，选中角色专属；禁用槽与对比度规则同前。 */
+.sharedPalette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+}
+
+/* 角色列表双列：文件类型独占左列，提示符 + 关键词共右列；
+   行内只放「名称 + 当前色块」，窄窗口（<1100px）回落单列。 */
+.roleColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px 24px;
+}
+
+.roleColumn {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .roleGroup {
@@ -130,24 +196,43 @@
   content: '';
 }
 
+/* 角色行 = 选择入口：点击把顶部色板绑定到该角色，行内不出现色板。 */
 .roleRow {
-  display: grid;
-  grid-template-columns: minmax(96px, 140px) 1fr;
+  display: flex;
   align-items: center;
-  column-gap: 10px;
-  min-height: 22px;
+  gap: 8px;
+  min-height: 26px;
+  padding: 2px 8px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  scroll-margin: 8px;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
-.roleMain {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 8px;
-  min-width: 0;
+.roleRow:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+
+/* 与预览联动：悬停任一侧，另一侧同步高亮（蓝色淡底 + 细描边）。 */
+.roleRowActive {
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-blue) 45%, transparent);
+}
+
+/* 选中角色：色板绑定落点，淡蓝底即可与悬停、未选中区分。 */
+.roleRowSelected {
+  background: color-mix(in srgb, var(--accent-blue) 14%, transparent);
 }
 
 .roleLabel {
   display: inline-flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 5px;
   overflow: hidden;
@@ -155,6 +240,14 @@
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.roleSwatch {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-primary) 70%, transparent);
+  border-radius: 4px;
 }
 
 .overrideDot {
@@ -165,17 +258,13 @@
   border-radius: 50%;
 }
 
-.slotRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
 .slotChip {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border-primary) 70%, transparent);
+
+  /* 中性描边随应用明暗翻转：深色 UI 下黑槽 chip 不隐身，浅色 UI 下白槽不刺眼。 */
+  border: 1px solid color-mix(in srgb, var(--text-secondary) 35%, transparent);
   border-radius: 4px;
   cursor: pointer;
   transition:
@@ -221,12 +310,25 @@
 }
 
 .conflictHint {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 100%;
   overflow: hidden;
   color: var(--warning-text, #a6700c);
-  font-size: 9px;
+  font-size: 10px;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* 头部布局微调：重置按钮靠右，同色提示跟在标题后、空间不足时省略。 */
+.masterHeader .conflictHint {
+  flex: 0 1 auto;
+}
+
+.masterHeader .resetButton {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+@media (width <= 1100px) {
+  .roleColumns {
+    grid-template-columns: 1fr;
+  }
 }

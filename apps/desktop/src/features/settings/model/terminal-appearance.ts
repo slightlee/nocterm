@@ -6,10 +6,9 @@ export const DEFAULT_TERMINAL_FONT_SIZE = 13;
 
 export type ResolvedTerminalTheme = Exclude<TerminalColorScheme, 'follow_app'>;
 
-export type TerminalSchemeGroup = 'featured' | 'dark' | 'light';
+export type TerminalSchemeGroup = 'dark' | 'light';
 
 export const terminalSchemeGroups: { id: TerminalSchemeGroup; label: string }[] = [
-  { id: 'featured', label: '高饱和与特色' },
   { id: 'dark', label: '暗色' },
   { id: 'light', label: '亮色' },
 ];
@@ -19,37 +18,6 @@ type TerminalColorSchemeOption = {
   label: string;
   description: string;
   group: TerminalSchemeGroup;
-  previewClass:
-    | 'terminalLight'
-    | 'terminalDark'
-    | 'midnight'
-    | 'graphite'
-    | 'forest'
-    | 'amber'
-    | 'solarizedDark'
-    | 'dracula'
-    | 'monokai'
-    | 'nord'
-    | 'gruvboxDark'
-    | 'tokyoNight'
-    | 'oneDark'
-    | 'catppuccinMocha'
-    | 'materialOcean'
-    | 'mobaxtermVivid'
-    | 'catppuccinLatte'
-    | 'catppuccinFrappe'
-    | 'catppuccinMacchiato'
-    | 'rosePine'
-    | 'rosePineDawn'
-    | 'rosePineMoon'
-    | 'everforestDark'
-    | 'kanagawa'
-    | 'ayuDark'
-    | 'ayuLight'
-    | 'oxocarbonDark'
-    | 'oneHalfLight'
-    | 'githubLight'
-    | 'synthwave84';
 };
 
 /** 元数据与渲染解耦；增加内置配色时只需追加配置与对应设计 Token。 */
@@ -59,210 +27,180 @@ export const terminalColorSchemes: TerminalColorSchemeOption[] = [
     group: 'light',
     label: '明亮',
     description: '明亮背景与高对比文字',
-    previewClass: 'terminalLight',
   },
   {
     id: 'nocterm_dark',
     group: 'dark',
     label: '暗夜',
     description: '深色背景与柔和前景',
-    previewClass: 'terminalDark',
   },
   {
     id: 'midnight',
     group: 'dark',
     label: '午夜蓝',
     description: '冷静深蓝与清晰高亮',
-    previewClass: 'midnight',
   },
   {
     id: 'graphite',
     group: 'dark',
     label: '石墨灰',
     description: '低饱和石墨灰',
-    previewClass: 'graphite',
   },
   {
     id: 'forest',
     group: 'dark',
     label: '森林绿',
     description: '沉静墨绿与自然色阶',
-    previewClass: 'forest',
   },
   {
     id: 'amber',
     group: 'dark',
     label: '琥珀',
     description: '温暖琥珀复古风格',
-    previewClass: 'amber',
+  },
+  {
+    id: 'mobaxterm_vivid',
+    group: 'dark',
+    label: '鲜亮',
+    description: 'MobaXterm 风格高饱和 16 色，粗体自动渲染为亮色变体',
   },
   {
     id: 'solarized_dark',
     group: 'dark',
-    label: '日光暗色',
+    label: 'Solarized Dark',
     description: 'Solarized 的精密低对比色阶',
-    previewClass: 'solarizedDark',
   },
   {
     id: 'dracula',
     group: 'dark',
-    label: '德古拉',
+    label: 'Dracula',
     description: '高辨识度紫色与鲜明强调色',
-    previewClass: 'dracula',
   },
   {
     id: 'monokai',
     group: 'dark',
-    label: '莫诺凯',
+    label: 'Monokai',
     description: '经典编辑器高饱和配色',
-    previewClass: 'monokai',
   },
   {
     id: 'nord',
     group: 'dark',
-    label: '北境',
+    label: 'Nord',
     description: '柔和克制的北欧冷色调',
-    previewClass: 'nord',
   },
   {
     id: 'gruvbox_dark',
     group: 'dark',
-    label: '复古暗色',
-    description: 'Gruvbox 的暖色复古对比',
-    previewClass: 'gruvboxDark',
+    label: 'Gruvbox Dark',
+    description: '暖色复古对比',
   },
   {
     id: 'tokyo_night',
     group: 'dark',
-    label: '霓虹黑',
+    label: 'Tokyo Night',
     description: '现代深蓝与霓虹高亮',
-    previewClass: 'tokyoNight',
   },
   {
     id: 'one_dark',
     group: 'dark',
-    label: '原子暗色',
+    label: 'One Dark',
     description: 'Atom One Dark 的平衡冷色调',
-    previewClass: 'oneDark',
   },
   {
     id: 'catppuccin_mocha',
     group: 'dark',
-    label: '摩卡',
+    label: 'Catppuccin Mocha',
     description: 'Catppuccin 的柔和粉彩配色',
-    previewClass: 'catppuccinMocha',
   },
   {
     id: 'material_ocean',
     group: 'dark',
-    label: '材质海洋',
-    description: 'Material Ocean 的深海蓝绿配色',
-    previewClass: 'materialOcean',
-  },
-  {
-    id: 'mobaxterm_vivid',
-    label: '鲜亮',
-    description: 'MobaXterm 风格高饱和 16 色，粗体自动渲染为亮色变体',
-    group: 'featured',
-    previewClass: 'mobaxtermVivid',
+    label: 'Material Ocean',
+    description: '深海蓝绿配色',
   },
   {
     id: 'catppuccin_latte',
-    label: '拿铁',
-    description: 'Catppuccin Latte 的清爽亮色粉彩',
     group: 'light',
-    previewClass: 'catppuccinLatte',
+    label: 'Catppuccin Latte',
+    description: '清爽亮色粉彩',
   },
   {
     id: 'catppuccin_frappe',
-    label: '法布奇诺',
-    description: 'Catppuccin Frappé 的柔和蓝灰粉彩',
     group: 'dark',
-    previewClass: 'catppuccinFrappe',
+    label: 'Catppuccin Frappé',
+    description: '柔和蓝灰粉彩',
   },
   {
     id: 'catppuccin_macchiato',
-    label: '玛奇朵',
-    description: 'Catppuccin Macchiato 的深蓝粉彩',
     group: 'dark',
-    previewClass: 'catppuccinMacchiato',
+    label: 'Catppuccin Macchiato',
+    description: '深蓝粉彩',
   },
   {
     id: 'rose_pine',
-    label: '玫瑰松',
-    description: 'Rosé Pine 的柔和低对比紫调',
     group: 'dark',
-    previewClass: 'rosePine',
+    label: 'Rosé Pine',
+    description: '柔和低对比紫调',
   },
   {
     id: 'rose_pine_dawn',
-    label: '玫瑰松·晨',
-    description: 'Rosé Pine Dawn 的暖纸色亮色主题',
     group: 'light',
-    previewClass: 'rosePineDawn',
+    label: 'Rosé Pine Dawn',
+    description: '暖纸色亮色主题',
   },
   {
     id: 'rose_pine_moon',
-    label: '玫瑰松·月',
-    description: 'Rosé Pine Moon 的更高对比月夜紫调',
     group: 'dark',
-    previewClass: 'rosePineMoon',
+    label: 'Rosé Pine Moon',
+    description: '更高对比月夜紫调',
   },
   {
     id: 'everforest_dark',
-    label: '暮林',
-    description: 'Everforest 的柔和森林绿与暖沙前景',
     group: 'dark',
-    previewClass: 'everforestDark',
+    label: 'Everforest Dark',
+    description: '柔和森林绿与暖沙前景',
   },
   {
     id: 'kanagawa',
-    label: '神奈川',
-    description: 'Kanagawa 的葛饰北斋浮世绘配色',
     group: 'dark',
-    previewClass: 'kanagawa',
+    label: 'Kanagawa',
+    description: '葛饰北斋浮世绘配色',
   },
   {
     id: 'ayu_dark',
-    label: 'Ayu 暗',
-    description: 'Ayu Dark 的深邃底色与明亮强调',
     group: 'dark',
-    previewClass: 'ayuDark',
+    label: 'Ayu Dark',
+    description: '深邃底色与明亮强调',
   },
   {
     id: 'ayu_light',
-    label: 'Ayu 亮',
-    description: 'Ayu Light 的干净亮色与柔和强调',
     group: 'light',
-    previewClass: 'ayuLight',
+    label: 'Ayu Light',
+    description: '干净亮色与柔和强调',
   },
   {
     id: 'oxocarbon_dark',
-    label: '氧碳黑',
-    description: 'Oxocarbon 的 IBM 碳黑与霓虹强调',
     group: 'dark',
-    previewClass: 'oxocarbonDark',
+    label: 'Oxocarbon Dark',
+    description: 'IBM 碳黑与霓虹强调',
   },
   {
     id: 'one_half_light',
-    label: '一半亮',
-    description: 'One Half Light 的平衡亮色编辑器配色',
     group: 'light',
-    previewClass: 'oneHalfLight',
+    label: 'One Half Light',
+    description: '平衡亮色编辑器配色',
   },
   {
     id: 'github_light',
-    label: 'GitHub 亮',
-    description: 'GitHub Light 的官方亮色语法配色',
     group: 'light',
-    previewClass: 'githubLight',
+    label: 'GitHub Light',
+    description: '官方亮色语法配色',
   },
   {
     id: 'synthwave_84',
-    label: '合成波',
-    description: "Synthwave '84 的复古霓虹夜色",
-    group: 'featured',
-    previewClass: 'synthwave84',
+    group: 'dark',
+    label: "SynthWave '84",
+    description: '复古霓虹夜色',
   },
 ];
 

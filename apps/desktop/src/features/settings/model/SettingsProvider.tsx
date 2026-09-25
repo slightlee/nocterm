@@ -12,7 +12,11 @@ import {
 import type { AppTheme, TerminalAppearance } from '../types/settings-types';
 import { resolveAppTheme, toNativeAppTheme } from './app-theme';
 import { SettingsContext } from './settings-context';
-import { DEFAULT_TERMINAL_FONT_SIZE, resolveTerminalTheme } from './terminal-appearance';
+import {
+  DEFAULT_TERMINAL_FONT_SIZE,
+  resolveTerminalTheme,
+  type ResolvedTerminalTheme,
+} from './terminal-appearance';
 import { applyTerminalHighlightConfig } from '../../terminal/model/highlight-config';
 import { parseHighlightOverrides } from '../../terminal/model/highlight-roles';
 
@@ -32,6 +36,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(persistenceAvailable);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [terminalThemeId, setTerminalThemeId] = useState<ResolvedTerminalTheme>('nocterm_dark');
 
   useEffect(() => {
     if (!persistenceAvailable) return;
@@ -58,10 +63,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const applyTheme = () => {
       const resolvedAppTheme = resolveAppTheme(appTheme, mediaQuery.matches);
       document.documentElement.dataset.theme = resolvedAppTheme;
-      document.documentElement.dataset.terminalTheme = resolveTerminalTheme(
-        terminalAppearance.colorScheme,
-        resolvedAppTheme
-      );
+      // 解析结果只进 context，不再写根节点：根上的 data-terminal-theme 会让
+      // 全部主题作用域规则同时命中任意 surface（specificity 相同、源顺序取胜），
+      // 设置页方案卡的预览配色会被最后一条规则通吃。
+      setTerminalThemeId(resolveTerminalTheme(terminalAppearance.colorScheme, resolvedAppTheme));
       document.documentElement.dataset.terminalFontSize = String(terminalAppearance.fontSize);
       applyTerminalHighlightConfig({
         preset: terminalAppearance.highlightPreset,
@@ -128,6 +133,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     () => ({
       appTheme,
       terminalAppearance,
+      terminalThemeId,
       loading,
       saving,
       persistenceAvailable,
@@ -142,6 +148,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       persistenceAvailable,
       saving,
       terminalAppearance,
+      terminalThemeId,
       updateAppTheme,
       updateTerminalAppearance,
     ]
