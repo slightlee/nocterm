@@ -72,3 +72,27 @@ pub struct AiToolApprovalClosedEvent {
     pub session_id: String,
     pub resolution: String,
 }
+
+/// 持久化层的单条消息快照；parts 由前端序列化为 JSON 字符串传递。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiMessageDto {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub parts_json: Option<String>,
+    pub created_at_ms: i64,
+}
+
+/// 一次会话快照的 IPC 契约；保存请求与查询响应共用同一结构。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConversationDto {
+    pub id: String,
+    pub title: String,
+    pub provider: String,
+    pub command_policy: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub messages: Vec<AiMessageDto>,
+}

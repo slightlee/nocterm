@@ -10,6 +10,7 @@ use crate::commands::{
 
 use nocterm_application::{
     ai_audit::AiAuditService,
+    ai_conversation::AiConversationService,
     connection::ConnectionService,
     health::HealthService,
     settings::SettingsService,
@@ -34,6 +35,7 @@ pub struct AppState {
     connection_service: ConnectionService,
     settings_service: SettingsService,
     ai_audit_service: AiAuditService,
+    ai_conversation_service: AiConversationService,
     terminal_service: TerminalService,
     local_terminal_service: LocalTerminalService,
     /// 进程内 SFTP 会话管理器：与终端共用 russh 后端，承载远程文件浏览与传输。
@@ -374,12 +376,14 @@ impl AppState {
         connection_service: ConnectionService,
         settings_service: SettingsService,
         ai_audit_service: AiAuditService,
+        ai_conversation_service: AiConversationService,
     ) -> Self {
         Self {
             health_service,
             connection_service,
             settings_service,
             ai_audit_service,
+            ai_conversation_service,
             terminal_service: TerminalService::new(Arc::new(SshTerminalManager::default())),
             local_terminal_service: LocalTerminalService::new(Arc::new(
                 LocalTerminalManager::default(),
@@ -407,6 +411,10 @@ impl AppState {
 
     pub fn ai_audit_service(&self) -> &AiAuditService {
         &self.ai_audit_service
+    }
+
+    pub fn ai_conversation_service(&self) -> &AiConversationService {
+        &self.ai_conversation_service
     }
 
     pub fn terminal_service(&self) -> &TerminalService {

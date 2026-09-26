@@ -65,6 +65,39 @@ export function resetAiConversation(conversationId: string) {
   return invoke<void>('ai_conversation_reset', { conversationId });
 }
 
+/** 持久化层的单条消息快照；parts 由调用方序列化为 JSON 字符串。 */
+export interface AiMessageSnapshot {
+  id: string;
+  role: AiMessage['role'];
+  content: string;
+  partsJson: string | null;
+  createdAtMs: number;
+}
+
+/** 一次 AI 会话的完整快照，保存请求与查询响应共用同一结构。 */
+export interface AiConversationSnapshot {
+  id: string;
+  title: string;
+  provider: AiProviderId;
+  commandPolicy: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+  messages: AiMessageSnapshot[];
+}
+
+/** 读取全部已持久化会话；失败由调用方决定是否降级为纯内存模式。 */
+export function listAiConversations() {
+  return invoke<AiConversationSnapshot[]>('ai_conversation_list');
+}
+
+export function saveAiConversation(conversation: AiConversationSnapshot) {
+  return invoke<void>('ai_conversation_save', { conversation });
+}
+
+export function deleteSavedAiConversation(conversationId: string) {
+  return invoke<void>('ai_conversation_delete', { conversationId });
+}
+
 export function onAiOutput(handler: (event: AiOutputEvent) => void): Promise<UnlistenFn> {
   return listen<AiOutputEvent>('nocterm://ai-output', (event) => handler(event.payload));
 }

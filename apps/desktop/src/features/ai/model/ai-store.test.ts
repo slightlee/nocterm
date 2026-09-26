@@ -119,3 +119,33 @@ describe('useAiStore conversations', () => {
     expect(useAiStore.getState().conversations[0]?.messages[0]?.parts).toEqual(parts);
   });
 });
+
+describe('useAiStore hydrate', () => {
+  beforeEach(() => {
+    useAiStore.setState({
+      conversations: [conversation('initial')],
+      activeConversationId: 'initial',
+      draft: '未发送内容',
+    });
+  });
+
+  it('replaces in-memory conversations and activates the most recently updated one', () => {
+    useAiStore.getState().hydrate([
+      { ...conversation('old'), createdAt: 1, updatedAt: 1 },
+      { ...conversation('latest'), createdAt: 2, updatedAt: 9 },
+    ]);
+
+    const state = useAiStore.getState();
+    expect(state.conversations.map((item) => item.id)).toEqual(['old', 'latest']);
+    expect(state.activeConversationId).toBe('latest');
+    expect(state.draft).toBe('');
+  });
+
+  it('keeps the current blank conversation when persistence has no history', () => {
+    useAiStore.getState().hydrate([]);
+
+    const state = useAiStore.getState();
+    expect(state.conversations).toHaveLength(1);
+    expect(state.activeConversationId).toBe('initial');
+  });
+});

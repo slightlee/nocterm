@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use commands::sftp::{SftpTransferState, shutdown_sftp};
 use nocterm_application::{
-    ai_audit::AiAuditService, connection::ConnectionService, health::HealthService,
-    settings::SettingsService,
+    ai_audit::AiAuditService, ai_conversation::AiConversationService,
+    connection::ConnectionService, health::HealthService, settings::SettingsService,
 };
 use nocterm_infrastructure::{
     credential::SystemCredentialStore, persistence::SqliteConnectionRepository,
@@ -35,6 +35,7 @@ pub fn run() {
                 ConnectionService::with_credential_store(repository.clone(), credential_store);
             let settings_service = SettingsService::new(repository.clone());
             let ai_audit_service = AiAuditService::new(repository.clone());
+            let ai_conversation_service = AiConversationService::new(repository.clone());
             // 产品版本由 Tauri 配置解析根 package.json；Cargo crate 版本仅描述内部包。
             let health_service = HealthService::new(
                 Arc::new(SystemPlatformProbe),
@@ -46,6 +47,7 @@ pub fn run() {
                 connection_service,
                 settings_service,
                 ai_audit_service,
+                ai_conversation_service,
             ));
             if let Some(state) = app.try_state::<AppState>() {
                 commands::ai_bridge::start_gateway(app.handle().clone(), &state);
@@ -60,6 +62,9 @@ pub fn run() {
             commands::ai::ai_session_stop,
             commands::ai::ai_conversation_reset,
             commands::ai::ai_tool_approval_resolve,
+            commands::ai_conversation::ai_conversation_list,
+            commands::ai_conversation::ai_conversation_save,
+            commands::ai_conversation::ai_conversation_delete,
             commands::ai_ssh_exec::ai_ssh_exec_readonly,
             commands::ai_ssh_exec::ai_ssh_exec_stop,
             commands::connection::connection_list,

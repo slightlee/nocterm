@@ -64,6 +64,39 @@ pub(super) fn validate_conversation_id(raw: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+/// 会话历史持久化引入的边界：Provider 与消息标识沿用同一套有界白名单策略。
+pub(super) fn validate_provider_id(raw: &str) -> Result<String, String> {
+    // 与 DTO 数据库 CHECK 约束和 Provider 适配器清单保持一致，未知值直接拒绝。
+    match raw {
+        "codex" | "claude-code" | "grok" => Ok(raw.to_string()),
+        _ => Err("AI Provider 标识无效".to_string()),
+    }
+}
+
+pub(super) fn validate_message_id(raw: &str) -> Result<String, String> {
+    // 消息 id 由前端 crypto.randomUUID 生成，边界与对话标识相同，仅错误文案不同。
+    validate_conversation_id(raw).map_err(|_| "AI 消息标识格式无效".to_string())
+}
+
+const MAX_AI_MESSAGE_BYTES: usize = 256 * 1024;
+
+pub(super) fn validate_message_content(raw: &str) -> Result<(), String> {
+    if raw.contains('\0') {
+        return Err("AI 消息内容包含不允许的空字符".to_string());
+    }
+    if raw.len() > MAX_AI_MESSAGE_BYTES {
+        return Err("AI 消息内容不能超过 256 KiB".to_string());
+    }
+    Ok(())
+}
+
+pub(super) fn validate_timestamp_ms(raw: i64, label: &str) -> Result<(), String> {
+    if raw <= 0 {
+        return Err(format!("{label}无效"));
+    }
+    Ok(())
+}
+
 fn validate_prompt(raw: &str, label: &str) -> Result<(), String> {
     if raw.trim().is_empty() {
         return Err(format!("{label}不能为空"));

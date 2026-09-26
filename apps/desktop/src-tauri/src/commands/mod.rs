@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod ai_bridge;
+pub mod ai_conversation;
 mod ai_headless;
 mod ai_persistent;
 pub mod ai_policy;
