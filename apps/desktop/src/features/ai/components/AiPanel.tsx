@@ -13,6 +13,11 @@ import { resetAiConversation } from '../api/ai-client';
 import { useAiRuntime } from '../hooks/use-ai-runtime';
 import { useAiPersistence } from '../hooks/use-ai-persistence';
 import { useAiStore } from '../model/ai-store';
+import {
+  buildInputHistory,
+  navigateInputHistory,
+  type AiHistoryBrowseState,
+} from '../model/ai-input-history';
 import { readAiAttachment, type AiAttachment } from '../model/ai-attachment';
 import { isAiTerminalTargetReady, resolveAiTerminalTarget } from '../model/ai-target';
 import { AI_PROVIDERS, type AiCommandPolicy, type AiProviderId } from '../model/ai-types';
@@ -49,6 +54,8 @@ export function AiPanel({ visible }: AiPanelProps) {
   const [attachmentLoading, setAttachmentLoading] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 历史输入浏览状态；null 表示不在浏览中，任何手动编辑都会退出浏览。
+  const historyBrowserRef = useRef<AiHistoryBrowseState | null>(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeId) ?? null,
@@ -152,11 +159,59 @@ export function AiPanel({ visible }: AiPanelProps) {
     });
   };
 
+  // 用户手动编辑一律退出历史浏览；导航回填直接走 setDraft，不经过这里。
+  const handleDraftChange = (value: string) => {
+    historyBrowserRef.current = null;
+    setDraft(value);
+  };
+
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // IME 组字期间的按键属于拼音输入流程，统一不拦截（也避免组字回车误发送）。
+    if (event.nativeEvent.isComposing) return;
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
+      historyBrowserRef.current = null;
       submit();
+      return;
     }
+    // 浏览中按 Esc 取消翻页并还原进入前的草稿；必须在方向键过滤之前判断。
+    if (event.key === 'Escape' && historyBrowserRef.current !== null) {
+      event.preventDefault();
+      setDraft(historyBrowserRef.current.savedDraft);
+      historyBrowserRef.current = null;
+      return;
+    }
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+
+    // 方向键路径统一读取 store 最新快照：快速连按可能命中重渲染前的旧闭包，
+    // 用闭包 draft 回填会把刚还原的草稿覆盖成过期值。
+    const latestState = useAiStore.getState();
+    const browsing = historyBrowserRef.current !== null;
+    // 光标位置判断（Slack 式）：只有光标在第一行按 ↑ 才进入浏览，
+    // 多行编辑的光标移动不受影响；已在浏览中则 ↑↓ 始终继续导航，
+    // 浏览外的 ↓ 保持原生行为（回退只由浏览态内的 ↓ 完成）。
+    if (!browsing) {
+      if (event.key === 'ArrowDown') return;
+      const { selectionStart } = event.currentTarget;
+      if (latestState.draft.slice(0, selectionStart).includes('\n')) return;
+      const entries = buildInputHistory(latestState.conversations);
+      if (entries.length === 0) return;
+      event.preventDefault();
+      const step = navigateInputHistory(null, entries, latestState.draft, 'up');
+      historyBrowserRef.current = step.browser;
+      setDraft(step.text);
+      return;
+    }
+
+    event.preventDefault();
+    const step = navigateInputHistory(
+      historyBrowserRef.current,
+      buildInputHistory(latestState.conversations),
+      latestState.draft,
+      event.key === 'ArrowUp' ? 'up' : 'down'
+    );
+    historyBrowserRef.current = step.browser;
+    setDraft(step.text);
   };
 
   const handleAttachmentChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -334,7 +389,7 @@ export function AiPanel({ visible }: AiPanelProps) {
         onAttachmentChange={handleAttachmentChange}
         onAttachmentRemove={() => setAttachment(null)}
         onComposerKeyDown={handleComposerKeyDown}
-        onDraftChange={setDraft}
+        onDraftChange={handleDraftChange}
         onProviderChange={handleProviderChange}
         commandPolicy={commandPolicy}
         onCommandPolicyChange={setCommandPolicy}
