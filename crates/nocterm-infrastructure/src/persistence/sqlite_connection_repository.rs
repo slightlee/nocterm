@@ -879,8 +879,10 @@ mod tests {
         migrate(&mut connection).expect("create current schema");
         connection
             .execute_batch(
-                "DROP TABLE ai_tool_audit_events;
-                 DELETE FROM schema_migrations WHERE version = 6;",
+                "DROP TABLE ai_messages;
+                 DROP TABLE ai_conversations;
+                 DROP TABLE ai_tool_audit_events;
+                 DELETE FROM schema_migrations WHERE version >= 6;",
             )
             .expect("restore complete v5 schema");
 

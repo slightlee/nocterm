@@ -6,6 +6,7 @@ import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import type {
   AiExitEvent,
   AiCommandPolicy,
+  AiMessage,
   AiOutputEvent,
   AiProviderId,
   AiToolApprovalClosedEvent,
