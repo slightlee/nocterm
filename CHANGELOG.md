@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0-beta.3](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.2...v0.2.0-beta.3) (2026-09-27)
+
+
+### Features
+
+* expand terminal color themes and appearance customization ([#39](https://github.com/slightlee/nocterm/issues/39)) ([904ec27](https://github.com/slightlee/nocterm/commit/904ec2714ef6570b7dbdeb97d8403855334ee931))
+* navigate ai composer input history with arrow keys ([#45](https://github.com/slightlee/nocterm/issues/45)) ([de3b8d2](https://github.com/slightlee/nocterm/commit/de3b8d2f81ad01f0728442d02248d4476b5d6a16))
+* persist ai panel conversation history to sqlite ([#44](https://github.com/slightlee/nocterm/issues/44)) ([2e2dfcd](https://github.com/slightlee/nocterm/commit/2e2dfcd0780ccd81483fc8261ec6d95bb99d605e))
+
+
+### Bug Fixes
+
+* set a default term for pty shells ([#34](https://github.com/slightlee/nocterm/issues/34)) ([aeeeebb](https://github.com/slightlee/nocterm/commit/aeeeebb613f36a4e2676e93f21637b613c929dac))
+
 ## [0.2.0-beta.2](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.1...v0.2.0-beta.2) (2026-09-21)
 
 
