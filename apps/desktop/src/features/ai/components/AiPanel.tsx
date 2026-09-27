@@ -11,6 +11,7 @@ import { useTerminalStore } from '../../terminal';
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import { resetAiConversation } from '../api/ai-client';
 import { useAiRuntime } from '../hooks/use-ai-runtime';
+import { useAiPersistence } from '../hooks/use-ai-persistence';
 import { useAiStore } from '../model/ai-store';
 import { readAiAttachment, type AiAttachment } from '../model/ai-attachment';
 import { isAiTerminalTargetReady, resolveAiTerminalTarget } from '../model/ai-target';
@@ -84,6 +85,8 @@ export function AiPanel({ visible }: AiPanelProps) {
     requestSessionStop,
     resetPresentation,
   } = useAiRuntime({ addMessage });
+  // 会话历史持久化：启动恢复 + 变更写盘；失败提示与运行时共用同一个通知位。
+  useAiPersistence({ onError: setNotice });
   // 失败提示跟随最后一条提问展示，让“重新发送”与被重发的消息在视觉上绑定。
   const lastUserMessageId = canRetryQuestion
     ? [...messages].reverse().find((message) => message.role === 'user')?.id

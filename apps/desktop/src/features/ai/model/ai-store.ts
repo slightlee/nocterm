@@ -25,6 +25,8 @@ interface AiState {
   createConversation: (provider?: AiProviderId) => void;
   deleteConversation: (id: string) => void;
   selectConversation: (id: string) => void;
+  /** 用持久化层读出的会话整体替换内存状态；空列表视为没有历史，保留当前新会话。 */
+  hydrate: (conversations: AiConversation[]) => void;
   addMessage: (role: AiMessage['role'], content: string, parts?: AiMessagePart[]) => void;
   deleteMessage: (id: string) => void;
   clearMessages: () => void;
@@ -97,6 +99,15 @@ export const useAiStore = create<AiState>((set) => ({
       return { conversations, activeConversationId: nextActive.id, draft: '' };
     }),
   selectConversation: (id) => set({ activeConversationId: id, draft: '' }),
+  hydrate: (conversations) =>
+    set((state) => {
+      if (conversations.length === 0) return state;
+      // 以最近更新为活动会话，恢复用户上次离开时的上下文。
+      const latest = conversations.reduce((current, item) =>
+        item.updatedAt >= current.updatedAt ? item : current
+      );
+      return { conversations, activeConversationId: latest.id, draft: '' };
+    }),
   addMessage: (role, content, parts) =>
     set((state) => ({
       conversations: state.conversations.map((conversation) => {

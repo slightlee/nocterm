@@ -10,7 +10,7 @@ use nocterm_domain::settings::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// 列顺序即 `map_profile` 的下标契约：新增列只能追加在末尾，避免改动既有下标。
 const PROFILE_COLUMNS: &str = "connection_profiles.id, connection_profiles.name, connection_profiles.host, connection_profiles.port, connection_profiles.username, connection_profiles.authentication, connection_profiles.created_at, connection_profiles.updated_at,
@@ -688,6 +688,37 @@ fn migrate(connection: &mut Connection) -> Result<(), ConnectionRepositoryError>
             .map_err(repository_error)?;
     }
 
+    if current_version < 7 {
+        // AI 会话历史是用户业务数据：时间戳沿用前端的毫秒精度，由调用方提供，
+        // 数据库不做时区换算。消息随会话级联删除，清空历史不产生孤儿行。
+        transaction
+            .execute_batch(
+                "CREATE TABLE ai_conversations (
+                     id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 64),
+                     title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+                     provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code', 'grok')),
+                     command_policy TEXT CHECK (
+                         command_policy IS NULL OR
+                         command_policy IN ('deny_all', 'confirm_each', 'auto_safe', 'full_access')
+                     ),
+                     created_at_ms INTEGER NOT NULL CHECK (created_at_ms > 0),
+                     updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms > 0)
+                 );
+                 CREATE TABLE ai_messages (
+                     id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 64),
+                     conversation_id TEXT NOT NULL REFERENCES ai_conversations (id) ON DELETE CASCADE,
+                     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                     content TEXT NOT NULL CHECK (length(content) <= 262144),
+                     parts_json TEXT CHECK (parts_json IS NULL OR length(parts_json) <= 262144),
+                     created_at_ms INTEGER NOT NULL CHECK (created_at_ms > 0)
+                 );
+                 CREATE INDEX idx_ai_messages_conversation_time
+                     ON ai_messages (conversation_id, created_at_ms);
+                 INSERT INTO schema_migrations (version) VALUES (7);",
+            )
+            .map_err(repository_error)?;
+    }
+
     transaction.commit().map_err(repository_error)
 }
 
@@ -836,7 +867,7 @@ mod tests {
             )
             .expect("read audit table");
 
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         assert_eq!(table, "ai_tool_audit_events");
     }
 
@@ -848,8 +879,10 @@ mod tests {
         migrate(&mut connection).expect("create current schema");
         connection
             .execute_batch(
-                "DROP TABLE ai_tool_audit_events;
-                 DELETE FROM schema_migrations WHERE version = 6;",
+                "DROP TABLE ai_messages;
+                 DROP TABLE ai_conversations;
+                 DROP TABLE ai_tool_audit_events;
+                 DELETE FROM schema_migrations WHERE version >= 6;",
             )
             .expect("restore complete v5 schema");
 
@@ -869,7 +902,7 @@ mod tests {
             )
             .expect("read audit table");
 
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         assert_eq!(table, "ai_tool_audit_events");
     }
 
