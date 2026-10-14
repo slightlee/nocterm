@@ -123,13 +123,13 @@ pub trait ProviderAdapter: Send + Sync {
     fn prepare_launch(&self, launch: ProviderLaunch<'_>) -> Result<ProviderLaunchPlan, String>;
 }
 
-/// 直接解析当前进程的 PATH/PATHEXT，避免为状态探测启动 `which`/`where` 子进程。
+/// 直接解析当前进程的 PATH，避免为状态探测启动 `which`/`where` 子进程。
 /// macOS 从 Finder/Dock 启动的 GUI 进程只继承 launchd 的最小 PATH，用户通过
 /// npm、Homebrew、cargo 等安装的 Provider CLI 会探测不到，因此进程 PATH 之外
 /// 还要补充一组用户级 CLI 目录；补充目录同样只做文件系统检查。
 fn find_provider_executable(command: &str) -> Option<PathBuf> {
     let search_path = combined_search_path(std::env::var_os("PATH"), user_home_directory())?;
-    find_provider_executable_in(command, Some(search_path), std::env::var_os("PATHEXT"))
+    find_provider_executable_in(command, Some(search_path))
 }
 
 /// 用户的家目录是补充 CLI 目录的唯一来源；Windows 使用 USERPROFILE 表达同一概念。
@@ -144,6 +144,49 @@ fn user_home_directory() -> Option<PathBuf> {
 /// GUI 启动时的最小 PATH 会让它们即使被发现也无法执行。
 pub(crate) fn provider_environment_path() -> Option<OsString> {
     combined_search_path(std::env::var_os("PATH"), user_home_directory())
+}
+
+/// 本地与私有网段必须直连：Nocterm 是本地优先产品，Provider 的模型网关经常
+/// 部署在 localhost 或内网（如 `http://192.168.x.x`）。HTTP 客户端普遍尊重
+/// `HTTP_PROXY` 环境变量，GUI 进程从桌面继承的代理变量会把内网请求交给代理
+/// 转发，代理无法可靠回源内网时会以 403 Forbidden 一类错误失败。合并注入
+/// `NO_PROXY` 后，私有网段直连，用户对公网 API 的代理需求不受影响。
+const LOCAL_NETWORK_BYPASS_ENTRIES: [&str; 6] = [
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+];
+
+/// 把私有网段绕过项合并进用户已有的 NO_PROXY；已有项不重复、不改顺序。
+fn merge_no_proxy(existing: Option<&str>) -> String {
+    let mut entries = existing
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    for entry in LOCAL_NETWORK_BYPASS_ENTRIES {
+        if !entries.iter().any(|item| item.eq_ignore_ascii_case(entry)) {
+            entries.push(entry.to_string());
+        }
+    }
+    entries.join(",")
+}
+
+/// 给 Provider 子进程统一注入合并后的 NO_PROXY。大小写两个变体都写：Unix 上
+/// 多数 HTTP 客户端优先读取小写 `no_proxy`；Windows 环境变量名不区分大小写，
+/// 重复设置只是同键覆盖，行为一致。
+pub(crate) fn apply_local_network_bypass(process: &mut std::process::Command) {
+    let existing = std::env::var_os("NO_PROXY")
+        .or_else(|| std::env::var_os("no_proxy"))
+        .map(|value| value.to_string_lossy().into_owned());
+    let merged = merge_no_proxy(existing.as_deref());
+    process.env("NO_PROXY", &merged);
+    process.env("no_proxy", &merged);
 }
 
 /// 合成探测与子进程共用的搜索路径：进程 PATH 优先，保证开发环境行为不变，
@@ -192,35 +235,33 @@ fn supplementary_search_directories(home: Option<&Path>) -> Vec<PathBuf> {
     directories
 }
 
-fn find_provider_executable_in(
-    command: &str,
-    search_path: Option<OsString>,
-    path_extensions: Option<OsString>,
-) -> Option<PathBuf> {
+/// Windows 上 CreateProcess 只能直接执行 PE 可执行文件；`.cmd`/`.bat` 包装器
+/// 由 Rust 标准库自动经 `cmd.exe /c` 启动并做参数转义。npm 等包管理器在
+/// Windows 会同时生成无扩展名的 sh 脚本与 `.cmd` 包装器，前者只对类 Unix
+/// Shell 可执行，直接 CreateProcess 会报 “%1 不是有效的 Win32 应用程序
+/// (os error 193)”。因此每个目录内固定先探测 `.exe`/`.cmd`/`.bat`，无扩展名
+/// 文件只作为 Unix 语义的兜底候选；不读取可被用户改写的 PATHEXT，避免
+/// `.ps1`/`.js` 等标准库无法启动的扩展名被误选。
+const EXECUTABLE_EXTENSION_CANDIDATES: [&str; 3] = [".exe", ".cmd", ".bat"];
+
+fn find_provider_executable_in(command: &str, search_path: Option<OsString>) -> Option<PathBuf> {
     let command_path = Path::new(command);
     if command_path.components().count() > 1 {
         return command_path.is_file().then(|| command_path.to_path_buf());
     }
-    let extensions = path_extensions
-        .as_deref()
-        .and_then(|value| value.to_str())
-        .map(|value| {
-            value
-                .split(';')
-                .filter(|extension| !extension.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
     std::env::split_paths(&search_path?).find_map(|directory| {
-        let direct = directory.join(command);
-        if direct.is_file() {
-            return Some(direct);
-        }
-        extensions.iter().find_map(|extension| {
-            let candidate = directory.join(format!("{command}{extension}"));
-            candidate.is_file().then_some(candidate)
-        })
+        EXECUTABLE_EXTENSION_CANDIDATES
+            .iter()
+            .find_map(|extension| {
+                let candidate = directory.join(format!("{command}{extension}"));
+                candidate.is_file().then_some(candidate)
+            })
+            // 无扩展名候选兜底：macOS/Linux 的 CLI 脚本没有扩展名，
+            // 放在扩展名之后保证 Windows 的 sh 脚本不会被优先误选。
+            .or_else(|| {
+                let direct = directory.join(command);
+                direct.is_file().then_some(direct)
+            })
     })
 }
 

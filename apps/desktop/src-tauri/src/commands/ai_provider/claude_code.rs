@@ -74,7 +74,10 @@ impl ProviderAdapter for ClaudeCodeAdapter {
                 event_subtype: "init",
                 tool_prefix: NOCTERM_MCP_TOOL_PREFIX,
                 failure_message: "Claude Code 未加载当前终端能力，请检查 Provider 版本与 MCP 配置",
-                require_gateway_call: true,
+                // 产品决策：回答不再强制要求真实的终端工具调用。模型对通用问题
+                // 可以直接回答，与 Codex 的常驻会话保持同一信任标准；真正的命令
+                // 执行仍必须经过 Gateway 审批与审计，安全边界不受影响。
+                require_gateway_call: false,
                 missing_gateway_call_message:
                     "Claude Code 未通过当前终端能力取得结果，已丢弃未经验证的回答",
             }),

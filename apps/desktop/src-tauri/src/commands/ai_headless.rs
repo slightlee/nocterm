@@ -74,6 +74,9 @@ pub(super) fn start_headless_session(
     if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
         process.env("PATH", path);
     }
+    // 模型网关可能在 localhost 或内网；继承的代理变量会劫持这些请求，
+    // 注入合并 NO_PROXY 保证私有网段直连，公网代理行为不变。
+    crate::commands::ai_provider::apply_local_network_bypass(&mut process);
     if let Some(directory) = prepared.current_directory.as_ref() {
         process.current_dir(directory);
     } else if let Some(directory) = working_directory {

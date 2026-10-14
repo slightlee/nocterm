@@ -250,7 +250,7 @@ flowchart LR
 | Provider    | 生命周期                            | 厂商协议            | Nocterm 工具接入                            | 关键隔离                                                                    |
 | ----------- | ----------------------------------- | ------------------- | ------------------------------------------- | --------------------------------------------------------------------------- |
 | Codex       | 同一 UI 对话复用进程与 thread       | app-server JSON-RPC | stdio MCP 到认证回环 Gateway                | 关闭内置 Shell、其他 MCP、Code Mode、浏览器、插件和宿主指令                 |
-| Claude Code | 每轮 headless 进程                  | `stream-json`       | stdio MCP 到认证回环 Gateway                | 严格 MCP、空内置工具、私有空目录；未调用 Gateway 的猜测不发布               |
+| Claude Code | 每轮 headless 进程                  | `stream-json`       | stdio MCP 到认证回环 Gateway                | 严格 MCP、空内置工具、私有空目录；命令执行必须经 Gateway 审批               |
 | Grok        | 同一 UI 对话复用 ACP 进程与 session | ACP                 | 官方 MCP-over-ACP 反向调用进程内 Dispatcher | 私有 `GROK_HOME` / cwd；关闭用户 MCP、Skills、Hook、memory、subagent 和 Web |
 
 ### 7.3 Provider 约束
@@ -267,7 +267,7 @@ flowchart LR
 - 使用 headless `-p` 与 `stream-json`，Prompt 通过 stdin；
 - 使用严格 MCP 配置、空内置工具和无 Provider 会话持久化；
 - 任务进程运行于权限受限的私有空目录；
-- 只有本轮真实调用 Nocterm Gateway 后才发布终端事实。
+- 模型回答不再强制要求真实 Gateway 调用；命令执行仍必须经 Gateway 审批与审计。
 
 **Grok**
 
