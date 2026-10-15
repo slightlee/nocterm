@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0-beta.4](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.3...v0.2.0-beta.4) (2026-10-15)
+
+
+### Features
+
+* add custom title bar for windows frames ([#49](https://github.com/slightlee/nocterm/issues/49)) ([8501533](https://github.com/slightlee/nocterm/commit/8501533d7d3f17fe530320b51bfaea7dd4043f1e))
+
+
+### Bug Fixes
+
+* make ai providers work reliably on windows ([#48](https://github.com/slightlee/nocterm/issues/48)) ([d71b5e9](https://github.com/slightlee/nocterm/commit/d71b5e96d88182de88682de181c49ad2666ca5b3))
+* prepend provider install directory to child process PATH ([#52](https://github.com/slightlee/nocterm/issues/52)) ([bb05ddd](https://github.com/slightlee/nocterm/commit/bb05dddaf7d831043f1c020ff54d25367535f543))
+
 ## [0.2.0-beta.3](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.2...v0.2.0-beta.3) (2026-09-27)
 
 
