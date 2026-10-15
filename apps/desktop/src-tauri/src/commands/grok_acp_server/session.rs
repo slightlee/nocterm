@@ -92,6 +92,7 @@ impl GrokAcpServer {
         } = launch;
         let prepared = prepare_grok_acp_launch(timestamp, sequence)?;
         let mut process = Command::new(&provider_executable);
+        crate::commands::ai_process::hide_console_window(&mut process);
         process
             .args(&prepared.args)
             .env_clear()
