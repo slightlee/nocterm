@@ -19,10 +19,12 @@
   align-items: center;
   gap: 4px;
   width: 100%;
+
+  /* macOS Overlay 红绿灯悬浮于内容顶，需要这段避让留白。 */
   padding: 60px 6px 10px;
 }
 
-/* Windows 已由原生标题栏承载窗口操作，内容区无需再避让 macOS 交通灯。 */
+/* Windows 使用独立自绘标题栏，rail 内容在标题栏下收紧即可。 */
 .compactTop .navItems {
   padding-top: 14px;
 }
