@@ -139,11 +139,36 @@ fn user_home_directory() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// 供 Provider 子进程注入的 PATH：与探测使用同一份合成路径，保证"探测到什么
-/// 就用什么启动"。Provider 脚本普遍使用 `#!/usr/bin/env node` 一类 shebang，
-/// GUI 启动时的最小 PATH 会让它们即使被发现也无法执行。
-pub(crate) fn provider_environment_path() -> Option<OsString> {
-    combined_search_path(std::env::var_os("PATH"), user_home_directory())
+/// 供 Provider 子进程注入的 PATH。已选可执行文件所在目录必须排在最前，保证
+/// npm CLI 的 `#!/usr/bin/env node` 与其 NVM 安装版本配套；其余目录仍沿用发现
+/// 阶段的固定超集，供 Provider 运行期解析用户工具。
+pub(crate) fn provider_environment_path(provider_executable: &Path) -> Option<OsString> {
+    provider_environment_path_from(
+        provider_executable,
+        std::env::var_os("PATH"),
+        user_home_directory(),
+    )
+}
+
+/// 参数化实现用于覆盖 GUI 最小 PATH 与多 NVM 版本并存的回归场景。
+fn provider_environment_path_from(
+    provider_executable: &Path,
+    process_path: Option<OsString>,
+    home: Option<PathBuf>,
+) -> Option<OsString> {
+    let search_path = combined_search_path(process_path, home)?;
+    let Some(provider_directory) = provider_executable
+        .parent()
+        .filter(|directory| !directory.as_os_str().is_empty())
+    else {
+        return Some(search_path);
+    };
+    let mut directories = vec![provider_directory.to_path_buf()];
+    directories.extend(
+        std::env::split_paths(&search_path).filter(|directory| directory != provider_directory),
+    );
+    // 非法路径项不应阻止 Provider 启动；合成失败时保留原始搜索路径。
+    Some(std::env::join_paths(directories).unwrap_or(search_path))
 }
 
 /// 本地与私有网段必须直连：Nocterm 是本地优先产品，Provider 的模型网关经常

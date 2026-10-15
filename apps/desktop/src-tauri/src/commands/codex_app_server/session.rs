@@ -102,9 +102,11 @@ impl CodexAppServer {
         } else {
             process.env_remove("NOCTERM_MCP_TOKEN");
         }
-        // GUI 启动时进程只继承 launchd 最小 PATH，codex 可能需要调用 node 等
-        // 用户级工具；注入探测同源的合成 PATH，它是进程 PATH 的固定超集。
-        if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
+        // Codex 所在目录优先，保证 npm shebang 与安装它的 Node 版本配套；其后
+        // 保留探测同源的固定 PATH 超集，兼容 GUI 进程的最小环境。
+        if let Some(path) =
+            crate::commands::ai_provider::provider_environment_path(&provider_executable)
+        {
             process.env("PATH", path);
         }
         // 模型网关常在 localhost 或内网，继承的代理变量会劫持这些请求；

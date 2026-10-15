@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use super::{
     ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
     ProviderToolTransport, combined_search_path, find_provider_executable_in, merge_no_proxy,
-    provider_adapter, supplementary_search_directories,
+    provider_adapter, provider_environment_path_from, supplementary_search_directories,
 };
 
 fn identity() -> ProviderSessionIdentity {
@@ -316,6 +316,41 @@ fn discovery_finds_clis_installed_outside_the_gui_path() {
         find_provider_executable_in("codex", Some(search_path)),
         Some(codex)
     );
+}
+
+/// GUI 发现到某个 NVM 版本里的 npm CLI 后，运行环境必须优先使用同目录 Node。
+/// 否则按版本字符串排序的旧 Node 会先解析 shebang，导致现代 ESM 语法启动失败。
+#[test]
+fn provider_environment_prefers_the_selected_nvm_version() {
+    let home = FakeHome::create("provider-runtime");
+    let old_node = home.touch(".nvm/versions/node/v12.22.12/bin/node");
+    let provider = home.touch(".nvm/versions/node/v22.17.1/bin/codex");
+    let provider_node = home.touch(".nvm/versions/node/v22.17.1/bin/node");
+
+    let environment_path = provider_environment_path_from(&provider, None, Some(home.root.clone()))
+        .expect("provider environment path");
+    let directories: Vec<_> = std::env::split_paths(&environment_path).collect();
+    let provider_directory = provider.parent().expect("provider directory");
+
+    assert_eq!(
+        directories.first().map(PathBuf::as_path),
+        Some(provider_directory)
+    );
+    assert_eq!(
+        directories
+            .iter()
+            .filter(|directory| directory.as_path() == provider_directory)
+            .count(),
+        1
+    );
+    assert_eq!(
+        directories
+            .iter()
+            .map(|directory| directory.join("node"))
+            .find(|candidate| candidate.is_file()),
+        Some(provider_node)
+    );
+    assert!(old_node.is_file());
 }
 
 /// npm 在 Windows 上为同一个 CLI 同时生成无扩展名 sh 脚本与 `.cmd` 包装器；
