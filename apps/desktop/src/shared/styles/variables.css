@@ -63,6 +63,7 @@
 
   /* ---- Activity Rail ---- */
   --rail-bg: var(--ds-rail-bg);
+  --titlebar-bg: var(--ds-titlebar-bg);
   --rail-hover: var(--ds-rail-hover);
   --rail-active: var(--ds-rail-hover);
   --rail-text: var(--ds-rail-text);
@@ -523,6 +524,7 @@
   --bg-input: var(--ds-bg-1);
   --overlay: var(--ds-overlay);
   --rail-bg: var(--ds-rail-bg);
+  --titlebar-bg: var(--ds-titlebar-bg);
   --rail-hover: var(--ds-rail-hover);
   --rail-active: var(--ds-rail-hover);
   --rail-text: var(--ds-rail-text);

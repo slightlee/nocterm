@@ -68,6 +68,7 @@
 
   /* ---- Desktop Rail ---- */
   --ds-rail-bg: #ebebeb;
+  --ds-titlebar-bg: #ebebeb;
   --ds-rail-hover: #e2e2e2;
   --ds-rail-text: #5f6368;
   --ds-sidebar-soft-bg: #f2f2f2;
@@ -887,6 +888,7 @@
    */
   --ds-gray-0: #0d1117;
   --ds-gray-50: #161b22;
+  --ds-titlebar-bg: #1c2128;
   --ds-gray-100: #1c2128;
   --ds-gray-200: #30363d;
   --ds-gray-300: #484f58;
