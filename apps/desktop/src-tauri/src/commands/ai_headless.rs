@@ -68,10 +68,11 @@ pub(super) fn start_headless_session(
             .iter()
             .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
     );
-    // GUI 进程从 launchd 继承最小 PATH，Provider 脚本（如 claude 的 env node
-    // shebang）会因此无法解析解释器。注入探测同源的合成 PATH：它是进程 PATH
-    // 的超集，目录列表固定在代码中，不引入外部配置来源。
-    if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
+    // Provider 所在目录优先，保证 npm shebang 与安装它的 Node 版本配套；其后
+    // 保留探测同源的固定 PATH 超集，兼容 GUI 进程的最小环境。
+    if let Some(path) =
+        crate::commands::ai_provider::provider_environment_path(&provider_executable)
+    {
         process.env("PATH", path);
     }
     // 模型网关可能在 localhost 或内网；继承的代理变量会劫持这些请求，

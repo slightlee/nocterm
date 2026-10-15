@@ -105,9 +105,11 @@ impl GrokAcpServer {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // env_clear 后白名单里的 PATH 在 GUI 启动下仍是 launchd 最小值；用探测
-        // 同源的合成 PATH 覆盖为固定超集，保证 grok 运行期能解析 node 等工具。
-        if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
+        // env_clear 后仍让 Grok 所在目录优先，保证 npm shebang 与安装它的 Node
+        // 版本配套；其后保留探测同源的固定 PATH 超集。
+        if let Some(path) =
+            crate::commands::ai_provider::provider_environment_path(&provider_executable)
+        {
             process.env("PATH", path);
         }
         // 白名单透传了用户的代理变量；模型网关可能在 localhost 或内网，
