@@ -10,6 +10,7 @@
 
 ### Bug Fixes
 
+* hide provider child process console windows on windows ([#54](https://github.com/slightlee/nocterm/issues/54)) ([3b4129a](https://github.com/slightlee/nocterm/commit/3b4129a22bd660628a7e527418944562a5f4896e))
 * make ai providers work reliably on windows ([#48](https://github.com/slightlee/nocterm/issues/48)) ([d71b5e9](https://github.com/slightlee/nocterm/commit/d71b5e96d88182de88682de181c49ad2666ca5b3))
 * prepend provider install directory to child process PATH ([#52](https://github.com/slightlee/nocterm/issues/52)) ([bb05ddd](https://github.com/slightlee/nocterm/commit/bb05dddaf7d831043f1c020ff54d25367535f543))
 
