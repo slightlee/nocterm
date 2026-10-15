@@ -4,13 +4,30 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    process::{Child, ExitStatus},
+    process::{Child, Command, ExitStatus},
     sync::{Condvar, Mutex},
     thread,
     time::{Duration, Instant},
 };
 
 use crate::commands::ai_provider::cleanup_paths;
+
+/// 在 Windows 上为 CLI 子进程设置 CREATE_NO_WINDOW：GUI 子系统的宿主进程
+/// 拉起控制台程序（codex/claude/grok CLI）时，Windows 默认会为子进程新建
+/// 终端窗口；常驻 AI Runtime 在应用启动时即拉起 Provider，表现为打开应用
+/// 即弹出终端。非 Windows 平台无此概念，空实现。
+pub(crate) fn hide_console_window(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+    }
+}
 
 #[derive(Default)]
 pub struct AiProcessManager {

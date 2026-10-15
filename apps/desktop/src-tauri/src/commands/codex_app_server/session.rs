@@ -85,6 +85,7 @@ impl CodexAppServer {
             gateway,
         } = launch;
         let mut process = Command::new(&provider_executable);
+        crate::commands::ai_process::hide_console_window(&mut process);
         process
             .args(["app-server", "--stdio"])
             .stdin(Stdio::piped())

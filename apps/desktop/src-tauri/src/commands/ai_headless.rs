@@ -53,6 +53,7 @@ pub(super) fn start_headless_session(
     let stdin_payload = prepared.take_stdin_payload();
     let readiness_requirement = prepared.take_readiness_requirement();
     let mut process = Command::new(&provider_executable);
+    crate::commands::ai_process::hide_console_window(&mut process);
     process
         .args(&prepared.args)
         .stdin(if stdin_payload.is_some() {
