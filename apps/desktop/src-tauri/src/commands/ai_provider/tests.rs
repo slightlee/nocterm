@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use super::{
     ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
-    ProviderToolTransport, combined_search_path, find_provider_executable_in, provider_adapter,
-    supplementary_search_directories,
+    ProviderToolTransport, combined_search_path, find_provider_executable_in, merge_no_proxy,
+    provider_adapter, supplementary_search_directories,
 };
 
 fn identity() -> ProviderSessionIdentity {
@@ -66,7 +66,7 @@ fn executable_discovery_uses_the_supplied_search_path_without_a_probe_process() 
     let search_path = std::env::join_paths([Path::new(directory)]).expect("search path");
 
     assert_eq!(
-        find_provider_executable_in(command, Some(search_path), None),
+        find_provider_executable_in(command, Some(search_path)),
         Some(current)
     );
 }
@@ -115,11 +115,12 @@ fn adapters_keep_machine_output_and_disable_owned_shells_for_bridge_tasks() {
             .map(|requirement| requirement.tool_prefix),
         Some("mcp__nocterm__")
     );
+    // 产品决策：回答不再强制网关调用；未绑定 MCP 能力加载失败仍会被拦截。
     assert!(
         claude
             .readiness_requirement
             .as_ref()
-            .is_some_and(|requirement| requirement.require_gateway_call)
+            .is_some_and(|requirement| !requirement.require_gateway_call)
     );
     let claude_runtime = claude
         .current_directory
@@ -179,6 +180,45 @@ fn adapters_keep_machine_output_and_disable_owned_shells_for_bridge_tasks() {
         .prepare_launch(launch("inspect", Some(bridge()), &identity))
         .unwrap();
     assert!(matches!(grok, ProviderLaunchPlan::Persistent));
+}
+
+/// 私有网段绕过必须合并且幂等：保留用户已有项与顺序，追加缺失项，大小写不敏感去重。
+#[test]
+fn no_proxy_merge_keeps_user_entries_and_appends_local_bypass() {
+    let merged = merge_no_proxy(Some("myproxy.example.com, 192.168.0.0/16, LOCALHOST"));
+    let entries: Vec<&str> = merged.split(',').collect();
+    // 用户已有项原样保留在前面。
+    assert_eq!(
+        entries[..3],
+        ["myproxy.example.com", "192.168.0.0/16", "LOCALHOST"]
+    );
+    // 全部本地绕过项都在结果中，且已有项不重复。
+    for required in [
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+    ] {
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.eq_ignore_ascii_case(required)),
+            "missing bypass entry {required}"
+        );
+    }
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| e.eq_ignore_ascii_case("localhost"))
+            .count(),
+        1
+    );
+    // 没有已有值时得到完整的固定绕过列表。
+    assert_eq!(
+        merge_no_proxy(None),
+        "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    );
 }
 
 #[test]
@@ -269,12 +309,56 @@ fn discovery_finds_clis_installed_outside_the_gui_path() {
     // GUI 进程可能没有 PATH；补充目录必须独立完成发现。
     let search_path = combined_search_path(None, Some(home.root.clone())).expect("search path");
     assert_eq!(
-        find_provider_executable_in("claude", Some(search_path.clone()), None),
+        find_provider_executable_in("claude", Some(search_path.clone())),
         Some(claude)
     );
     assert_eq!(
-        find_provider_executable_in("codex", Some(search_path), None),
+        find_provider_executable_in("codex", Some(search_path)),
         Some(codex)
+    );
+}
+
+/// npm 在 Windows 上为同一个 CLI 同时生成无扩展名 sh 脚本与 `.cmd` 包装器；
+/// sh 脚本不是 PE 可执行文件，直接 CreateProcess 会报 os error 193。
+/// 扩展名候选必须优先于无扩展名兜底，选到标准库可启动的 `.cmd`。
+#[test]
+fn command_wrappers_win_over_extensionless_shell_scripts() {
+    let home = FakeHome::create("windows-shim");
+    let shell_script = home.touch("bin/codex");
+    let cmd_wrapper = home.touch("bin/codex.cmd");
+
+    let search_path = std::env::join_paths([home.root.join("bin")]).expect("search path");
+    assert_eq!(
+        find_provider_executable_in("codex", Some(search_path)),
+        Some(cmd_wrapper.clone())
+    );
+    // 只有 sh 脚本时（典型 macOS/Linux 安装）仍回落到无扩展名文件。
+    std::fs::remove_file(&cmd_wrapper).expect("remove cmd wrapper");
+    let search_path = std::env::join_paths([home.root.join("bin")]).expect("search path");
+    assert_eq!(
+        find_provider_executable_in("codex", Some(search_path)),
+        Some(shell_script)
+    );
+}
+
+/// 原生 PE（`.exe`）与 `.cmd` 同时存在时必须选 `.exe`，避免多经一层
+/// `cmd.exe /c` 包装带来的参数转义与生命周期差异。
+#[test]
+fn native_executables_win_over_batch_wrappers() {
+    let home = FakeHome::create("native-first");
+    let cmd_wrapper = home.touch("bin/codex.cmd");
+    let native = home.touch("bin/codex.exe");
+
+    let search_path = std::env::join_paths([home.root.join("bin")]).expect("search path");
+    assert_eq!(
+        find_provider_executable_in("codex", Some(search_path)),
+        Some(native.clone())
+    );
+    std::fs::remove_file(&native).expect("remove native executable");
+    let search_path = std::env::join_paths([home.root.join("bin")]).expect("search path");
+    assert_eq!(
+        find_provider_executable_in("codex", Some(search_path)),
+        Some(cmd_wrapper)
     );
 }
 

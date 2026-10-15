@@ -107,6 +107,9 @@ impl CodexAppServer {
         if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
             process.env("PATH", path);
         }
+        // 模型网关常在 localhost 或内网，继承的代理变量会劫持这些请求；
+        // 注入合并 NO_PROXY 保证私有网段直连，公网代理行为不变。
+        crate::commands::ai_provider::apply_local_network_bypass(&mut process);
         let mut child = process
             .spawn()
             .map_err(|error| format!("启动 codex app-server 失败：{error}"))?;

@@ -110,6 +110,9 @@ impl GrokAcpServer {
         if let Some(path) = crate::commands::ai_provider::provider_environment_path() {
             process.env("PATH", path);
         }
+        // 白名单透传了用户的代理变量；模型网关可能在 localhost 或内网，
+        // 合并注入 NO_PROXY 保证私有网段直连，公网代理行为不变。
+        crate::commands::ai_provider::apply_local_network_bypass(&mut process);
         let mut child = process
             .spawn()
             .map_err(|error| format!("启动 Grok ACP 失败：{error}"))?;
