@@ -52,35 +52,7 @@ export function AppShell() {
       {windowsDesktop ? (
         <header className={styles.titleBar}>
           <div className={styles.titleBarBrand}>
-            <svg aria-hidden="true" className={styles.titleBarLogo} viewBox="0 0 24 24">
-              <rect
-                fill="none"
-                height="18"
-                rx="4"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                width="18"
-                x="3"
-                y="3"
-              />
-              <polyline
-                fill="none"
-                points="7.5 9 11 12 7.5 15"
-                stroke="currentColor"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="1.8"
-              />
-              <line
-                stroke="currentColor"
-                strokeLinecap="round"
-                strokeWidth="1.8"
-                x1="12.5"
-                x2="16.5"
-                y1="15.5"
-                y2="15.5"
-              />
-            </svg>
+            <img alt="" className={styles.titleBarLogo} src="/favicon.png" />
             <span className={styles.titleBarName}>Nocterm</span>
           </div>
           <WindowsWindowControls />
