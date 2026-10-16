@@ -11,16 +11,18 @@
 
 /* ---- Header: Search Bar ---- */
 .header {
-  padding: 14px 12px 10px;
   display: flex;
+  height: var(--layout-tab);
+  flex: 0 0 var(--layout-tab);
   align-items: center;
   gap: 6px;
+  padding: 0 12px;
 }
 
 /* Search wrapper */
 .searchWrap {
   flex: 1;
-  height: 40px;
+  height: 34px;
   border: 1px solid transparent;
   border-radius: var(--radius-full);
   background: var(--sidebar-control-bg);
@@ -64,8 +66,8 @@
 
 /* + New button */
 .addBtn {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
   border: 0;
   border-radius: 10px;
