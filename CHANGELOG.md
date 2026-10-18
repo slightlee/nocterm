@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0-beta.5](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.4...v0.2.0-beta.5) (2026-10-18)
+
+
+### Bug Fixes
+
+* align connection search controls with tab bar ([#58](https://github.com/slightlee/nocterm/issues/58)) ([b75030a](https://github.com/slightlee/nocterm/commit/b75030a745f118a486c31f76a7ce03017565a2aa))
+
 ## [0.2.0-beta.4](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.3...v0.2.0-beta.4) (2026-10-15)
 
 
