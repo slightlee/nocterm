@@ -46,6 +46,53 @@
   letter-spacing: 0.2px;
 }
 
+/* 侧栏折叠按钮：固定在品牌名右侧，展开/折叠两态位置恒定；
+   按钮位于 root 捕获拖拽层内，button 选择器已由 useWindowDrag 排除。 */
+.titleBarToggle {
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.titleBarToggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.titleBarToggle:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.titleBarToggleIcon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background: currentcolor;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+.titleBarToggleExpanded .titleBarToggleIcon {
+  mask-image: url('/assets/toggle-right.svg');
+}
+
+.titleBarToggleCollapsed .titleBarToggleIcon {
+  mask-image: url('/assets/toggle-left.svg');
+}
+
 .app {
   flex: 1;
   min-height: 0;

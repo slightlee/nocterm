@@ -256,15 +256,21 @@ export function WorkspaceSessionTabs({
           }`}
           inert={!sidebarCollapsed}
         >
-          <button
-            aria-label="显示连接面板"
-            className={styles.panelToggle}
-            onClick={onToggleSidebar}
-            title="显示连接面板"
-            type="button"
-          >
-            <span aria-hidden="true" className={`${styles.toggleIcon} ${styles.toggleIconLeft}`} />
-          </button>
+          {/* Windows 的展开入口固定在标题栏品牌右侧，此处仅 macOS 需要。 */}
+          {!compactTop ? (
+            <button
+              aria-label="显示连接面板"
+              className={styles.panelToggle}
+              onClick={onToggleSidebar}
+              title="显示连接面板"
+              type="button"
+            >
+              <span
+                aria-hidden="true"
+                className={`${styles.toggleIcon} ${styles.toggleIconLeft}`}
+              />
+            </button>
+          ) : null}
           <button
             aria-label="新建本地终端"
             className={styles.panelToggle}

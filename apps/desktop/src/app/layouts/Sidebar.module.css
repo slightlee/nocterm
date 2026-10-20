@@ -20,6 +20,11 @@
   background: var(--rail-bg);
 }
 
+/* Windows 无侧栏顶部按钮，首行不再预留，搜索框直接从侧栏顶部开始。 */
+.navigationInsetCompact {
+  padding-top: 0;
+}
+
 .content {
   flex: 1;
   display: flex;

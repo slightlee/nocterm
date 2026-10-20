@@ -49,12 +49,27 @@ export function AppShell() {
     >
       {/* Windows 无边框窗口：独立标题栏承载拖拽与窗口按钮，不遮挡任何内容区；
           macOS 保持 Overlay + 系统红绿灯，不渲染该栏。拖拽/双击处理挂在 root
-          捕获层，两种窗口形态共享同一套顶部交互。 */}
+          捕获层，两种窗口形态共享同一套顶部交互。侧栏折叠按钮固定在品牌名
+          右侧：标题栏不随侧栏折叠消失，展开/折叠两态按钮位置恒定。 */}
       {windowsDesktop ? (
         <header className={styles.titleBar}>
           <div className={styles.titleBarBrand}>
             <img alt="" className={styles.titleBarLogo} src="/favicon.png" />
             <span className={styles.titleBarName}>Nocterm</span>
+            {sidebarRoute ? (
+              <button
+                aria-expanded={!sidebarCollapsed}
+                aria-label={sidebarCollapsed ? '显示连接面板' : '隐藏连接面板'}
+                className={`${styles.titleBarToggle} ${
+                  sidebarCollapsed ? styles.titleBarToggleCollapsed : styles.titleBarToggleExpanded
+                }`}
+                onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+                title={sidebarCollapsed ? '显示连接面板' : '隐藏连接面板'}
+                type="button"
+              >
+                <span aria-hidden="true" className={styles.titleBarToggleIcon} />
+              </button>
+            ) : null}
           </div>
           <WindowsWindowControls />
         </header>
@@ -71,9 +86,10 @@ export function AppShell() {
             <ActivityBar
               compactTop={windowsDesktop}
               embedded
-              onToggleSidebar={() => setSidebarCollapsed(true)}
+              /* Windows 的折叠入口已上移到标题栏；macOS 保留侧栏顶部按钮。 */
+              onToggleSidebar={windowsDesktop ? undefined : () => setSidebarCollapsed(true)}
             />
-            <Sidebar navigationInset>
+            <Sidebar compactTop={windowsDesktop} navigationInset>
               <ConnectionList mode={location.pathname.startsWith('/sftp') ? 'sftp' : 'terminal'} />
             </Sidebar>
           </div>

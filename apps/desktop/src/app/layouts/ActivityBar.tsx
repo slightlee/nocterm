@@ -61,32 +61,39 @@ export function ActivityBar({
       aria-label="主导航"
       onMouseDown={handleWindowDrag}
     >
-      <div className={styles.navItems}>
-        {embedded ? (
-          <button
-            aria-label="隐藏连接面板"
-            className={`${styles.navItem} ${styles.sidebarToggle}`}
-            onClick={onToggleSidebar}
-            title="隐藏连接面板"
-            type="button"
-          >
-            <span aria-hidden="true" className={`${styles.toggleIcon} ${styles.toggleIconRight}`} />
-          </button>
-        ) : (
-          navigation.map((item) => (
+      {/* 内嵌形态下 navItems 只承载侧栏折叠按钮；未提供回调（Windows 已把
+              入口上移标题栏）时整行不渲染，避免透明层拦截下方搜索框点击。 */}
+      {!embedded || onToggleSidebar ? (
+        <div className={styles.navItems}>
+          {embedded ? (
             <button
-              className={`${styles.navItem} ${location.pathname.startsWith(item.path) ? styles.active : ''}`}
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              title={item.label === '文件' ? 'SFTP 文件管理' : item.label}
+              aria-label="隐藏连接面板"
+              className={`${styles.navItem} ${styles.sidebarToggle}`}
+              onClick={onToggleSidebar}
+              title="隐藏连接面板"
               type="button"
             >
-              {item.icon}
-              <span className={styles.navLabel}>{item.label}</span>
+              <span
+                aria-hidden="true"
+                className={`${styles.toggleIcon} ${styles.toggleIconRight}`}
+              />
             </button>
-          ))
-        )}
-      </div>
+          ) : (
+            navigation.map((item) => (
+              <button
+                className={`${styles.navItem} ${location.pathname.startsWith(item.path) ? styles.active : ''}`}
+                key={item.path}
+                onClick={() => navigate(item.path)}
+                title={item.label === '文件' ? 'SFTP 文件管理' : item.label}
+                type="button"
+              >
+                {item.icon}
+                <span className={styles.navLabel}>{item.label}</span>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
       <div className={styles.spacer} />
       <div className={styles.bottomSection}>
         <button
