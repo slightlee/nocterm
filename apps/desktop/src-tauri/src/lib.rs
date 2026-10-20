@@ -1,5 +1,6 @@
 mod commands;
 mod dto;
+mod platform;
 mod state;
 
 use std::sync::Arc;
@@ -53,6 +54,11 @@ pub fn run() {
                 commands::ai_bridge::start_gateway(app.handle().clone(), &state);
             }
             app.manage(SftpTransferState::default());
+            // 任务栏图标在高缩放下被系统拉伸发糊：按窗口 DPI 显式设置大/小图标。
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                platform::windows_icon::attach_dpi_aware_icon(&window);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
