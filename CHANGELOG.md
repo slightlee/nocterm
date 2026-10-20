@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0-beta.6](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.5...v0.2.0-beta.6) (2026-10-20)
+
+
+### Features
+
+* refine session workspace UI ([6df277a](https://github.com/slightlee/nocterm/commit/6df277aedc36a80d675ad05a8fd8e2703b25c472)), closes [#62](https://github.com/slightlee/nocterm/issues/62)
+
+
+### Bug Fixes
+
+* set DPI-aware window icons to stop blurry taskbar icon ([#64](https://github.com/slightlee/nocterm/issues/64)) ([ef460f8](https://github.com/slightlee/nocterm/commit/ef460f8dac0a26d2f1fc2717554870d8fdd3f483))
+
 ## [0.2.0-beta.5](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.4...v0.2.0-beta.5) (2026-10-18)
 
 
