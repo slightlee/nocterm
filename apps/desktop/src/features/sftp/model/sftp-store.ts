@@ -3,7 +3,7 @@ import type { ConnectionProfile } from '../../connections';
 
 type SftpSessionStatus = 'connecting' | 'connected' | 'error';
 
-interface SftpSession {
+export interface SftpSession {
   connectionId: string;
   connectionName: string;
   host: string;
@@ -34,6 +34,7 @@ interface SftpState {
   ) => void;
   setSelectionSummary: (summary: SftpState['selectionSummary']) => void;
   setActive: (connectionId: string) => void;
+  syncConnectionName: (connectionId: string, name: string) => void;
   closeSession: (connectionId: string) => void;
   trackTransfer: (taskId: string, connectionId: string) => void;
   finishTransfer: (taskId: string) => void;
@@ -120,6 +121,13 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   setSelectionSummary: (selectionSummary) => set({ selectionSummary }),
 
   setActive: (connectionId) => set({ activeId: connectionId }),
+
+  syncConnectionName: (connectionId, name) =>
+    set((state) => ({
+      sessions: state.sessions.map((session) =>
+        session.connectionId === connectionId ? { ...session, connectionName: name } : session
+      ),
+    })),
 
   closeSession: (connectionId) => {
     const { sessions, activeId } = get();

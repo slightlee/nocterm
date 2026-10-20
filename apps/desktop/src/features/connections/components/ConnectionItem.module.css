@@ -1,35 +1,53 @@
 /* ========================================
  * ConnectionItem — 单个连接项
- * New design: 44px icon, left border selection, right online dot
+ * 紧凑资源行：稳定的两行身份信息和低干扰状态点。
  * ======================================== */
 
 .item {
-  display: flex;
+  --connection-row-bg: transparent;
+
+  display: block;
   width: 100%;
   min-width: 0;
-  align-items: center;
-  gap: 10px;
-  min-height: 42px;
-  padding: 6px 10px;
-  border-radius: var(--radius-full);
-  cursor: pointer;
+  height: 50px;
+  min-height: 50px;
+  border-radius: 5px;
   transition: background var(--dur-fast) var(--ease-out);
   color: var(--text-primary);
   position: relative;
   user-select: none;
+  background: var(--connection-row-bg);
+}
+
+.itemButton {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: inherit;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
   text-align: left;
 }
 
 .statusSlot {
+  position: absolute;
+  top: 31px;
+  left: 26px;
   display: grid;
-  width: 10px;
-  height: 10px;
-  flex: 0 0 10px;
+  width: 6px;
+  height: 6px;
   place-items: center;
+  pointer-events: none;
 }
 
 .item:hover {
-  background: var(--sidebar-item-hover);
+  --connection-row-bg: var(--sidebar-item-hover);
 }
 
 .item.dragging {
@@ -56,26 +74,31 @@
 }
 
 .item.selected {
-  background: var(--sidebar-item-selected);
+  --connection-row-bg: var(--sidebar-item-selected);
+}
+
+.itemButton:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
 }
 
 /* ---- Icon Container ---- */
 .iconContainer {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
+  width: 22px;
+  height: 22px;
+  border-radius: 0;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   position: relative;
-  color: var(--text-primary);
+  color: var(--text-tertiary);
 }
 
 .iconContainer svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   stroke: currentcolor;
   stroke-width: 1.9;
   fill: none;
@@ -85,33 +108,36 @@
 
 /* Color variants */
 .iconContainer.red {
-  background: var(--accent-red-soft);
-  color: var(--accent-red);
+  background: transparent;
+  color: var(--text-tertiary);
 }
 
 .iconContainer.orange {
-  background: var(--accent-orange-soft);
-  color: var(--accent-orange);
+  background: transparent;
+  color: var(--text-tertiary);
 }
 
 .iconContainer.blue {
-  background: var(--accent-blue-soft);
-  color: var(--accent-blue);
+  background: transparent;
+  color: var(--text-tertiary);
 }
 
 .iconContainer.green {
-  background: var(--accent-green-soft);
-  color: var(--accent-green);
+  background: transparent;
+  color: var(--text-tertiary);
 }
 
 .iconContainer.purple {
-  background: var(--icon-bg-purple);
-  color: var(--accent-purple);
+  background: transparent;
+  color: var(--text-tertiary);
 }
 
 /* Loading state */
 .item.loading {
   opacity: 0.7;
+}
+
+.item.loading .itemButton {
   pointer-events: none;
 }
 
@@ -122,11 +148,12 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
+  gap: 1px;
   text-align: left;
 }
 
 .itemName {
+  padding-right: 18px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
@@ -134,6 +161,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.3;
+}
+
+.hasSessions .itemName {
+  padding-right: 52px;
 }
 
 .itemHost {
@@ -151,12 +182,13 @@
   align-items: baseline;
   min-width: 0;
   gap: 2px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   text-align: left;
+  padding-right: 54px;
 }
 
 .endpointUser {
@@ -177,7 +209,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .endpointPort {
@@ -191,33 +223,42 @@
 }
 
 .readinessDot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent-orange-soft);
-  border: 1.5px solid var(--accent-orange);
+  border: 1px solid var(--accent-orange);
 }
 
 .offlineDot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   background: var(--text-tertiary);
   border-radius: 50%;
   opacity: 0.72;
 }
 
 .actions {
+  position: absolute;
+  right: 4px;
+  bottom: 1px;
+  z-index: 1;
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
+  padding-left: 2px;
+  background: var(--connection-row-bg);
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--dur-fast);
 }
 
 .actions:focus-within,
 .item:hover .actions,
-.item:focus-visible .actions {
+.item.selected .actions,
+.item:focus-within .actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .actionButton {
@@ -231,6 +272,16 @@
   place-items: center;
 }
 
+.actionButton svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .actionButton:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
@@ -242,17 +293,29 @@
   outline-offset: 1px;
 }
 
+.actionButton.activeAction {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .errorDot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent-red);
 }
 
 /* ---- Online Dot (right side) ---- */
 .onlineDot {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent-green);
 }

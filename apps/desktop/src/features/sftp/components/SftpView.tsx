@@ -1,43 +1,26 @@
-import { useEffect, useMemo, useState, type WheelEvent } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
 import { LocalFilePane, RemoteFilePane } from './SftpFilePanes';
-import { disconnectSftpSession } from '../api/sftp-client';
 import { useSftpStore } from '../model/sftp-store';
 import type { SortState } from '../types/sftp-types';
 import { useSftpDirectoryBrowser } from '../model/useSftpDirectoryBrowser';
 import { useSftpFeedback } from '../model/useSftpFeedback';
-import { getSftpErrorMessage } from '../model/sftp-error';
 import { useSftpFileOperations } from '../model/useSftpFileOperations';
 import { useSftpSelection } from '../model/useSftpSelection';
 import { nextSortState, sortRows, toLocalRows, toRemoteRows } from '../model/sftp-view-model';
 import styles from './SFTPView.module.css';
-import { TabContextMenu } from '../../../shared/components/TabContextMenu';
-import type { AppShellOutletContext } from '../../../shared/types/app-shell-context';
 
 function SFTPView() {
   const sessions = useSftpStore((s) => s.sessions);
   const activeId = useSftpStore((s) => s.activeId);
-  const setActive = useSftpStore((s) => s.setActive);
-  const closeSession = useSftpStore((s) => s.closeSession);
-  const hasRunningTransfers = useSftpStore((s) => s.hasRunningTransfers);
   const setCurrentPath = useSftpStore((s) => s.setCurrentPath);
   const setSessionStatus = useSftpStore((s) => s.setSessionStatus);
   const setSelectionSummary = useSftpStore((s) => s.setSelectionSummary);
-  const { sidebarCollapsed, toggleSidebar } = useOutletContext<AppShellOutletContext>();
   const activeSession = sessions.find((session) => session.connectionId === activeId);
   const activeConnectionId = activeSession?.connectionId;
   const activeConnectionAttempt = activeSession?.connectionAttempt ?? 0;
   const activeRemotePath = activeSession?.currentPath || activeSession?.initialPath || '/';
   const [localSort, setLocalSort] = useState<SortState>({ key: 'name', direction: 'asc' });
   const [remoteSort, setRemoteSort] = useState<SortState>({ key: 'name', direction: 'asc' });
-  const sessionIds = sessions.map((session) => session.connectionId);
-
-  /** 垂直滚轮映射为横向滚动，保持多连接标签在窄窗口下可访问。 */
-  const handleTabWheel = (event: WheelEvent<HTMLDivElement>) => {
-    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-    event.currentTarget.scrollLeft += event.deltaY;
-    event.preventDefault();
-  };
 
   const { toasts, confirmState, showToast, requestConfirm, closeConfirm } = useSftpFeedback();
   const {
@@ -106,105 +89,8 @@ function SFTPView() {
     showToast,
   });
 
-  const handleCloseSessions = async (connectionIds: string[]) => {
-    if (connectionIds.length === 0) return;
-    if (hasRunningTransfers(connectionIds)) {
-      const confirmed = await requestConfirm({
-        title: '关闭 SFTP 标签',
-        message:
-          connectionIds.length === 1
-            ? '该标签仍有文件正在传输，关闭会取消传输并断开连接。是否继续？'
-            : '待关闭标签中仍有文件正在传输，关闭会取消相关传输并断开连接。是否继续？',
-        confirmLabel: '关闭标签',
-        danger: true,
-      });
-      if (!confirmed) return;
-    }
-
-    let failureCount = 0;
-    // 逐个释放后端会话；单个失败不应阻止其余标签正常关闭。
-    for (const connectionId of connectionIds) {
-      try {
-        await disconnectSftpSession(connectionId);
-        closeSession(connectionId);
-      } catch (error) {
-        failureCount += 1;
-        if (connectionIds.length === 1) {
-          showToast(`断开 SFTP 失败：${getSftpErrorMessage(error)}`);
-        }
-      }
-    }
-    if (connectionIds.length > 1 && failureCount > 0) {
-      showToast(`有 ${failureCount} 个 SFTP 标签关闭失败，请重试。`);
-    }
-  };
-
   return (
     <div className={styles.view}>
-      <div className={styles.topBar}>
-        <button
-          className={`${styles.panelToggle} ${!sidebarCollapsed ? styles.on : ''}`}
-          title={sidebarCollapsed ? '显示连接面板' : '隐藏连接面板'}
-          onClick={toggleSidebar}
-        >
-          <span
-            className={`${styles.toggleIcon} ${
-              sidebarCollapsed ? styles.toggleIconLeft : styles.toggleIconRight
-            }`}
-            aria-hidden="true"
-          />
-        </button>
-
-        <div
-          aria-label="SFTP 连接会话"
-          className={styles.sessionTabViewport}
-          onWheel={handleTabWheel}
-          role="tablist"
-        >
-          <div className={styles.sessionTabTrack}>
-            {sessions.map((session) => {
-              const selected = session.connectionId === activeId;
-              const connectionTitle = `${session.connectionName} — ${session.username}@${session.host}:${session.port}`;
-
-              return (
-                <TabContextMenu
-                  ids={sessionIds}
-                  key={session.connectionId}
-                  targetId={session.connectionId}
-                  onClose={(ids) => void handleCloseSessions(ids)}
-                >
-                  <div
-                    className={`${styles.sessionTab} ${selected ? styles.active : ''}`}
-                    data-no-window-drag="true"
-                    title={connectionTitle}
-                  >
-                    <button
-                      aria-selected={selected}
-                      className={styles.sessionTabSelect}
-                      onClick={() => setActive(session.connectionId)}
-                      role="tab"
-                      type="button"
-                    >
-                      <span className={styles.statusDot} data-status={session.status} />
-                      <span className={styles.sessionName}>{session.connectionName}</span>
-                    </button>
-                    <button
-                      aria-label={`关闭 ${session.connectionName}`}
-                      className={styles.sessionCloseButton}
-                      onClick={() => void handleCloseSessions([session.connectionId])}
-                      title="关闭 SFTP"
-                      type="button"
-                    >
-                      ×
-                    </button>
-                  </div>
-                </TabContextMenu>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
       {!activeSession ? (
         <div className={styles.empty}>
           <div className={styles.emptyState}>

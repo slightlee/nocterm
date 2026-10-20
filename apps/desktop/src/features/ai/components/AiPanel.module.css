@@ -17,7 +17,7 @@
 
 .header {
   display: flex;
-  min-height: 54px;
+  min-height: var(--layout-tab);
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
@@ -44,8 +44,8 @@ p {
 .titleGroup h2 {
   white-space: nowrap;
   color: var(--term-text);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   letter-spacing: 0;
 }
 
@@ -82,57 +82,6 @@ p {
   stroke-width: 1.8;
 }
 
-/* 折叠手柄持续可见，hover 只增强对比度，不负责让控件显形。 */
-.collapseButton {
-  position: absolute;
-  top: 50%;
-  left: -9px;
-  z-index: var(--z-sticky);
-  display: inline-flex;
-  width: 18px;
-  height: 56px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  color: var(--term-muted);
-  background: var(--bg-hover);
-  border: 1px solid var(--term-border);
-  border-radius: 9px;
-  cursor: pointer;
-  transform: translateY(-50%);
-  transition:
-    color var(--dur-fast),
-    background var(--dur-fast),
-    border-color var(--dur-fast),
-    box-shadow var(--dur-fast);
-  box-shadow: var(--shadow-sm);
-}
-
-.collapseButton:hover {
-  color: var(--term-text);
-  background: var(--bg-hover);
-  border-color: color-mix(in srgb, var(--term-text) 22%, var(--term-border));
-  box-shadow: var(--shadow-md);
-}
-
-.collapseButton:focus-visible {
-  color: var(--term-text);
-  background: var(--bg-hover);
-  border-color: var(--accent-blue);
-  outline: 2px solid var(--accent-blue);
-  outline-offset: 1px;
-}
-
-.collapseButton svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentcolor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2.1;
-}
-
 .contextStatusDot {
   width: 8px;
   height: 8px;
@@ -162,13 +111,13 @@ p {
   min-height: 34px;
   align-items: center;
   gap: 7px;
-  margin: 4px 10px 0;
+  margin: 8px 12px 0;
   padding: 0 10px;
   color: var(--term-muted);
   font-size: 12px;
   background: var(--term-panel);
   border: 0;
-  border-radius: 9px;
+  border-radius: 6px;
 }
 
 .conversation {

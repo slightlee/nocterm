@@ -14,10 +14,23 @@ const profile = (id: number): ConnectionProfile => ({
   updatedAt: 0,
 });
 
+function openRemote(connection: ConnectionProfile) {
+  const store = useTerminalStore.getState();
+  store.openConnection(connection);
+  const session = useTerminalStore
+    .getState()
+    .sessions.slice()
+    .reverse()
+    .find((item) => item.kind === 'remote' && item.connectionId === connection.id);
+  if (!session || session.kind !== 'remote') throw new Error('远程终端未创建');
+  return session;
+}
+
 afterEach(() => {
   useTerminalStore.setState({
     sessions: [],
     activeId: null,
+    recentRemoteSessionIds: {},
     reconnectNonces: {},
     statuses: {},
     errors: {},
@@ -27,37 +40,109 @@ afterEach(() => {
 });
 
 describe('terminal session store', () => {
-  it('keeps status isolated when switching sessions', () => {
-    const first = profile(1);
-    const second = profile(2);
-    useTerminalStore.getState().openConnection(first);
+  it('creates independent remote sessions each time a server terminal is opened', () => {
+    const connection = profile(1);
+    const first = openRemote(connection);
+    const second = openRemote(connection);
     useTerminalStore.getState().setSessionStatus(first.id, 'connected');
-    useTerminalStore.getState().openConnection(second);
+    useTerminalStore.getState().setSessionStatus(second.id, 'error', '连接失败');
+
+    expect(first.id).not.toBe(second.id);
+    expect([first.terminalNumber, second.terminalNumber]).toEqual([1, 2]);
+    expect(useTerminalStore.getState().sessions).toHaveLength(2);
+    expect(useTerminalStore.getState().statuses).toEqual({
+      [first.id]: 'connected',
+      [second.id]: 'error',
+    });
+
+    useTerminalStore.getState().closeConnection(first.id);
+    expect(useTerminalStore.getState().sessions).toEqual([second]);
+    expect(useTerminalStore.getState().statuses).toEqual({ [second.id]: 'error' });
+  });
+
+  it('returns to the most recently activated terminal for the selected server', () => {
+    const connection = profile(1);
+    const first = openRemote(connection);
+    const second = openRemote(connection);
+    useTerminalStore.getState().activateConnection(first.id);
+    useTerminalStore.getState().activateRecentConnection(connection);
+
+    expect(useTerminalStore.getState().activeId).toBe(first.id);
+    expect(useTerminalStore.getState().sessions).toHaveLength(2);
+
+    useTerminalStore.getState().activateConnection(second.id);
+    useTerminalStore.getState().activateRecentConnection(connection);
+
+    expect(useTerminalStore.getState().activeId).toBe(second.id);
+    expect(useTerminalStore.getState().sessions).toHaveLength(2);
+  });
+
+  it('does not reactivate a closed terminal remembered for a server', () => {
+    const connection = profile(1);
+    const first = openRemote(connection);
+    const second = openRemote(connection);
+    useTerminalStore.getState().activateConnection(first.id);
+    useTerminalStore.getState().closeConnection(first.id);
+    useTerminalStore.getState().activateRecentConnection(connection);
+
+    expect(useTerminalStore.getState().activeId).toBe(second.id);
+    expect(useTerminalStore.getState().sessions).toEqual([second]);
+  });
+
+  it('creates the first terminal when activating a server without an open terminal', () => {
+    const connection = profile(1);
+    useTerminalStore.getState().activateRecentConnection(connection);
+    const first = useTerminalStore.getState().sessions[0];
+    useTerminalStore.getState().activateRecentConnection(connection);
+
+    expect(first?.kind).toBe('remote');
+    expect(useTerminalStore.getState().sessions).toHaveLength(1);
+    expect(useTerminalStore.getState().activeId).toBe(first?.id);
+  });
+
+  it('falls back to the next most recently used terminal after one closes', () => {
+    const connection = profile(1);
+    const first = openRemote(connection);
+    const second = openRemote(connection);
+    useTerminalStore.getState().activateConnection(first.id);
+    const otherServer = openRemote(profile(2));
+    useTerminalStore.getState().closeConnection(first.id);
+    useTerminalStore.getState().activateRecentConnection(connection);
+
+    expect(useTerminalStore.getState().activeId).toBe(second.id);
+    expect(useTerminalStore.getState().sessions).toEqual([second, otherServer]);
+  });
+
+  it('keeps status isolated when switching between different servers', () => {
+    const first = openRemote(profile(1));
+    const second = openRemote(profile(2));
+    useTerminalStore.getState().setSessionStatus(first.id, 'connected');
     useTerminalStore.getState().setSessionStatus(second.id, 'error', '连接失败');
 
     useTerminalStore.getState().activateConnection(first.id);
 
     expect(useTerminalStore.getState().status).toBe('connected');
-    expect(useTerminalStore.getState().statuses).toEqual({ 1: 'connected', 2: 'error' });
+    expect(useTerminalStore.getState().statuses).toEqual({
+      [first.id]: 'connected',
+      [second.id]: 'error',
+    });
   });
 
   it('removes closed session state when a tab closes', () => {
-    const first = profile(1);
-    useTerminalStore.getState().openConnection(first);
+    const first = openRemote(profile(1));
     useTerminalStore.getState().setSessionStatus(first.id, 'closed');
     useTerminalStore.getState().closeConnection(first.id);
 
     expect(useTerminalStore.getState().sessions).toEqual([]);
     expect(useTerminalStore.getState().statuses).toEqual({});
+    expect(useTerminalStore.getState().recentRemoteSessionIds).toEqual({});
     expect(useTerminalStore.getState().status).toBe('idle');
   });
 
   it('keeps the active session when a background tab closes', () => {
-    const first = profile(1);
-    const second = profile(2);
-    useTerminalStore.getState().openConnection(first);
+    const first = openRemote(profile(1));
+    const second = openRemote(profile(2));
     useTerminalStore.getState().setSessionStatus(first.id, 'connected');
-    useTerminalStore.getState().openConnection(second);
     useTerminalStore.getState().activateConnection(first.id);
 
     useTerminalStore.getState().closeConnection(second.id);
@@ -66,14 +151,34 @@ describe('terminal session store', () => {
     expect(useTerminalStore.getState().status).toBe('connected');
   });
 
-  it('activates an existing session without resetting its status', () => {
-    const first = profile(1);
-    useTerminalStore.getState().openConnection(first);
-    useTerminalStore.getState().setSessionStatus(first.id, 'connected');
-    useTerminalStore.getState().openConnection(first);
+  it('closes every terminal for one server without affecting other servers', () => {
+    const first = openRemote(profile(1));
+    openRemote(profile(1));
+    const otherServer = openRemote(profile(2));
+    useTerminalStore.getState().closeConnectionSessions(1);
 
-    expect(useTerminalStore.getState().sessions).toHaveLength(1);
-    expect(useTerminalStore.getState().status).toBe('connected');
+    expect(useTerminalStore.getState().sessions).toEqual([otherServer]);
+    expect(useTerminalStore.getState().statuses).toEqual({ [otherServer.id]: 'connecting' });
+    expect(useTerminalStore.getState().recentRemoteSessionIds).toEqual({
+      '2': [otherServer.id],
+    });
+    expect(useTerminalStore.getState().sessions).not.toContain(first);
+  });
+
+  it('syncs a renamed connection across its open terminal labels', () => {
+    openRemote(profile(1));
+    openRemote(profile(1));
+    const otherServer = openRemote(profile(2));
+
+    useTerminalStore.getState().syncConnectionName(1, '生产服务器');
+
+    expect(
+      useTerminalStore
+        .getState()
+        .sessions.filter((session) => session.kind === 'remote' && session.connectionId === 1)
+        .map((session) => session.name)
+    ).toEqual(['生产服务器', '生产服务器']);
+    expect(otherServer.name).toBe('连接 2');
   });
 
   it('creates independent local terminal sessions', () => {
@@ -93,8 +198,7 @@ describe('terminal session store', () => {
   });
 
   it('does not overwrite an early terminal exit with a late open response', () => {
-    const first = profile(1);
-    useTerminalStore.getState().openConnection(first);
+    const first = openRemote(profile(1));
     useTerminalStore.getState().setSessionStatus(first.id, 'error', '连接被拒绝');
 
     useTerminalStore.getState().markSessionConnected(first.id);
@@ -104,21 +208,17 @@ describe('terminal session store', () => {
   });
 
   it('bumps only the reconnected session so other tabs keep their mount key', () => {
-    const first = profile(1);
-    const second = profile(2);
-    useTerminalStore.getState().openConnection(first);
-    useTerminalStore.getState().openConnection(second);
+    const first = openRemote(profile(1));
+    const second = openRemote(profile(2));
 
     useTerminalStore.getState().reconnectConnection(first.id);
-    // 切回另一个标签不得改变任何计数，否则活着的会话会被 React 卸载重建。
     useTerminalStore.getState().activateConnection(second.id);
 
-    expect(useTerminalStore.getState().reconnectNonces).toEqual({ 1: 1 });
+    expect(useTerminalStore.getState().reconnectNonces).toEqual({ [first.id]: 1 });
   });
 
   it('drops the reconnect counter together with the closed session', () => {
-    const first = profile(1);
-    useTerminalStore.getState().openConnection(first);
+    const first = openRemote(profile(1));
     useTerminalStore.getState().reconnectConnection(first.id);
     useTerminalStore.getState().closeConnection(first.id);
 

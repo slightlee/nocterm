@@ -7,15 +7,16 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  color: var(--text-primary);
+  background: var(--rail-bg);
 }
 
-/* ---- Header: Search Bar ---- */
+/* ---- Search ---- */
 .header {
   display: flex;
   height: var(--layout-tab);
   flex: 0 0 var(--layout-tab);
   align-items: center;
-  gap: 6px;
   padding: 0 12px;
 }
 
@@ -24,7 +25,7 @@
   flex: 1;
   height: 34px;
   border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  border-radius: 7px;
   background: var(--sidebar-control-bg);
   display: flex;
   align-items: center;
@@ -64,13 +65,66 @@
   color: var(--text-tertiary);
 }
 
-/* + New button */
-.addBtn {
-  width: 34px;
+.localActions {
+  flex: none;
+  padding: 0 12px 5px;
+}
+
+.localTerminalButton {
+  display: flex;
+  width: 100%;
   height: 34px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 11px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.localTerminalButton:hover {
+  color: var(--text-primary);
+  background: var(--rail-hover);
+}
+
+.localTerminalButton:active {
+  background: var(--bg-active);
+}
+
+.localTerminalButton svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--text-secondary);
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---- Server list heading ---- */
+.serverHeading {
+  display: flex;
+  height: 29px;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.addBtn {
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-tertiary);
   display: flex;
@@ -78,11 +132,12 @@
   justify-content: center;
   cursor: pointer;
   box-shadow: none;
+  margin-left: auto;
 }
 
 .addBtn:hover {
-  background: transparent;
-  color: var(--text-tertiary);
+  background: var(--rail-hover);
+  color: var(--text-primary);
 }
 
 .groupBtn {
@@ -112,8 +167,8 @@
 }
 
 .addBtn svg {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   stroke: currentcolor;
   stroke-width: 1.9;
   fill: none;
@@ -173,7 +228,7 @@
 .scrollContent {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 14px 18px;
+  padding: 0 10px 14px;
   scrollbar-width: thin;
   scrollbar-color: var(--border-primary) transparent;
 }
@@ -268,14 +323,14 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px;
+  padding: 40px 18px;
   color: var(--text-tertiary);
   text-align: center;
 }
 
 .emptyIcon {
-  width: 48px;
-  height: 48px;
+  width: 38px;
+  height: 38px;
   margin-bottom: 12px;
   opacity: 0.4;
   stroke: currentcolor;
@@ -284,8 +339,8 @@
 }
 
 .emptyText {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
@@ -295,114 +350,6 @@
   color: var(--text-tertiary);
   max-width: 240px;
   line-height: 1.5;
-}
-
-/* ---- Footer: Backup & Restore ---- */
-.footer {
-  padding: 10px 14px 12px;
-}
-
-/* Backup button wrapper */
-.backupWrap {
-  position: relative;
-}
-
-.backupBtn {
-  width: 100%;
-  height: 34px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: var(--sidebar-control-bg);
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    background var(--dur-fast),
-    border-color var(--dur-fast),
-    color var(--dur-fast);
-}
-
-.backupBtn:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.backupBtn svg {
-  width: 15px;
-  height: 15px;
-  stroke: currentcolor;
-  stroke-width: 1.9;
-  fill: none;
-}
-
-/* Backup dropdown menu */
-.backupMenu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  right: 0;
-  min-width: 210px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  padding: 5px;
-  z-index: 100;
-  color: var(--text-primary);
-}
-
-.backupMenuHeader {
-  padding: 5px 8px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-}
-
-.backupMenuItem {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  height: 32px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--dur-fast);
-  text-align: left;
-}
-
-.backupMenuItem:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.backupMenuItem:disabled {
-  cursor: not-allowed;
-  color: var(--text-tertiary);
-  opacity: 0.62;
-}
-
-.backupMenuItem:disabled:hover {
-  background: transparent;
-}
-
-.backupMenuItem svg {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-  stroke: currentcolor;
-  stroke-width: 1.85;
-  fill: none;
 }
 
 /* ---- Right-click context menu ---- */

@@ -1,0 +1,110 @@
+/* 固定尺寸让标签增减和面板展开都不会改变入口的几何形态。 */
+.toggle {
+  position: relative;
+  display: inline-flex;
+  width: 96px;
+  min-width: 96px;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 9px;
+  color: var(--term-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast),
+    background var(--dur-fast);
+}
+
+.toggle:hover {
+  color: var(--term-text);
+  background: color-mix(in srgb, var(--term-panel) 98%, var(--term-text));
+}
+
+.toggle[aria-expanded='true'] {
+  color: var(--term-text);
+}
+
+/* 展开后标题已经说明面板身份，这里只保留与相邻操作同规格的收起命令。 */
+.compact {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  gap: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.compact:hover {
+  background: var(--bg-hover);
+}
+
+/* 提示向面板内侧对齐，窄窗口下也不会越过应用右边缘。 */
+.compact::after {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-tooltip);
+  padding: 5px 8px;
+  color: var(--term-text);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  content: attr(data-tooltip);
+  pointer-events: none;
+  background: var(--term-panel);
+  border: 1px solid var(--term-border);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    opacity var(--dur-fast),
+    transform var(--dur-fast);
+  box-shadow: var(--shadow-sm);
+}
+
+.compact:hover::after,
+.compact:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.toggle svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.toggle .assistantIcon {
+  width: 18px;
+  height: 18px;
+  stroke-linecap: round;
+  stroke-width: 1.6;
+}
+
+.panelCollapseIcon {
+  display: block;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  background: currentcolor;
+  mask-image: url('/assets/toggle-right.svg');
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}

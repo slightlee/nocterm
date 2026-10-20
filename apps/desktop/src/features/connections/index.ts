@@ -1,3 +1,4 @@
+export { ConnectionBackupSettingsPage } from './components/ConnectionBackupSettingsPage';
 export { ConnectionList } from './components/ConnectionList';
 export { requestConnectionDialog } from './model/connection-events';
 export { useConnectionPresenceStore } from './model/connection-presence-store';

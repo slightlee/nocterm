@@ -46,12 +46,99 @@
   letter-spacing: 0.2px;
 }
 
+/* 侧栏折叠按钮：固定在品牌名右侧，展开/折叠两态位置恒定；
+   按钮位于 root 捕获拖拽层内，button 选择器已由 useWindowDrag 排除。 */
+.titleBarToggle {
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.titleBarToggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.titleBarToggle:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.titleBarToggleIcon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background: currentcolor;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+.titleBarToggleExpanded .titleBarToggleIcon {
+  mask-image: url('/assets/toggle-right.svg');
+}
+
+.titleBarToggleCollapsed .titleBarToggleIcon {
+  mask-image: url('/assets/toggle-left.svg');
+}
+
 .app {
   flex: 1;
   min-height: 0;
   display: flex;
   background: var(--bg-secondary);
   overflow: hidden;
+}
+
+/* 工作区一级导航与连接列表共享同一侧栏宽度，避免两条纵向栏重复占位。 */
+.navigationPane {
+  position: relative;
+  display: flex;
+  width: var(--layout-sidebar);
+  min-width: var(--layout-sidebar);
+  flex: 0 0 var(--layout-sidebar);
+  overflow: hidden;
+  opacity: 1;
+  visibility: visible;
+  background: var(--rail-bg);
+  transform: translateX(0);
+  transition:
+    width var(--dur-slow) var(--ease-out),
+    min-width var(--dur-slow) var(--ease-out),
+    flex-basis var(--dur-slow) var(--ease-out),
+    opacity var(--dur-normal) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out),
+    visibility 0s linear;
+  will-change: width, min-width, flex-basis, opacity, transform;
+}
+
+/* 保持连接列表挂载，只收起布局轨道；会话与列表滚动状态不会因动画重建。 */
+.navigationPaneCollapsed {
+  width: 0;
+  min-width: 0;
+  flex-basis: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-12px);
+  transition:
+    width var(--dur-slow) var(--ease-out),
+    min-width var(--dur-slow) var(--ease-out),
+    flex-basis var(--dur-slow) var(--ease-out),
+    opacity var(--dur-normal) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out),
+    visibility 0s linear var(--dur-slow);
 }
 
 /* ---- 主工作区 ---- */
@@ -63,60 +150,6 @@
   flex-direction: column;
   background: var(--term);
   overflow: hidden;
-}
-
-/* AI 面板收起后的展开手柄：与面板侧折叠手柄保持同款持续可见的胶囊形态。 */
-.aiReveal {
-  position: absolute;
-  top: 50%;
-
-  /* 保持与展开态同一尺寸，向右移出一半后由工作区边界裁掉右半胶囊。 */
-  right: -9px;
-  z-index: var(--z-sticky);
-  display: inline-flex;
-  width: 18px;
-  height: 56px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  color: var(--term-muted);
-  background: var(--bg-hover);
-  border: 1px solid var(--term-border);
-  border-radius: 9px;
-  cursor: pointer;
-  transform: translateY(-50%);
-  transition:
-    color var(--dur-fast),
-    background var(--dur-fast),
-    border-color var(--dur-fast),
-    box-shadow var(--dur-fast);
-  box-shadow: var(--shadow-sm);
-}
-
-.aiReveal:hover {
-  color: var(--term-text);
-  background: var(--bg-hover);
-  border-color: color-mix(in srgb, var(--term-text) 22%, var(--term-border));
-  box-shadow: var(--shadow-md);
-}
-
-.aiReveal:focus-visible {
-  color: var(--term-text);
-  background: var(--bg-hover);
-  border-color: var(--accent-blue);
-  outline: 2px solid var(--accent-blue);
-  outline-offset: 1px;
-}
-
-.aiReveal svg {
-  width: 12px;
-  height: 12px;
-  transform: translateX(-4.5px);
-  fill: none;
-  stroke: currentcolor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2.1;
 }
 
 .terminalWorkspace {
@@ -142,4 +175,11 @@
   background: var(--bg-elevated);
   color: var(--text-tertiary);
   font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navigationPane,
+  .navigationPaneCollapsed {
+    transition: none;
+  }
 }

@@ -1,26 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import { ConnectionCreateDialog } from './ConnectionCreateDialog';
-import { ConnectionBackupMenu } from './ConnectionBackupMenu';
 import { ConnectionGroup } from './ConnectionGroup';
 import { ConnectionItem } from './ConnectionItem';
 import { ContextMenu } from '../../../shared/components/ContextMenu';
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
-import {
-  bindConnectionPrivateKeyFile,
-  importConnectionBackup,
-  normalizeConnectionError,
-  pickConnectionBackup,
-  pickSshConfig,
-  resolveLocalUsername,
-  resolveSshConfigPrivateKeyPath,
-  saveConnectionBackup,
-} from '../api/connection-client';
-import { createConnectionBackup, parseConnectionBackup } from '../model/connection-backup';
+import { normalizeConnectionError } from '../api/connection-client';
 import { useGroupDragSort } from '../model/use-group-drag-sort';
 import { useConnectionDragSort } from '../model/use-connection-drag-sort';
 import { useConnections } from '../model/useConnections';
-import { parseSshConfigConnections } from '../model/ssh-config-import';
 import {
   connectionRequiresReconnect,
   getNextGroupName,
@@ -30,15 +19,17 @@ import {
   UNGROUPED_CONNECTION_GROUP_ID,
 } from '../model/connection-list-model';
 import type { ConnectionProfile } from '../types/connection-types';
-import { useTerminalStore } from '../../terminal';
+import { useTerminalStore, type TerminalSession, type TerminalSessionId } from '../../terminal';
 import styles from './ConnectionList.module.css';
 import { onConnectionDialogRequested } from '../model/connection-events';
-import { disconnectSftpSession, getSftpErrorMessage, useSftpStore } from '../../sftp';
+import { useSftpStore } from '../../sftp';
 
 const ACTION_FEEDBACK_TIMEOUT_MS = 5_000;
+type RemoteTerminalSession = Extract<TerminalSession, { kind: 'remote' }>;
 
-/** 连接侧栏沿用旧客户端的搜索、创建和列表布局。 */
+/** 连接侧栏集中承载本地终端入口、服务器检索和远程资源管理。 */
 export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sftp' }) {
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newGroupId, setNewGroupId] = useState<string | undefined>();
@@ -46,7 +37,6 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
   const [editing, setEditing] = useState<ConnectionProfile | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [backupBusy, setBackupBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const {
@@ -64,14 +54,20 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
     reload,
   } = useConnections();
   const openConnection = useTerminalStore((state) => state.openConnection);
-  const activateConnection = useTerminalStore((state) => state.activateConnection);
+  const openLocalSession = useTerminalStore((state) => state.openLocalSession);
+  const activateRecentConnection = useTerminalStore((state) => state.activateRecentConnection);
+  const activateTerminalSession = useTerminalStore((state) => state.activateConnection);
   const sessions = useTerminalStore((state) => state.sessions);
+  const activeTerminalId = useTerminalStore((state) => state.activeId);
   const terminalStatuses = useTerminalStore((state) => state.statuses);
   const terminalErrors = useTerminalStore((state) => state.errors);
-  const closeConnection = useTerminalStore((state) => state.closeConnection);
+  const closeConnectionSessions = useTerminalStore((state) => state.closeConnectionSessions);
+  const syncTerminalConnectionName = useTerminalStore((state) => state.syncConnectionName);
   const sftpSessions = useSftpStore((state) => state.sessions);
+  const activeSftpId = useSftpStore((state) => state.activeId);
   const openSftpSession = useSftpStore((state) => state.openSession);
   const activateSftpSession = useSftpStore((state) => state.setActive);
+  const syncSftpConnectionName = useSftpStore((state) => state.syncConnectionName);
   const closeSftpSession = useSftpStore((state) => state.closeSession);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -88,6 +84,16 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
     () => new Map(sftpSessions.map((session) => [session.connectionId, session])),
     [sftpSessions]
   );
+  const terminalSessionsByConnectionId = useMemo(() => {
+    const grouped = new Map<number, RemoteTerminalSession[]>();
+    for (const session of sessions) {
+      if (session.kind !== 'remote') continue;
+      const connectionSessions = grouped.get(session.connectionId) ?? [];
+      connectionSessions.push(session);
+      grouped.set(session.connectionId, connectionSessions);
+    }
+    return grouped;
+  }, [sessions]);
 
   const createGroup = async () => {
     if (!requireDesktopRuntime()) return;
@@ -116,23 +122,13 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
   const requireDesktopRuntime = () => {
     if (isDesktopRuntime()) return true;
     setActionMessage(null);
-    setActionError('请在 Nocterm 桌面客户端中使用备份与恢复');
+    setActionError('请在 Nocterm 桌面客户端中管理服务器连接');
     return false;
   };
 
   const clearActionFeedback = () => {
     setActionError(null);
     setActionMessage(null);
-  };
-
-  const disconnectSftpConnection = async (connectionId: number) => {
-    clearActionFeedback();
-    try {
-      await disconnectSftpSession(String(connectionId));
-      closeSftpSession(String(connectionId));
-    } catch (disconnectError) {
-      setActionError(`断开 SFTP 失败：${getSftpErrorMessage(disconnectError)}`);
-    }
   };
 
   useEffect(() => {
@@ -143,111 +139,6 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
     }, ACTION_FEEDBACK_TIMEOUT_MS);
     return () => window.clearTimeout(timeout);
   }, [actionError, actionMessage]);
-
-  const handleExportConnections = async () => {
-    if (!requireDesktopRuntime()) return;
-    clearActionFeedback();
-    setBackupBusy(true);
-    try {
-      const defaultPath = `nocterm-connections-${new Date().toISOString().slice(0, 10)}.json`;
-      const saved = await saveConnectionBackup(
-        createConnectionBackup(connections, groups),
-        defaultPath
-      );
-      if (!saved) return;
-      setActionMessage('连接配置已导出。敏感凭据不会写入备份文件。');
-    } catch (backupError) {
-      setActionError(`导出连接配置失败：${normalizeConnectionError(backupError).message}`);
-    } finally {
-      setBackupBusy(false);
-    }
-  };
-
-  const handleImportConnections = async () => {
-    if (!requireDesktopRuntime()) return;
-    clearActionFeedback();
-    setBackupBusy(true);
-    try {
-      const content = await pickConnectionBackup();
-      if (!content) return;
-      const result = await importConnectionBackup(parseConnectionBackup(content));
-      await reload();
-      setActionMessage(
-        `已导入 ${result.connections} 个连接、${result.groups} 个分组。敏感凭据需要在本机重新绑定。`
-      );
-    } catch (backupError) {
-      setActionError(`导入连接配置失败：${normalizeConnectionError(backupError).message}`);
-    } finally {
-      setBackupBusy(false);
-    }
-  };
-
-  const handleImportSshConfig = async () => {
-    if (!requireDesktopRuntime()) return;
-    clearActionFeedback();
-    setBackupBusy(true);
-    try {
-      const selected = await pickSshConfig();
-      if (!selected) return;
-      const group = groups.find((item) => item.name === 'SSH Config');
-      const groupId = group?.id ?? `group-${crypto.randomUUID()}`;
-      const imported = parseSshConfigConnections(
-        selected.content,
-        groupId,
-        selected.path,
-        await resolveLocalUsername()
-      );
-      if (imported.length === 0) throw new Error('未找到可导入的 Host 配置');
-
-      const result = await importConnectionBackup({
-        groups: group ? [] : [{ id: groupId, name: 'SSH Config', sortOrder: groups.length }],
-        connections: imported.map((connection) => ({
-          sourceId: connection.sourceId,
-          name: connection.name,
-          host: connection.host,
-          port: connection.port,
-          username: connection.username,
-          authentication: connection.authentication,
-          groupId: connection.groupId,
-          remark: connection.remark,
-          remoteInitialPath: connection.remoteInitialPath,
-          icon: connection.icon,
-          sortOrder: connection.sortOrder,
-          credentialKind: connection.credentialKind,
-          credentialStatus: connection.credentialStatus,
-        })),
-      });
-      const importedIds = new Map(
-        result.importedConnections.map((connection) => [connection.sourceId, connection.id])
-      );
-      let unboundPrivateKeys = 0;
-      for (const connection of imported) {
-        if (!connection.privateKeyPath) continue;
-        const connectionId = importedIds.get(connection.sourceId);
-        const privateKeyPath = await resolveSshConfigPrivateKeyPath(connection.privateKeyPath);
-        if (connectionId === undefined || !privateKeyPath) {
-          unboundPrivateKeys += 1;
-          continue;
-        }
-        try {
-          await bindConnectionPrivateKeyFile(connectionId, privateKeyPath);
-        } catch {
-          // 导入主体已由事务提交；单个本机私钥不可用时保留连接并提示用户手动绑定。
-          unboundPrivateKeys += 1;
-        }
-      }
-      await reload();
-      setActionMessage(
-        unboundPrivateKeys > 0
-          ? `已从 SSH Config 导入 ${result.connections} 个连接，${unboundPrivateKeys} 个私钥需要手动绑定。`
-          : `已从 SSH Config 导入 ${result.connections} 个连接。`
-      );
-    } catch (backupError) {
-      setActionError(`导入 SSH Config 失败：${normalizeConnectionError(backupError).message}`);
-    } finally {
-      setBackupBusy(false);
-    }
-  };
 
   const cloneConnection = async (connection: ConnectionProfile) => {
     await create({
@@ -263,15 +154,42 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
     });
   };
 
-  const openTerminalConnection = (connection: ConnectionProfile) => {
+  const prepareConnection = (connection: ConnectionProfile) => {
     setSelectedId(connection.id);
     if (!isConnectionReady(connection)) {
       setEditing(connection);
       setDialogOpen(true);
-      return;
+      return false;
     }
-    if (mode === 'sftp') openSftpSession(connection);
-    else openConnection(connection);
+    return true;
+  };
+
+  const activateServer = (connection: ConnectionProfile) => {
+    if (!prepareConnection(connection)) return;
+    activateRecentConnection(connection);
+    navigate('/connections');
+  };
+
+  const openTerminalShortcut = (connection: ConnectionProfile) => {
+    if (!prepareConnection(connection)) return;
+    openConnection(connection);
+    navigate('/connections');
+  };
+
+  const openFilesShortcut = (connection: ConnectionProfile) => {
+    if (!prepareConnection(connection)) return;
+    const connectionId = String(connection.id);
+    // 切回已有文件会话时保留当前目录、筛选和传输上下文。
+    if (sftpSessionsByConnectionId.has(connectionId)) activateSftpSession(connectionId);
+    else openSftpSession(connection);
+    navigate('/sftp');
+  };
+
+  const createLocalTerminal = () => {
+    const localCount = sessions.filter((session) => session.kind === 'local').length;
+    const name = localCount === 0 ? '本地终端' : `本地终端 ${localCount + 1}`;
+    openLocalSession(`local:extra:${crypto.randomUUID()}`, name);
+    navigate('/connections');
   };
 
   const credentialNotice =
@@ -342,29 +260,28 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
             <path d="m20 20-4-4" />
           </svg>
           <input
-            aria-label="搜索连接"
+            aria-label="搜索服务器"
             className={styles.searchInput}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索名称、主机或用户"
+            placeholder="搜索服务器…"
             value={query}
           />
         </label>
+      </header>
+
+      <div className={styles.localActions}>
         <button
-          aria-label="新建远程连接"
-          className={styles.addBtn}
-          onClick={() => {
-            setEditing(null);
-            setNewGroupId(undefined);
-            setDialogOpen(true);
-          }}
-          title="新建远程连接"
+          className={styles.localTerminalButton}
+          onClick={createLocalTerminal}
+          title="直接新建一个本地终端"
           type="button"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" />
+            <path d="m4 7 5 5-5 5M11 17h5M19 4v7M15.5 7.5h7" />
           </svg>
+          <span>新建本地终端</span>
         </button>
-      </header>
+      </div>
 
       {error ? (
         <p className={styles.inlineError}>
@@ -408,6 +325,24 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
         ]}
       >
         <div className={styles.scrollContent}>
+          <div className={styles.serverHeading}>
+            <span>服务器</span>
+            <button
+              aria-label="新建远程连接"
+              className={styles.addBtn}
+              onClick={() => {
+                setEditing(null);
+                setNewGroupId(undefined);
+                setDialogOpen(true);
+              }}
+              title="新建远程连接"
+              type="button"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          </div>
           {loading ? (
             <div className={styles.empty}>
               <span className={styles.emptyText}>正在加载连接…</span>
@@ -420,7 +355,9 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
               </svg>
               <span className={styles.emptyText}>{query ? '没有匹配的连接' : '暂无连接'}</span>
               <span className={styles.emptyHint}>
-                {query ? '尝试使用其他名称或主机地址' : '点击右上角 +，或从中间空态添加远程服务器'}
+                {query
+                  ? '尝试使用其他名称或主机地址'
+                  : '点击“服务器”右侧 +，或从中间空态添加远程服务器'}
               </span>
             </div>
           ) : (
@@ -474,26 +411,14 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
                     onSelect={() => {
                       if (shouldSuppressConnectionClick()) return;
                       setSelectedId(connection.id);
-                      if (mode === 'sftp') {
-                        if (
-                          sftpSessions.some(
-                            (session) => session.connectionId === String(connection.id)
-                          )
-                        ) {
-                          activateSftpSession(String(connection.id));
-                        }
-                      } else if (sessions.some((session) => session.id === connection.id)) {
-                        activateConnection(connection.id);
-                      }
                     }}
-                    onOpen={() => openTerminalConnection(connection)}
-                    onDisconnect={() => {
-                      if (mode === 'sftp') {
-                        void disconnectSftpConnection(connection.id);
-                      } else {
-                        closeConnection(connection.id);
-                      }
+                    onOpen={() => activateServer(connection)}
+                    onOpenTerminal={() => openTerminalShortcut(connection)}
+                    onActivateTerminalSession={(sessionId: TerminalSessionId) => {
+                      activateTerminalSession(sessionId);
+                      navigate('/connections');
                     }}
+                    onOpenFiles={() => openFilesShortcut(connection)}
                     onEdit={() => {
                       setEditing(connection);
                       setDialogOpen(true);
@@ -508,33 +433,57 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
                       if (window.confirm(`确定删除连接“${connection.name}”吗？`)) {
                         void remove(connection.id)
                           .then(() => {
-                            closeConnection(connection.id);
+                            closeConnectionSessions(connection.id);
                             closeSftpSession(String(connection.id));
                           })
                           .catch(() => undefined);
                       }
                     }}
                     onClone={() => void cloneConnection(connection)}
-                    connectionStatus={
-                      mode === 'sftp'
-                        ? sftpSessionsByConnectionId.get(String(connection.id))?.status ===
-                          'connected'
-                          ? 'connected'
-                          : sftpSessionsByConnectionId.get(String(connection.id))?.status ===
-                              'connecting'
-                            ? 'connecting'
-                            : sftpSessionsByConnectionId.get(String(connection.id))?.status ===
-                                'error'
-                              ? 'error'
-                              : 'closed'
-                        : terminalStatuses[connection.id]
-                    }
-                    connectionError={
-                      mode === 'sftp'
-                        ? sftpSessionsByConnectionId.get(String(connection.id))?.lastError
-                        : terminalErrors[connection.id]
-                    }
+                    connectionStatus={(() => {
+                      if (mode === 'sftp') {
+                        const status = sftpSessionsByConnectionId.get(
+                          String(connection.id)
+                        )?.status;
+                        return status === 'connected' ||
+                          status === 'connecting' ||
+                          status === 'error'
+                          ? status
+                          : 'closed';
+                      }
+                      const remoteSessions =
+                        terminalSessionsByConnectionId.get(connection.id) ?? [];
+                      const states = remoteSessions.map(
+                        (session) => terminalStatuses[session.id] ?? 'connecting'
+                      );
+                      if (states.includes('connected')) return 'connected';
+                      if (states.includes('connecting')) return 'connecting';
+                      if (states.includes('error')) return 'error';
+                      return states.length > 0 ? 'closed' : undefined;
+                    })()}
+                    connectionError={(() => {
+                      if (mode === 'sftp') {
+                        return sftpSessionsByConnectionId.get(String(connection.id))?.lastError;
+                      }
+                      const failedSessions = (
+                        terminalSessionsByConnectionId.get(connection.id) ?? []
+                      ).filter((session) => terminalStatuses[session.id] === 'error');
+                      const failedSession = failedSessions[failedSessions.length - 1];
+                      return failedSession ? (terminalErrors[failedSession.id] ?? null) : null;
+                    })()}
                     selected={selectedId === connection.id}
+                    terminalActive={
+                      mode === 'terminal' &&
+                      (terminalSessionsByConnectionId.get(connection.id) ?? []).some(
+                        (session) => session.id === activeTerminalId
+                      )
+                    }
+                    terminalSessions={terminalSessionsByConnectionId.get(connection.id) ?? []}
+                    activeTerminalId={activeTerminalId}
+                    terminalStatuses={terminalStatuses}
+                    terminalErrors={terminalErrors}
+                    fileSession={sftpSessionsByConnectionId.get(String(connection.id)) ?? null}
+                    filesActive={mode === 'sftp' && activeSftpId === String(connection.id)}
                     dragging={draggingConnectionId === connection.id}
                     dropPosition={
                       connectionDropTarget?.connectionId === connection.id
@@ -550,15 +499,6 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
         </div>
       </ContextMenu>
 
-      <footer className={styles.footer}>
-        <ConnectionBackupMenu
-          busy={backupBusy}
-          onExportConnections={() => void handleExportConnections()}
-          onImportConnections={() => void handleImportConnections()}
-          onImportSshConfig={() => void handleImportSshConfig()}
-        />
-      </footer>
-
       {dialogOpen ? (
         <ConnectionCreateDialog
           key={editing?.id ?? newGroupId ?? 'new'}
@@ -570,9 +510,16 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
           onCreate={async (request) => {
             if (editing) {
               const requiresReconnect = connectionRequiresReconnect(editing, request);
-              await update({ ...request, id: editing.id });
-              if (requiresReconnect && sessions.some((session) => session.id === editing.id)) {
-                closeConnection(editing.id);
+              const saved = await update({ ...request, id: editing.id });
+              syncTerminalConnectionName(saved.id, saved.name);
+              syncSftpConnectionName(String(saved.id), saved.name);
+              if (
+                requiresReconnect &&
+                sessions.some(
+                  (session) => session.kind === 'remote' && session.connectionId === editing.id
+                )
+              ) {
+                closeConnectionSessions(editing.id);
               }
             } else await create(request);
             setEditing(null);

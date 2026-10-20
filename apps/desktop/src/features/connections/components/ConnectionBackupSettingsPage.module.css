@@ -1,0 +1,207 @@
+.page {
+  width: 100%;
+  padding: 28px 32px 40px;
+}
+
+.pageHeader {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.pageHeader h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 760;
+  line-height: 1.3;
+}
+
+.section {
+  margin-top: 20px;
+}
+
+.sectionHeading {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.sectionHeading h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.sectionHeading span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.actionList {
+  overflow: hidden;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.actionRow {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 92px;
+  gap: 12px;
+  align-items: center;
+  min-height: 64px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.actionIcon {
+  display: flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.actionIcon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.actionCopy {
+  min-width: 0;
+}
+
+.actionCopy h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.actionCopy p {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actionButton {
+  width: 92px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+  transition:
+    color var(--dur-fast),
+    background var(--dur-fast),
+    border-color var(--dur-fast);
+}
+
+.actionButton:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.actionButton:disabled {
+  cursor: wait;
+  opacity: 0.56;
+}
+
+.actionButton:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--text-tertiary);
+}
+
+.securityNote {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 7px 14px;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.securityNote svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.feedback button {
+  flex: none;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.error {
+  color: var(--accent-red);
+  background: var(--accent-red-soft);
+}
+
+.success {
+  color: var(--accent-green);
+  background: var(--accent-green-soft);
+}
+
+@media (width <= 620px) {
+  .page {
+    padding: 24px 20px 32px;
+  }
+
+  .actionRow {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 10px 12px;
+  }
+
+  .actionButton {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
