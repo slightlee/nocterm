@@ -22,7 +22,8 @@ interface AiComposerProps {
   draft: string;
   attachment: AiAttachment | null;
   attachmentLoading: boolean;
-  terminalReady: boolean;
+  targetReady: boolean;
+  targetUnavailableMessage: string;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onSubmit: (event: FormEvent) => void;
@@ -47,7 +48,8 @@ export function AiComposer({
   draft,
   attachment,
   attachmentLoading,
-  terminalReady,
+  targetReady,
+  targetUnavailableMessage,
   composerRef,
   fileInputRef,
   onSubmit,
@@ -137,8 +139,8 @@ export function AiComposer({
             <button
               aria-label="发送请求"
               className={styles.sendButton}
-              disabled={!terminalReady || (!draft.trim() && !attachment) || attachmentLoading}
-              title={terminalReady ? '发送请求' : '请先连接终端'}
+              disabled={!targetReady || (!draft.trim() && !attachment) || attachmentLoading}
+              title={targetReady ? '发送请求' : targetUnavailableMessage}
               type="submit"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">

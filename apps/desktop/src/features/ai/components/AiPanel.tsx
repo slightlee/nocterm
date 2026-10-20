@@ -19,19 +19,25 @@ import {
   type AiHistoryBrowseState,
 } from '../model/ai-input-history';
 import { readAiAttachment, type AiAttachment } from '../model/ai-attachment';
-import { isAiTerminalTargetReady, resolveAiTerminalTarget } from '../model/ai-target';
+import {
+  isAiTerminalTargetReady,
+  resolveAiWorkspaceTarget,
+  type AiWorkspaceView,
+} from '../model/ai-target';
 import { AI_PROVIDERS, type AiCommandPolicy, type AiProviderId } from '../model/ai-types';
 import { AiComposer } from './AiComposer';
 import { AiConversationView } from './AiConversationView';
 import { AiHistoryMenu } from './AiHistoryMenu';
+import { AiPanelToggle } from './AiPanelToggle';
 import styles from './AiPanel.module.css';
 
 interface AiPanelProps {
+  activeView: AiWorkspaceView;
   visible: boolean;
 }
 
 /** AI 工作台是 Agent 的宿主界面；组件常驻，折叠或切页不会丢失任务事件。 */
-export function AiPanel({ visible }: AiPanelProps) {
+export function AiPanel({ activeView, visible }: AiPanelProps) {
   const sessions = useTerminalStore((state) => state.sessions);
   const activeId = useTerminalStore((state) => state.activeId);
   const terminalStatuses = useTerminalStore((state) => state.statuses);
@@ -65,11 +71,13 @@ export function AiPanel({ visible }: AiPanelProps) {
   const activeSessionStatus = activeSession
     ? (terminalStatuses[String(activeSession.id)] ?? 'connecting')
     : 'idle';
-  const terminalTarget = useMemo(
-    () => resolveAiTerminalTarget(activeSession, activeSessionStatus),
-    [activeSession, activeSessionStatus]
+  const workspaceTarget = useMemo(
+    () => resolveAiWorkspaceTarget(activeView, activeSession, activeSessionStatus),
+    [activeSession, activeSessionStatus, activeView]
   );
-  const terminalReady = isAiTerminalTargetReady(terminalTarget);
+  const targetReady = isAiTerminalTargetReady(workspaceTarget);
+  const targetUnavailableMessage =
+    activeView === 'sftp' ? '文件会话暂未接入 AI 执行上下文' : '请先连接本地终端或远程服务器';
   const activeConversation =
     conversations.find((item) => item.id === activeConversationId) ?? conversations[0];
   const conversationId = activeConversation?.id ?? activeConversationId;
@@ -105,8 +113,8 @@ export function AiPanel({ visible }: AiPanelProps) {
     if (runningSessionId) return;
     const content = draft.trim();
     if (!content && !attachment) return;
-    if (!terminalReady) {
-      setNotice('请先连接本地终端或远程服务器，再使用 AI 助手。');
+    if (!targetReady) {
+      setNotice(`${targetUnavailableMessage}，暂时无法发送新请求。`);
       return;
     }
     const selectedAttachment = attachment;
@@ -123,7 +131,7 @@ export function AiPanel({ visible }: AiPanelProps) {
       history: messages,
       conversationId,
       provider,
-      target: terminalTarget,
+      target: workspaceTarget,
       commandPolicy,
     });
   };
@@ -140,8 +148,8 @@ export function AiPanel({ visible }: AiPanelProps) {
     }
     const retried = lastUserIndex >= 0 ? messages[lastUserIndex] : undefined;
     if (!retried) return;
-    if (!terminalReady) {
-      setNotice('请先连接本地终端或远程服务器，再重新发送。');
+    if (!targetReady) {
+      setNotice(`${targetUnavailableMessage}，暂时无法重新发送。`);
       return;
     }
     // 附件正文不落盘、无法随重试重读，只发送文本部分并去掉“附件：名称”标记。
@@ -154,7 +162,7 @@ export function AiPanel({ visible }: AiPanelProps) {
       history: messages.slice(0, lastUserIndex),
       conversationId,
       provider,
-      target: terminalTarget,
+      target: workspaceTarget,
       commandPolicy,
     });
   };
@@ -284,7 +292,7 @@ export function AiPanel({ visible }: AiPanelProps) {
   };
 
   return (
-    <aside className={styles.panel} aria-label="AI 工作台">
+    <aside className={styles.panel} aria-label="AI 工作台" id="ai-panel">
       <header className={styles.header}>
         <div className={styles.titleGroup}>
           <h2>AI 助手</h2>
@@ -313,20 +321,9 @@ export function AiPanel({ visible }: AiPanelProps) {
               <path d="M12 5v14M5 12h14" />
             </svg>
           </button>
+          <AiPanelToggle expanded onToggle={() => setOpen(false)} />
         </div>
       </header>
-
-      <button
-        aria-label="折叠 AI 助手"
-        className={styles.collapseButton}
-        onClick={() => setOpen(false)}
-        title="折叠 AI 助手"
-        type="button"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m10 7 5 5-5 5" />
-        </svg>
-      </button>
 
       {historyOpen ? (
         <AiHistoryMenu
@@ -343,23 +340,27 @@ export function AiPanel({ visible }: AiPanelProps) {
       <div className={styles.contextBar}>
         <span
           className={`${styles.contextStatusDot} ${
-            activeSessionStatus === 'connected'
-              ? styles.contextStatusConnected
-              : activeSessionStatus === 'connecting'
-                ? styles.contextStatusConnecting
-                : activeSessionStatus === 'error'
-                  ? styles.contextStatusError
-                  : styles.contextStatusInactive
+            activeView === 'sftp'
+              ? styles.contextStatusInactive
+              : activeSessionStatus === 'connected'
+                ? styles.contextStatusConnected
+                : activeSessionStatus === 'connecting'
+                  ? styles.contextStatusConnecting
+                  : activeSessionStatus === 'error'
+                    ? styles.contextStatusError
+                    : styles.contextStatusInactive
           }`}
         />
         <span>
-          {activeSession && activeSessionStatus === 'connected'
-            ? `已连接 ${activeSession.name}，可分析命令、日志与报错`
-            : activeSessionStatus === 'connecting'
-              ? '终端连接中，连接完成后可分析命令、日志与报错'
-              : activeSessionStatus === 'error'
-                ? '终端连接异常，请先恢复连接后再让 AI 执行操作'
-                : '连接终端后，可分析命令、日志与报错'}
+          {activeView === 'sftp'
+            ? '文件会话 · 暂未接入 AI 执行上下文'
+            : activeSession && activeSessionStatus === 'connected'
+              ? `已连接 ${activeSession.name}，可分析命令、日志与报错`
+              : activeSessionStatus === 'connecting'
+                ? '终端连接中，连接完成后可分析命令、日志与报错'
+                : activeSessionStatus === 'error'
+                  ? '终端连接异常，请先恢复连接后再让 AI 执行操作'
+                  : '连接终端后，可分析命令、日志与报错'}
         </span>
       </div>
 
@@ -382,7 +383,8 @@ export function AiPanel({ visible }: AiPanelProps) {
       <AiComposer
         attachment={attachment}
         attachmentLoading={attachmentLoading}
-        terminalReady={terminalReady}
+        targetReady={targetReady}
+        targetUnavailableMessage={targetUnavailableMessage}
         composerRef={composerRef}
         draft={draft}
         fileInputRef={fileInputRef}

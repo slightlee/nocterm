@@ -8,7 +8,6 @@ import {
   type FileTransferProgress,
   useSftpStore,
 } from '../../features/sftp';
-import { useTerminalStore } from '../../features/terminal';
 import styles from './StatusBar.module.css';
 
 type TransferTask = FileTransferProgress & {
@@ -32,14 +31,10 @@ function formatBytes(size: number): string {
 
 export function StatusBar() {
   const location = useLocation();
-  const sessions = useTerminalStore((s) => s.sessions);
-  const activeId = useTerminalStore((s) => s.activeId);
-  const terminalStatuses = useTerminalStore((s) => s.statuses);
   const sftpSessions = useSftpStore((s) => s.sessions);
   const activeSftpId = useSftpStore((s) => s.activeId);
   const sftpSelectionSummary = useSftpStore((s) => s.selectionSummary);
 
-  const activeSession = sessions.find((session) => session.id === activeId);
   const activeSftpSession = sftpSessions.find((session) => session.connectionId === activeSftpId);
   const [transferTasks, setTransferTasks] = useState<Map<string, TransferTask>>(new Map());
   const [transferPanelOpen, setTransferPanelOpen] = useState(false);
@@ -162,257 +157,218 @@ export function StatusBar() {
     };
   }, [tasks]);
 
-  const activeTerminalStatus = activeId === null ? 'idle' : terminalStatuses[String(activeId)];
-  const statusClass =
-    activeTerminalStatus === 'connected'
-      ? styles.green
-      : activeTerminalStatus === 'connecting'
-        ? styles.orange
-        : styles.red;
-  const statusTitle = activeSession
-    ? `${activeSession.name} ${activeSession.kind === 'remote' ? activeSession.remoteInitialPath || '~' : '~'}`
-    : '';
+  // 传输监听在终端路由仍保持挂载；仅隐藏没有任务职责的常驻终端底栏。
+  if (!location.pathname.startsWith('/sftp')) return null;
 
-  if (location.pathname.startsWith('/sftp')) {
-    const remotePath = activeSftpSession?.currentPath || activeSftpSession?.initialPath || '/';
-    const activeTransfer = activeTransferId ? (transferTasks.get(activeTransferId) ?? null) : null;
-    const transferPercent =
-      activeTransfer && activeTransfer.total > 0
-        ? Math.min(100, Math.round((activeTransfer.transferred / activeTransfer.total) * 100))
-        : null;
-    const transferLabel =
-      activeTransfer?.direction === 'upload'
-        ? '上传'
-        : activeTransfer?.direction === 'download'
-          ? '下载'
-          : '';
-
-    return (
-      <footer className={styles.statusbar}>
-        {transferPanelOpen && tasks.length > 0 && (
-          <div className={styles.transferPanel}>
-            <div className={styles.transferPanelHeader}>
-              <span>传输队列</span>
-              <div className={styles.transferPanelActions}>
-                {completedTasks.length > 0 && (
-                  <button type="button" onClick={() => clearTransferTasks('completed')}>
-                    清除完成
-                  </button>
-                )}
-                {failedTasks.length > 0 && (
-                  <button type="button" onClick={() => clearTransferTasks('error')}>
-                    清除失败
-                  </button>
-                )}
-                {cancelledTasks.length > 0 && (
-                  <button type="button" onClick={() => clearTransferTasks('cancelled')}>
-                    清除取消
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className={styles.transferPanelClose}
-                  onClick={() => setTransferPanelOpen(false)}
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-            <div className={styles.transferList}>
-              {sortedTasks.map((task) => {
-                const percent =
-                  task.total > 0
-                    ? Math.min(100, Math.round((task.transferred / task.total) * 100))
-                    : null;
-                const label = task.direction === 'upload' ? '上传' : '下载';
-                const taskError = task.error ? getSftpErrorMessage(task.error) : null;
-                const displayName =
-                  task.status === 'error' ? taskError || task.fileName : task.fileName;
-                const displayTitle = taskError ? `${task.fileName}：${taskError}` : task.fileName;
-                return (
-                  <div key={task.taskId} className={styles.transferItem}>
-                    <div className={styles.transferItemTop}>
-                      <span
-                        className={`${styles.transferBadge} ${
-                          task.status === 'error'
-                            ? styles.transferError
-                            : task.status === 'cancelled'
-                              ? styles.transferCancelled
-                              : ''
-                        }`}
-                      >
-                        {task.status === 'completed'
-                          ? `${label}完成`
-                          : task.status === 'error'
-                            ? `${label}失败`
-                            : task.status === 'cancelled'
-                              ? `${label}已取消`
-                              : `${label}中`}
-                      </span>
-                      <span className={styles.transferItemName} title={displayTitle}>
-                        {displayName}
-                      </span>
-                      {percent != null && (
-                        <span className={styles.transferItemMeta}>{percent}%</span>
-                      )}
-                      {percent == null && task.transferred > 0 && (
-                        <span className={styles.transferItemMeta}>
-                          {formatBytes(task.transferred)}
-                        </span>
-                      )}
-                      {task.status === 'running' && (
-                        <button
-                          type="button"
-                          className={styles.transferItemAction}
-                          onClick={() => void cancelFileTransfer(task.taskId)}
-                        >
-                          取消
-                        </button>
-                      )}
-                      {(task.status === 'error' || task.status === 'cancelled') && (
-                        <button
-                          type="button"
-                          className={styles.transferItemAction}
-                          onClick={() => {
-                            setTransferTasks((current) => {
-                              const next = new Map(current);
-                              next.delete(task.taskId);
-                              return next;
-                            });
-                            window.dispatchEvent(
-                              new CustomEvent('nocterm-sftp-retry', {
-                                detail: { taskId: task.taskId },
-                              })
-                            );
-                          }}
-                        >
-                          {task.direction === 'upload' ? '重新上传' : '重新下载'}
-                        </button>
-                      )}
-                    </div>
-                    <span className={styles.transferItemTrack}>
-                      <span
-                        className={`${styles.progressFill} ${
-                          percent == null ? styles.progressFillUnknown : ''
-                        }`}
-                        style={{ width: percent == null ? undefined : `${percent}%` }}
-                      />
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-        {activeTransfer ? (
-          <button
-            type="button"
-            className={styles.transferStatus}
-            onClick={() => setTransferPanelOpen((open) => !open)}
-          >
-            <span
-              className={`${styles.transferBadge} ${
-                activeTransfer.status === 'error'
-                  ? styles.transferError
-                  : activeTransfer.status === 'cancelled'
-                    ? styles.transferCancelled
-                    : ''
-              }`}
-            >
-              {activeTransfer.status === 'completed'
-                ? `${transferLabel}完成`
-                : activeTransfer.status === 'error'
-                  ? `${transferLabel}失败`
-                  : activeTransfer.status === 'cancelled'
-                    ? `${transferLabel}已取消`
-                    : `${transferLabel}中`}
-            </span>
-            <span
-              className={styles.transferName}
-              title={
-                activeTransfer.error
-                  ? `${activeTransfer.fileName}：${getSftpErrorMessage(activeTransfer.error)}`
-                  : activeTransfer.fileName
-              }
-            >
-              {activeTransfer.status === 'error'
-                ? activeTransfer.error
-                  ? getSftpErrorMessage(activeTransfer.error)
-                  : activeTransfer.fileName
-                : activeTransfer.fileName}
-            </span>
-            {transferPercent != null ? (
-              <>
-                <span className={styles.progressTrack}>
-                  <span className={styles.progressFill} style={{ width: `${transferPercent}%` }} />
-                </span>
-                <span className={styles.transferMeta}>{transferPercent}%</span>
-              </>
-            ) : activeTransfer.transferred > 0 ? (
-              <>
-                <span className={styles.progressTrack}>
-                  <span className={`${styles.progressFill} ${styles.progressFillUnknown}`} />
-                </span>
-                <span className={styles.transferMeta}>
-                  {formatBytes(activeTransfer.transferred)}
-                </span>
-              </>
-            ) : null}
-            <span className={styles.transferQueue}>传输 {tasks.length}</span>
-            {failedTasks.length > 0 && (
-              <span className={styles.transferQueue}>失败 {failedTasks.length}</span>
-            )}
-            {cancelledTasks.length > 0 && (
-              <span className={styles.transferQueue}>取消 {cancelledTasks.length}</span>
-            )}
-          </button>
-        ) : activeSftpSession ? (
-          <div className={styles.statusLeft}>
-            <div className={`${styles.statusDot} ${styles.green}`} />
-            <span className={styles.sessionName}>{activeSftpSession.connectionName}</span>
-            <span className={styles.sessionPath}>{truncatePath(remotePath)}</span>
-          </div>
-        ) : (
-          <div />
-        )}
-        <div className={styles.spacer} />
-        <div className={styles.statusRight}>
-          {sftpSelectionSummary.count > 0 && (
-            <span className={styles.statusItem}>
-              {sftpSelectionSummary.scope === 'remote' ? '远程' : '本地'}已选{' '}
-              {sftpSelectionSummary.count} 项
-              {sftpSelectionSummary.totalSize != null
-                ? ` · ${formatBytes(sftpSelectionSummary.totalSize)}`
-                : ''}
-            </span>
-          )}
-          <span className={styles.statusItem}>UTF-8</span>
-          <span className={styles.statusItem}>LF</span>
-        </div>
-      </footer>
-    );
-  }
+  const remotePath = activeSftpSession?.currentPath || activeSftpSession?.initialPath || '/';
+  const activeTransfer = activeTransferId ? (transferTasks.get(activeTransferId) ?? null) : null;
+  const transferPercent =
+    activeTransfer && activeTransfer.total > 0
+      ? Math.min(100, Math.round((activeTransfer.transferred / activeTransfer.total) * 100))
+      : null;
+  const transferLabel =
+    activeTransfer?.direction === 'upload'
+      ? '上传'
+      : activeTransfer?.direction === 'download'
+        ? '下载'
+        : '';
 
   return (
     <footer className={styles.statusbar}>
-      {activeSession && (
-        <div className={styles.statusLeft} title={statusTitle}>
-          <div className={`${styles.statusDot} ${statusClass}`} />
-          <>
-            <span className={styles.sessionName}>{activeSession.name}</span>
-            <span className={styles.sessionPath}>
-              {truncatePath(
-                activeSession.kind === 'remote' ? activeSession.remoteInitialPath || '~' : '~'
+      {transferPanelOpen && tasks.length > 0 && (
+        <div className={styles.transferPanel}>
+          <div className={styles.transferPanelHeader}>
+            <span>传输队列</span>
+            <div className={styles.transferPanelActions}>
+              {completedTasks.length > 0 && (
+                <button type="button" onClick={() => clearTransferTasks('completed')}>
+                  清除完成
+                </button>
               )}
-            </span>
-          </>
+              {failedTasks.length > 0 && (
+                <button type="button" onClick={() => clearTransferTasks('error')}>
+                  清除失败
+                </button>
+              )}
+              {cancelledTasks.length > 0 && (
+                <button type="button" onClick={() => clearTransferTasks('cancelled')}>
+                  清除取消
+                </button>
+              )}
+              <button
+                type="button"
+                className={styles.transferPanelClose}
+                onClick={() => setTransferPanelOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+          <div className={styles.transferList}>
+            {sortedTasks.map((task) => {
+              const percent =
+                task.total > 0
+                  ? Math.min(100, Math.round((task.transferred / task.total) * 100))
+                  : null;
+              const label = task.direction === 'upload' ? '上传' : '下载';
+              const taskError = task.error ? getSftpErrorMessage(task.error) : null;
+              const displayName =
+                task.status === 'error' ? taskError || task.fileName : task.fileName;
+              const displayTitle = taskError ? `${task.fileName}：${taskError}` : task.fileName;
+              return (
+                <div key={task.taskId} className={styles.transferItem}>
+                  <div className={styles.transferItemTop}>
+                    <span
+                      className={`${styles.transferBadge} ${
+                        task.status === 'error'
+                          ? styles.transferError
+                          : task.status === 'cancelled'
+                            ? styles.transferCancelled
+                            : ''
+                      }`}
+                    >
+                      {task.status === 'completed'
+                        ? `${label}完成`
+                        : task.status === 'error'
+                          ? `${label}失败`
+                          : task.status === 'cancelled'
+                            ? `${label}已取消`
+                            : `${label}中`}
+                    </span>
+                    <span className={styles.transferItemName} title={displayTitle}>
+                      {displayName}
+                    </span>
+                    {percent != null && <span className={styles.transferItemMeta}>{percent}%</span>}
+                    {percent == null && task.transferred > 0 && (
+                      <span className={styles.transferItemMeta}>
+                        {formatBytes(task.transferred)}
+                      </span>
+                    )}
+                    {task.status === 'running' && (
+                      <button
+                        type="button"
+                        className={styles.transferItemAction}
+                        onClick={() => void cancelFileTransfer(task.taskId)}
+                      >
+                        取消
+                      </button>
+                    )}
+                    {(task.status === 'error' || task.status === 'cancelled') && (
+                      <button
+                        type="button"
+                        className={styles.transferItemAction}
+                        onClick={() => {
+                          setTransferTasks((current) => {
+                            const next = new Map(current);
+                            next.delete(task.taskId);
+                            return next;
+                          });
+                          window.dispatchEvent(
+                            new CustomEvent('nocterm-sftp-retry', {
+                              detail: { taskId: task.taskId },
+                            })
+                          );
+                        }}
+                      >
+                        {task.direction === 'upload' ? '重新上传' : '重新下载'}
+                      </button>
+                    )}
+                  </div>
+                  <span className={styles.transferItemTrack}>
+                    <span
+                      className={`${styles.progressFill} ${
+                        percent == null ? styles.progressFillUnknown : ''
+                      }`}
+                      style={{ width: percent == null ? undefined : `${percent}%` }}
+                    />
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
+      {activeTransfer ? (
+        <button
+          type="button"
+          className={styles.transferStatus}
+          onClick={() => setTransferPanelOpen((open) => !open)}
+        >
+          <span
+            className={`${styles.transferBadge} ${
+              activeTransfer.status === 'error'
+                ? styles.transferError
+                : activeTransfer.status === 'cancelled'
+                  ? styles.transferCancelled
+                  : ''
+            }`}
+          >
+            {activeTransfer.status === 'completed'
+              ? `${transferLabel}完成`
+              : activeTransfer.status === 'error'
+                ? `${transferLabel}失败`
+                : activeTransfer.status === 'cancelled'
+                  ? `${transferLabel}已取消`
+                  : `${transferLabel}中`}
+          </span>
+          <span
+            className={styles.transferName}
+            title={
+              activeTransfer.error
+                ? `${activeTransfer.fileName}：${getSftpErrorMessage(activeTransfer.error)}`
+                : activeTransfer.fileName
+            }
+          >
+            {activeTransfer.status === 'error'
+              ? activeTransfer.error
+                ? getSftpErrorMessage(activeTransfer.error)
+                : activeTransfer.fileName
+              : activeTransfer.fileName}
+          </span>
+          {transferPercent != null ? (
+            <>
+              <span className={styles.progressTrack}>
+                <span className={styles.progressFill} style={{ width: `${transferPercent}%` }} />
+              </span>
+              <span className={styles.transferMeta}>{transferPercent}%</span>
+            </>
+          ) : activeTransfer.transferred > 0 ? (
+            <>
+              <span className={styles.progressTrack}>
+                <span className={`${styles.progressFill} ${styles.progressFillUnknown}`} />
+              </span>
+              <span className={styles.transferMeta}>{formatBytes(activeTransfer.transferred)}</span>
+            </>
+          ) : null}
+          <span className={styles.transferQueue}>传输 {tasks.length}</span>
+          {failedTasks.length > 0 && (
+            <span className={styles.transferQueue}>失败 {failedTasks.length}</span>
+          )}
+          {cancelledTasks.length > 0 && (
+            <span className={styles.transferQueue}>取消 {cancelledTasks.length}</span>
+          )}
+        </button>
+      ) : activeSftpSession ? (
+        <div className={styles.statusLeft}>
+          <div className={`${styles.statusDot} ${styles.green}`} />
+          <span className={styles.sessionName}>{activeSftpSession.connectionName}</span>
+          <span className={styles.sessionPath}>{truncatePath(remotePath)}</span>
+        </div>
+      ) : (
+        <div />
+      )}
       <div className={styles.spacer} />
-      <div className={styles.statusRight}>
-        <span className={styles.statusItem}>UTF-8</span>
-        <span className={styles.statusItem}>LF</span>
-      </div>
+      {sftpSelectionSummary.count > 0 ? (
+        <div className={styles.statusRight}>
+          <span className={styles.statusItem}>
+            {sftpSelectionSummary.scope === 'remote' ? '远程' : '本地'}已选{' '}
+            {sftpSelectionSummary.count} 项
+            {sftpSelectionSummary.totalSize != null
+              ? ` · ${formatBytes(sftpSelectionSummary.totalSize)}`
+              : ''}
+          </span>
+        </div>
+      ) : null}
     </footer>
   );
 }

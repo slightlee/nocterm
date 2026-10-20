@@ -55,6 +55,20 @@ describe('sftp session store', () => {
       currentPath: '/srv/old/releases',
       connectionAttempt: 2,
     });
+    expect(useSftpStore.getState().sessions).toHaveLength(1);
+  });
+
+  it('syncs a renamed connection without reopening the file session', () => {
+    useSftpStore.getState().openSession(profile());
+    useSftpStore.getState().setCurrentPath('1', '/srv/old/releases');
+
+    useSftpStore.getState().syncConnectionName('1', '重命名后的服务器');
+
+    expect(useSftpStore.getState().sessions[0]).toMatchObject({
+      connectionName: '重命名后的服务器',
+      currentPath: '/srv/old/releases',
+      connectionAttempt: 1,
+    });
   });
 
   it('creates a new connection attempt when retrying a failed session', () => {

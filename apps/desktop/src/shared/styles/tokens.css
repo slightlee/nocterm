@@ -67,33 +67,33 @@
   --ds-gray-900: #111827;
 
   /* ---- Desktop Rail ---- */
-  --ds-rail-bg: #ebebeb;
-  --ds-titlebar-bg: #ebebeb;
-  --ds-rail-hover: #e2e2e2;
-  --ds-rail-text: #5f6368;
-  --ds-sidebar-soft-bg: #f2f2f2;
+  --ds-rail-bg: #f4f5f7;
+  --ds-titlebar-bg: #fafafb;
+  --ds-rail-hover: #e9ebef;
+  --ds-rail-text: #697586;
+  --ds-sidebar-soft-bg: #e9ebef;
 
   /* ---- Text ---- */
-  --ds-text-1: #111827;
-  --ds-text-2: #4b5563;
-  --ds-text-3: #6b7280;
+  --ds-text-1: #30343b;
+  --ds-text-2: #596577;
+  --ds-text-3: #7d8796;
 
   /* 实心强调色按钮上的文字（两主题同为白） */
   --ds-on-accent: #fff;
 
   /* ---- Background ---- */
   --ds-bg-1: #fff;
-  --ds-bg-2: #f8fafc;
-  --ds-bg-3: #f1f5f9;
+  --ds-bg-2: #fafafb;
+  --ds-bg-3: #f1f2f4;
   --ds-bg-elevated: #fff;
-  --ds-bg-selected: #f1f5f9;
+  --ds-bg-selected: #e6eaf0;
 
   /* ---- Overlay / Scrim ---- */
   --ds-overlay: rgb(15 23 42 / 36%);
 
   /* ---- Border ---- */
-  --ds-border: #e2e8f0;
-  --ds-border-light: #f1f5f9;
+  --ds-border: #e4e7ec;
+  --ds-border-light: #eef0f3;
 
   /* ---- Terminal palette ---- */
   --ds-term-panel: #f7f8fb;

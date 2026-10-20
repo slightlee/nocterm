@@ -1,7 +1,7 @@
 .group {
   position: relative;
-  margin-top: 6px;
-  border-radius: var(--radius-md);
+  margin-top: 3px;
+  border-radius: 6px;
 }
 
 .group:first-child {
@@ -15,11 +15,11 @@
 .groupHeader {
   position: relative;
   display: flex;
-  height: 28px;
+  height: 30px;
   align-items: center;
   gap: 6px;
   padding: 0 4px;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   cursor: pointer;
   touch-action: none;
   user-select: none;
@@ -72,8 +72,8 @@
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -98,8 +98,8 @@
   color: var(--text-tertiary);
   font-size: 12px;
   font-weight: 600;
-  background: var(--bg-tertiary);
-  border-radius: 50%;
+  background: transparent;
+  border-radius: 0;
 }
 
 .moreBtn {

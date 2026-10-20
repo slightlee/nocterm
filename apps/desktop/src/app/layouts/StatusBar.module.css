@@ -10,11 +10,11 @@
   border-top: 1px solid var(--term-border);
   display: flex;
   align-items: center;
-  padding: 0 14px;
+  padding: 0 16px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--term-muted);
-  gap: 12px;
+  gap: 10px;
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -68,7 +68,7 @@
 
 .sessionName {
   color: var(--term-text);
-  font-weight: 600;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 0;
