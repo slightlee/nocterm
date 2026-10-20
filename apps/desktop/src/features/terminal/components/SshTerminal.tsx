@@ -4,7 +4,6 @@ import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef } from 'react';
 
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
-import type { ConnectionProfile } from '../../connections';
 import {
   PASSWORD_REQUIRED_CODE,
   closeSshTerminal,
@@ -30,17 +29,19 @@ import {
   readTerminalTheme,
   TERMINAL_FONT_FAMILY,
 } from '../model/terminal-appearance';
-import { useTerminalStore } from '../model/terminal-store';
+import { type RemoteTerminalSession, useTerminalStore } from '../model/terminal-store';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
 
 /** xterm 仅负责当前 SSH 会话的渲染、输入和尺寸同步。 */
 interface SshTerminalProps {
-  connection: ConnectionProfile;
+  connection: RemoteTerminalSession;
   active?: boolean;
 }
 
 export function SshTerminal({ connection, active = true }: SshTerminalProps) {
+  const sessionId = connection.id;
+  const connectionId = connection.connectionId;
   const containerRef = useRef<HTMLDivElement>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
   const setSessionStatus = useTerminalStore((state) => state.setSessionStatus);
@@ -93,7 +94,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
      * terminalId 缓存，拿到自己的 id 后只回放属于自己的部分，其余丢弃。
      */
     let pendingOutput: { terminalId: string; data: string }[] = [];
-    let pendingExit: { terminalId: string; reason: string } | null = null;
+    let pendingExits: { terminalId: string; reason: string }[] = [];
     // 未知期只有建连阶段那一瞬，正常不会有大量输出；设上限纯粹是防止后端异常时无界堆积。
     const PENDING_OUTPUT_LIMIT = 512;
     // 口令提示激活期间还没有远端会话，按键必须留在本地而不是转发给后端。
@@ -195,7 +196,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
      */
     const openWithInteractivePassword = async () => {
       try {
-        return await openSshTerminal(connection.id, terminal.cols, terminal.rows);
+        return await openSshTerminal(connectionId, terminal.cols, terminal.rows);
       } catch (error) {
         if (getTerminalErrorCode(error) !== PASSWORD_REQUIRED_CODE) throw error;
       }
@@ -204,10 +205,10 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       if (!secret) {
         // 空口令在本项目范围内不受支持，与主动放弃同等处理，给出明确收尾而不是抛错。
         terminal.write('\x1b[90m[已取消连接]\x1b[0m\r\n');
-        setSessionStatus(connection.id, 'closed');
+        setSessionStatus(sessionId, 'closed');
         return null;
       }
-      return openSshTerminal(connection.id, terminal.cols, terminal.rows, secret);
+      return openSshTerminal(connectionId, terminal.cols, terminal.rows, secret);
     };
 
     /** 会话收尾的统一落点：失败与正常结束的状态迁移只在这里做一次。 */
@@ -215,11 +216,11 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       if (reason === 'failed') {
         const message = 'SSH 连接已失败，请检查认证、主机指纹和网络';
         terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`);
-        setSessionStatus(connection.id, 'error', message);
+        setSessionStatus(sessionId, 'error', message);
         return;
       }
       terminal.write('\r\n\x1b[90m[SSH 会话已结束]\x1b[0m\r\n');
-      setSessionStatus(connection.id, 'closed');
+      setSessionStatus(sessionId, 'closed');
     };
 
     /** 拿到自己的 terminalId 后回放缓存事件，只取属于本会话的那部分。 */
@@ -229,9 +230,9 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       for (const item of buffered) {
         if (item.terminalId === ownId) terminal.write(highlighter.transform(item.data));
       }
-      const exit = pendingExit;
-      pendingExit = null;
-      if (exit && exit.terminalId === ownId) applyExit(exit.reason);
+      const exit = pendingExits.find((item) => item.terminalId === ownId);
+      pendingExits = [];
+      if (exit) applyExit(exit.reason);
     };
 
     void (async () => {
@@ -241,7 +242,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
             terminal.write(highlighter.transform(payload.data));
           return;
         }
-        if (payload.connectionId !== connection.id) return;
+        if (payload.connectionId !== connectionId) return;
         if (pendingOutput.length >= PENDING_OUTPUT_LIMIT) return;
         pendingOutput.push({ terminalId: payload.terminalId, data: payload.data });
       });
@@ -256,9 +257,10 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
           if (payload.terminalId === terminalId) applyExit(payload.reason);
           return;
         }
-        if (payload.connectionId !== connection.id) return;
+        if (payload.connectionId !== connectionId) return;
         // 会话可能在 open 响应到达前就退出，缓存下来等确认归属后再迁移状态。
-        pendingExit = { terminalId: payload.terminalId, reason: payload.reason };
+        if (pendingExits.length >= PENDING_OUTPUT_LIMIT) return;
+        pendingExits.push({ terminalId: payload.terminalId, reason: payload.reason });
       });
       if (disposed) {
         outputListener();
@@ -274,14 +276,14 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
         return;
       }
       terminalId = opened.terminalId;
-      markSessionConnected(connection.id);
+      markSessionConnected(sessionId);
       // 回放放在 markSessionConnected 之后：若会话已经失败，失败状态应当覆盖已连接。
       flushPending(opened.terminalId);
       terminal.focus();
     })().catch((error: unknown) => {
       const message = getErrorMessage(error);
       terminal.write(`\r\n\x1b[31m连接失败：${message}\x1b[0m\r\n`);
-      setSessionStatus(connection.id, 'error', message);
+      setSessionStatus(sessionId, 'error', message);
     });
 
     return () => {
@@ -300,7 +302,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       fitTerminalRef.current = null;
       terminal.dispose();
     };
-  }, [connection, markSessionConnected, setSessionStatus]);
+  }, [connection, connectionId, markSessionConnected, sessionId, setSessionStatus]);
 
   return (
     <div className={styles.terminalWrapper}>

@@ -1,4 +1,5 @@
 export { AiPanel } from './components/AiPanel';
+export { AiPanelToggle } from './components/AiPanelToggle';
 export {
   getAiProviderStatus,
   onAiExit,

@@ -13,6 +13,13 @@
   border-right: 1px solid var(--border-primary);
 }
 
+/* 内嵌导航覆盖侧栏上下边缘，内容区为顶部入口和底部设置保留稳定空间。 */
+.navigationInset {
+  width: 100%;
+  padding: var(--layout-tab) 0 50px;
+  background: var(--rail-bg);
+}
+
 .content {
   flex: 1;
   display: flex;

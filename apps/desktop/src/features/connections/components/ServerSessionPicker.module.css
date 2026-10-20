@@ -1,0 +1,248 @@
+.trigger {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  z-index: 2;
+  display: inline-flex;
+  min-width: 36px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+
+.trigger:hover,
+.trigger[aria-expanded='true'] {
+  color: var(--accent-blue);
+  background: var(--accent-blue-soft);
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.trigger svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+/* 固定视口坐标并通过 Portal 渲染，列表自身负责长会话清单的滚动。 */
+.popover {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  display: flex;
+  width: 264px;
+  max-width: calc(100vw - 24px);
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+}
+
+.popoverHeader {
+  display: flex;
+  min-height: 38px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.popoverHeader strong {
+  min-width: 0;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionCount {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sessionStatusDot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.sessionStatusDot[data-status='connected'] {
+  background: var(--accent-green);
+}
+
+.dismiss {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  color: var(--text-tertiary);
+  font-size: 17px;
+  line-height: 1;
+  border-radius: 5px;
+}
+
+.dismiss:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.dismiss:focus-visible {
+  outline: 2px solid var(--accent-blue);
+}
+
+.sessionList {
+  min-height: 0;
+  max-height: 320px;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 4px 6px 5px;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--border-primary) transparent;
+  scrollbar-width: thin;
+}
+
+.sessionList::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sessionList::-webkit-scrollbar-thumb {
+  background: var(--border-primary);
+  border-radius: 3px;
+}
+
+.sessionEntry {
+  display: grid;
+  width: 100%;
+  min-height: 40px;
+  grid-template-columns: 24px minmax(0, 110px) 52px 24px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  color: var(--text-secondary);
+  text-align: left;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.sessionEntry:hover,
+.sessionEntry.current {
+  background: var(--bg-hover);
+}
+
+.sessionEntry:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+}
+
+.sessionKind {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  background: var(--bg-secondary);
+  border-radius: 5px;
+}
+
+.current .sessionKind {
+  color: var(--accent-blue);
+  background: var(--accent-blue-soft);
+}
+
+.sessionKind svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.sessionName {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionStatus {
+  display: flex;
+  width: 52px;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionStatusDot[data-status='connecting'] {
+  border: 2px solid var(--border-primary);
+  border-top-color: var(--accent-blue);
+  background: transparent;
+  animation: session-picker-spin 0.8s linear infinite;
+}
+
+.sessionStatusDot[data-status='error'] {
+  background: var(--accent-red);
+}
+
+.currentLabel {
+  width: 24px;
+  color: var(--accent-blue);
+  font-size: 10px;
+  text-align: right;
+}
+
+/* 极窄窗口只压缩连接名列，状态与当前标记保持稳定，避免信息错位。 */
+@media (width < 288px) {
+  .sessionEntry {
+    grid-template-columns: 24px minmax(0, 1fr) 52px 24px;
+  }
+}
+
+@keyframes session-picker-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -5,11 +5,11 @@
 
 :root {
   /* ---- Layout Dimensions ---- */
-  --layout-activity-bar: 68px;
-  --layout-sidebar: 280px;
+  --layout-activity-bar: 56px;
+  --layout-sidebar: 264px;
 
   /* AI 面板基准宽度与设计稿对齐；min/max 供窄窗口收缩与回退容器复用 */
-  --layout-ai-panel: 380px;
+  --layout-ai-panel: 332px;
   --layout-topbar: 54px;
   --layout-statusbar: 28px;
   --layout-tab: 48px;

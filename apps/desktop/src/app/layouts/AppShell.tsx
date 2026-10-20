@@ -9,6 +9,7 @@ import { ActivityBar } from './ActivityBar';
 import { Sidebar } from './Sidebar';
 import { StatusBar } from './StatusBar';
 import { TerminalWorkspace } from './TerminalWorkspace';
+import { WorkspaceSessionTabs } from './WorkspaceSessionTabs';
 import { WindowsWindowControls } from './WindowsWindowControls';
 import styles from './AppShell.module.css';
 
@@ -59,20 +60,39 @@ export function AppShell() {
         </header>
       ) : null}
       <div className={styles.app} onContextMenuCapture={suppressBrowserContextMenu}>
-        <ActivityBar compactTop={windowsDesktop} />
-        {sidebarRoute && !sidebarCollapsed ? (
-          <Sidebar>
-            <ConnectionList mode={location.pathname.startsWith('/sftp') ? 'sftp' : 'terminal'} />
-          </Sidebar>
+        {sidebarRoute ? (
+          <div
+            aria-hidden={sidebarCollapsed}
+            className={`${styles.navigationPane} ${
+              sidebarCollapsed ? styles.navigationPaneCollapsed : ''
+            }`}
+            inert={sidebarCollapsed}
+          >
+            <ActivityBar
+              compactTop={windowsDesktop}
+              embedded
+              onToggleSidebar={() => setSidebarCollapsed(true)}
+            />
+            <Sidebar navigationInset>
+              <ConnectionList mode={location.pathname.startsWith('/sftp') ? 'sftp' : 'terminal'} />
+            </Sidebar>
+          </div>
         ) : null}
         <section className={styles.workspace}>
-          <div
-            className={`${styles.terminalWorkspace} ${connectionRoute ? '' : styles.hiddenWorkspace}`}
-          >
-            <TerminalWorkspace
+          {sidebarRoute ? (
+            <WorkspaceSessionTabs
+              activeView={connectionRoute ? 'terminal' : 'sftp'}
+              aiOpen={aiOpen}
+              compactTop={windowsDesktop}
+              onToggleAi={toggleAi}
               sidebarCollapsed={sidebarCollapsed}
               onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
             />
+          ) : null}
+          <div
+            className={`${styles.terminalWorkspace} ${connectionRoute ? '' : styles.hiddenWorkspace}`}
+          >
+            <TerminalWorkspace />
           </div>
           {!connectionRoute ? (
             <Outlet
@@ -83,22 +103,12 @@ export function AppShell() {
             />
           ) : null}
           {!settingsRoute ? <StatusBar /> : null}
-          {connectionRoute && !aiOpen ? (
-            <button
-              aria-label="显示 AI 助手"
-              className={styles.aiReveal}
-              onClick={toggleAi}
-              title="显示 AI 助手"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m14 7-5 5 5 5" />
-              </svg>
-            </button>
-          ) : null}
         </section>
         {/* Runtime 常驻以承接后台输出和审批；visible 只控制工作台是否渲染。 */}
-        <AiPanel visible={connectionRoute && aiOpen} />
+        <AiPanel
+          activeView={connectionRoute ? 'terminal' : 'sftp'}
+          visible={sidebarRoute && aiOpen}
+        />
       </div>
     </div>
   );

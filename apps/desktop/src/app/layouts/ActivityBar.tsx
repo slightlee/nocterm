@@ -39,31 +39,53 @@ const navigation = [
   },
 ];
 
-/** 一级导航沿用旧客户端的尺寸、图标与入口顺序。 */
-export function ActivityBar({ compactTop = false }: { compactTop?: boolean }) {
+interface ActivityBarProps {
+  compactTop?: boolean;
+  embedded?: boolean;
+  onToggleSidebar?: () => void;
+}
+
+/** 设置页保留一级导航；工作区的终端与文件入口由各服务器行直接提供。 */
+export function ActivityBar({
+  compactTop = false,
+  embedded = false,
+  onToggleSidebar,
+}: ActivityBarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const handleWindowDrag = useWindowDrag();
 
   return (
     <nav
-      className={`${styles.activityBar} ${compactTop ? styles.compactTop : ''}`}
+      className={`${styles.activityBar} ${compactTop ? styles.compactTop : ''} ${embedded ? styles.embedded : ''}`}
       aria-label="主导航"
       onMouseDown={handleWindowDrag}
     >
       <div className={styles.navItems}>
-        {navigation.map((item) => (
+        {embedded ? (
           <button
-            className={`${styles.navItem} ${location.pathname.startsWith(item.path) ? styles.active : ''}`}
-            key={item.path}
-            onClick={() => navigate(item.path)}
-            title={item.label === '文件' ? 'SFTP 文件管理' : item.label}
+            aria-label="隐藏连接面板"
+            className={`${styles.navItem} ${styles.sidebarToggle}`}
+            onClick={onToggleSidebar}
+            title="隐藏连接面板"
             type="button"
           >
-            {item.icon}
-            <span className={styles.navLabel}>{item.label}</span>
+            <span aria-hidden="true" className={`${styles.toggleIcon} ${styles.toggleIconRight}`} />
           </button>
-        ))}
+        ) : (
+          navigation.map((item) => (
+            <button
+              className={`${styles.navItem} ${location.pathname.startsWith(item.path) ? styles.active : ''}`}
+              key={item.path}
+              onClick={() => navigate(item.path)}
+              title={item.label === '文件' ? 'SFTP 文件管理' : item.label}
+              type="button"
+            >
+              {item.icon}
+              <span className={styles.navLabel}>{item.label}</span>
+            </button>
+          ))
+        )}
       </div>
       <div className={styles.spacer} />
       <div className={styles.bottomSection}>

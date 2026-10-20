@@ -1,6 +1,6 @@
 .page {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: var(--layout-sidebar) minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -10,53 +10,78 @@
 }
 
 .navigation {
+  display: flex;
   min-width: 0;
+  min-height: 0;
+  flex-direction: column;
   border-right: 1px solid var(--border-primary);
-  background: var(--bg-primary);
+  background: var(--rail-bg);
+}
+
+/* 与工作区侧栏的顶部控制行等高，避免 macOS 红绿灯压住设置标题。 */
+.windowInset {
+  height: var(--layout-tab);
+  flex: 0 0 var(--layout-tab);
+}
+
+.compactTop .windowInset {
+  display: none;
 }
 
 .navigationHeader {
   display: flex;
+  height: var(--layout-tab);
+  flex: 0 0 var(--layout-tab);
   align-items: center;
-  height: 52px;
   padding: 0 20px;
-}
-
-.navigationHeader p {
-  display: none;
 }
 
 .navigationHeader h1 {
   margin: 0;
-  font-size: 12px;
-  font-weight: 800;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.navigation nav {
+.navigationList {
   display: grid;
-  gap: 3px;
-  padding: 0 16px 12px;
+  align-content: start;
+  gap: 2px;
+  padding: 0 12px 12px;
 }
 
 .navigationItem {
   display: flex;
   align-items: center;
+  gap: 10px;
   width: 100%;
-  min-height: 42px;
-  padding: 6px 12px;
-  border-radius: var(--radius-md);
+  height: 36px;
+  padding: 0 11px;
+  border-radius: 6px;
   color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 500;
   text-decoration: none;
   transition:
     color var(--dur-normal) var(--ease-out),
     background var(--dur-normal) var(--ease-out);
 }
 
+.navigationItem svg,
+.workspaceLink svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+}
+
 .navigationItem:focus-visible {
   outline: 2px solid var(--border-focus);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
 .navigationItem:hover {
@@ -69,8 +94,41 @@
   background: var(--sidebar-item-selected);
 }
 
+.navigationFooter {
+  padding: 12px;
+  margin-top: auto;
+  border-top: 1px solid var(--border-primary);
+}
+
+.workspaceLink {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 11px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    color var(--dur-normal) var(--ease-out),
+    background var(--dur-normal) var(--ease-out);
+}
+
+.workspaceLink:hover {
+  color: var(--text-primary);
+  background: var(--sidebar-item-hover);
+}
+
+.workspaceLink:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
 .content {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  background: var(--bg-secondary);
 }
