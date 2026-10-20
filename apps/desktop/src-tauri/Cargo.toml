@@ -25,3 +25,11 @@ tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true
 toml.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
+] }
