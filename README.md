@@ -1,92 +1,71 @@
+<div align="center">
+
+<img src="apps/desktop/src-tauri/icons/128x128@2x.png" width="88" alt="Nocterm Logo" />
+
 # Nocterm
 
+**A local-first desktop terminal client for macOS & Windows**
+
+Manage local shells, SSH, SFTP and AI assistance in one place — all connection data and credentials stay on your machine.
+
+English | [简体中文](README.zh-CN.md)
+
 [![GitHub Release](https://img.shields.io/github/v/release/slightlee/nocterm?include_prereleases&sort=semver)](https://github.com/slightlee/nocterm/releases)
+[![CI](https://github.com/slightlee/nocterm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/slightlee/nocterm/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-macOS%2014%2B%20%7C%20Windows-blue)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![Built with](https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20React%2019%20%C2%B7%20Rust-24C8DB)
 
-Nocterm 是一个本地优先的 macOS / Windows 桌面终端客户端，统一管理本地终端、SSH、SFTP 和 AI 辅助操作。连接资料保存在本机 SQLite；选择保存的密码进入系统凭据库；AI Provider 复用用户本机已经安装并登录的 CLI。
+[Download](#-download) · [Features](#-features) · [Development](#-development) · [Documentation](#-documentation)
 
-最新版本、发布通道和发布说明以 [GitHub Releases](https://github.com/slightlee/nocterm/releases) 为准；源码版本由根目录 `package.json` 唯一管理，README 不维护静态版本号。
+</div>
 
-## 当前能力
+---
 
-- 本地终端、多标签、窗口尺寸同步和会话重连；
-- SSH 连接资料、分组、搜索、排序和 OpenSSH Config 导入；
-- 密码、私钥文件和 SSH Agent 认证，主机密钥采用 TOFU 策略；
-- SFTP 双栏浏览、文件操作、上传、下载、进度和取消；
-- 跟随系统、浅色、深色主题及终端字体、配色设置；
-- AI 面板接入 Codex、Claude Code 和 Grok，绑定当前本地或 SSH 终端；
-- AI 结构化服务器诊断、通用命令审批、四级会话权限和脱敏审计。
+## ✨ Features
 
-AI Provider 不直接获得 SSH 凭据，也不能自行切换目标。三个 Provider 通过同一套 Nocterm 工具网关访问当前终端；详细边界见[技术架构](docs/technical-architecture.md)。
+- 🖥️ **Terminal** — local shells with multi-tab sessions; system / light / dark themes; customizable fonts and color schemes
+- 🔗 **SSH** — connection groups, search and OpenSSH config import; password, key file and agent authentication; TOFU host keys; in-process pure Rust implementation, no system `ssh` required
+- 📂 **SFTP** — dual-pane browsing, file operations, uploads and downloads with progress and cancel
+- 🤖 **AI assistance** — connect your local Codex / Claude Code / Grok CLI to the active terminal: structured server diagnostics, command approval and redacted audit logs. **AI providers never touch SSH credentials and cannot switch targets on their own** — all access goes through the Nocterm tool gateway
+- 🔒 **Local-first** — everything runs on your machine, no cloud service required. Connections live in local SQLite; saved passwords go into the OS keychain (macOS Keychain / Windows Credential Manager)
 
-## 下载安装
+## 📦 Download
 
-从 [GitHub Releases](https://github.com/slightlee/nocterm/releases) 下载最新版本，并根据设备选择安装包：
+Grab the latest build from [GitHub Releases](https://github.com/slightlee/nocterm/releases):
 
-- Apple Silicon Mac：`Nocterm_<version>_macos_aarch64.dmg`；
-- Intel Mac：`Nocterm_<version>_macos_x86_64.dmg`；
-- Windows x64：`Nocterm_<version>_windows_x86_64-setup.exe`。
+| Platform          | Package                                      |
+| ----------------- | -------------------------------------------- |
+| Apple Silicon Mac | `Nocterm_<version>_macos_aarch64.dmg`        |
+| Intel Mac         | `Nocterm_<version>_macos_x86_64.dmg`         |
+| Windows x64       | `Nocterm_<version>_windows_x86_64-setup.exe` |
 
-安装前请阅读对应 Release Notes，确认发布通道、签名状态和已知限制，并使用同名 `.sha256` 文件核对安装包。预发布版本只用于其发布说明声明的测试范围。
+> [!NOTE]
+> Read the release notes before installing to confirm the release channel and signing status, and verify the package with the matching `.sha256` file. Pre-release builds are for testing only.
+> The AI panel uses your locally installed and signed-in `codex` / `claude` / `grok` CLI (Grok ≥ 1.0.34). Nocterm does not install or sign in to providers for you.
 
-## 平台与前置条件
+## 🚀 Development
 
-Nocterm 目标平台为 macOS 14+ 和 Windows。源码开发需要：
-
-- Node.js 22；
-- pnpm 11（仓库通过 Corepack 固定版本）；
-- Rust 1.94；
-- 对应平台的 [Tauri 2 系统依赖](https://v2.tauri.app/start/prerequisites/)；
-- macOS 的 Xcode Command Line Tools，或 Windows 的 Microsoft C++ Build Tools 与 WebView2。
-
-AI 面板按需使用本机的 `codex`、`claude` 或 `grok` CLI。CLI 必须能从启动 Nocterm 的环境中找到并已完成登录；Grok 最低支持版本为 `1.0.34`。Nocterm 当前不提供 Provider 安装、登录或可执行文件路径配置。
-
-## 本地开发
+Requirements: Node.js 22 · pnpm 11 (pinned via Corepack) · Rust 1.94 · [Tauri 2 system dependencies](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 corepack pnpm install
-corepack pnpm tauri dev
+corepack pnpm tauri dev      # run the desktop client
+corepack pnpm check          # frontend quality gate
+corepack pnpm cargo:check    # Rust quality gate
 ```
 
-浏览器预览只用于检查不依赖 Tauri IPC 的页面布局：
+## 📚 Documentation
 
-```bash
-corepack pnpm dev
-```
+Full details on the security design, the AI tool-gateway boundary, architecture layering, testing and the release process:
 
-完整质量门禁：
+- [Technical architecture](docs/technical-architecture.md)
+- [Development guide](docs/development.md)
+- [Testing & acceptance](docs/testing.md)
+- [Release process](docs/release-process.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md) — please report vulnerabilities privately, do not open public issues
 
-```bash
-corepack pnpm check
-corepack pnpm cargo:check
-```
+## 📄 License
 
-## 安全与隐私
-
-- 核心终端、SSH、SFTP 和配置能力在本机运行，不依赖 Nocterm 云服务；
-- SQLite 不保存密码和私钥内容；选择保存的密码进入系统凭据库，未保存密码只在有活跃会话时短暂驻留内存，私钥只保存本地文件路径；
-- Provider 仍会按照其自身配置把提示和工具结果发送给对应模型服务；不要把敏感信息交给不信任的 Provider；
-- AI 审计只保存工具、审批和结果元数据，不保存命令、参数、输出、Token、主机或账号；
-- 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告，不要创建公开 Issue。
-
-## 项目结构
-
-```text
-apps/desktop/                  React UI 与 Tauri Host
-crates/nocterm-domain/         领域模型与 Port
-crates/nocterm-application/    用例编排
-crates/nocterm-infrastructure/ SQLite、PTY、SSH、SFTP 与平台 Adapter
-docs/                          架构、开发、测试与发布规范
-```
-
-## 文档
-
-- [技术架构](docs/technical-architecture.md)
-- [开发规范](docs/development.md)
-- [测试与验收](docs/testing.md)
-- [发布流程](docs/release-process.md)
-- [贡献指南](CONTRIBUTING.md)
-- [安全策略](SECURITY.md)
-
-## 许可证
-
-[MIT License](LICENSE)
+[MIT License](LICENSE) © Nocterm contributors
