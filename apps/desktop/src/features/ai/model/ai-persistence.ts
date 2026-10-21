@@ -10,6 +10,9 @@ export function conversationToSnapshot(conversation: AiConversation): AiConversa
     title: conversation.title,
     provider: conversation.provider,
     commandPolicy: conversation.commandPolicy ?? null,
+    targetKind: conversation.target?.kind ?? null,
+    targetId: conversation.target?.id ?? null,
+    targetLabel: conversation.target?.label ?? null,
     createdAtMs: conversation.createdAt,
     updatedAtMs: conversation.updatedAt,
     messages: conversation.messages.map((message) => ({
@@ -29,6 +32,14 @@ export function snapshotToConversation(snapshot: AiConversationSnapshot): AiConv
     title: snapshot.title,
     provider: snapshot.provider,
     commandPolicy: (snapshot.commandPolicy ?? undefined) as AiConversation['commandPolicy'],
+    target:
+      snapshot.targetKind && snapshot.targetId && snapshot.targetLabel
+        ? {
+            kind: snapshot.targetKind,
+            id: snapshot.targetId,
+            label: snapshot.targetLabel,
+          }
+        : null,
     createdAt: snapshot.createdAtMs,
     updatedAt: snapshot.updatedAtMs,
     messages: snapshot.messages.map((message) => {

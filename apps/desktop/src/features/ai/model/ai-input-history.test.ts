@@ -7,6 +7,7 @@ const conversation = (id: string, userMessages: Array<[string, number]>): AiConv
   id,
   title: `会话 ${id}`,
   provider: 'codex',
+  target: { kind: 'ssh', id: '7', label: 'Production' },
   createdAt: 1,
   updatedAt: 1,
   messages: userMessages.map(([content, createdAt]) => ({

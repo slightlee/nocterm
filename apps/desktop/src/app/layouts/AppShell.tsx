@@ -1,8 +1,9 @@
 import { useEffect, useState, type MouseEvent } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { ConnectionList } from '../../features/connections';
 import { AiPanel, useAiStore } from '../../features/ai';
+import { useTerminalStore } from '../../features/terminal';
 import { useTopWindowDoubleClick, useTopWindowDrag } from '../../shared/hooks/useWindowDrag';
 import { isWindowsDesktopRuntime } from '../../shared/lib/desktop-platform';
 import { ActivityBar } from './ActivityBar';
@@ -16,6 +17,7 @@ import styles from './AppShell.module.css';
 /** 旧客户端主布局：一级导航、连接侧栏、终端工作区和状态栏。 */
 export function AppShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const connectionRoute = location.pathname.startsWith('/connections');
   const sidebarRoute = connectionRoute || location.pathname.startsWith('/sftp');
@@ -25,6 +27,7 @@ export function AppShell() {
   const windowsDesktop = isWindowsDesktopRuntime();
   const aiOpen = useAiStore((state) => state.open);
   const toggleAi = useAiStore((state) => state.toggle);
+  const activateTerminal = useTerminalStore((state) => state.activateConnection);
 
   /** 桌面客户端统一禁用 WebView 原生菜单；业务右键菜单仍由后续冒泡事件打开。 */
   const suppressBrowserContextMenu = (event: MouseEvent<HTMLDivElement>) => {
@@ -123,6 +126,10 @@ export function AppShell() {
         {/* Runtime 常驻以承接后台输出和审批；visible 只控制工作台是否渲染。 */}
         <AiPanel
           activeView={connectionRoute ? 'terminal' : 'sftp'}
+          onActivateTerminal={(sessionId) => {
+            activateTerminal(sessionId);
+            navigate('/connections');
+          }}
           visible={sidebarRoute && aiOpen}
         />
       </div>
