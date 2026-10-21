@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { ConnectionList } from '../../features/connections';
@@ -6,6 +6,7 @@ import { AiPanel, useAiStore } from '../../features/ai';
 import { useTerminalStore } from '../../features/terminal';
 import { useTopWindowDoubleClick, useTopWindowDrag } from '../../shared/hooks/useWindowDrag';
 import { isWindowsDesktopRuntime } from '../../shared/lib/desktop-platform';
+import { onAppMenuAction } from '../platform/app-menu-client';
 import { ActivityBar } from './ActivityBar';
 import { Sidebar } from './Sidebar';
 import { StatusBar } from './StatusBar';
@@ -29,6 +30,14 @@ export function AppShell() {
   const toggleAi = useAiStore((state) => state.toggle);
   const activateTerminal = useTerminalStore((state) => state.activateConnection);
 
+  const createLocalTerminal = useCallback(() => {
+    const { sessions, openLocalSession } = useTerminalStore.getState();
+    const localCount = sessions.filter((session) => session.kind === 'local').length;
+    const name = localCount === 0 ? '本地终端' : `本地终端 ${localCount + 1}`;
+    openLocalSession(`local:extra:${crypto.randomUUID()}`, name);
+    navigate('/connections');
+  }, [navigate]);
+
   /** 桌面客户端统一禁用 WebView 原生菜单；业务右键菜单仍由后续冒泡事件打开。 */
   const suppressBrowserContextMenu = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -43,6 +52,56 @@ export function AppShell() {
     window.addEventListener('resize', collapseWhenNeeded);
     return () => window.removeEventListener('resize', collapseWhenNeeded);
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void onAppMenuAction((action) => {
+      switch (action) {
+        case 'open-about':
+          navigate('/settings/about');
+          break;
+        case 'open-settings':
+          navigate('/settings');
+          break;
+        case 'new-local-terminal':
+          createLocalTerminal();
+          break;
+        case 'toggle-sidebar':
+          if (!sidebarRoute) {
+            setSidebarCollapsed(false);
+            navigate('/connections');
+          } else {
+            setSidebarCollapsed((collapsed) => !collapsed);
+          }
+          break;
+        case 'toggle-ai':
+          if (!sidebarRoute) {
+            if (!aiOpen) toggleAi();
+            navigate('/connections');
+          } else {
+            toggleAi();
+          }
+          break;
+        case 'close-current-tab':
+          // 关闭操作由 WorkspaceSessionTabs 处理，以复用 SFTP 传输确认和资源清理。
+          break;
+      }
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch(() => {
+        console.error('App menu subscription failed');
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [aiOpen, createLocalTerminal, navigate, sidebarRoute, toggleAi]);
 
   return (
     <div
@@ -104,6 +163,7 @@ export function AppShell() {
               aiOpen={aiOpen}
               compactTop={windowsDesktop}
               onToggleAi={toggleAi}
+              onCreateLocalTerminal={createLocalTerminal}
               sidebarCollapsed={sidebarCollapsed}
               onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
             />

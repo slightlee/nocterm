@@ -99,6 +99,7 @@ shared/                 无业务归属的组件、样式和工具
 - 业务 UI 不直接调用 `@tauri-apps/api`，IPC 收口到 Feature `api/`；
 - Zustand 只管理 UI 状态，不访问数据库、凭据或子进程；
 - 高频输出使用 event，状态变更使用 command，订阅必须可释放。
+- macOS 菜单由 desktop host 的平台 Adapter 构建，标准编辑和窗口动作继续使用原生菜单角色；只保留产品需要的系统菜单项，并通过 `Info.plist` 和 `zh-Hans.lproj` 资源声明简体中文；会话、设置和面板动作通过白名单事件交给应用壳，复用现有业务生命周期。
 
 ### 3.2 Rust 边界
 
@@ -124,6 +125,7 @@ Domain 不依赖 Tauri、SQLite、文件系统或操作系统 API。Infrastructu
 | 本地终端   | portable-pty                                                     | macOS PTY 与 Windows ConPTY                |
 | SSH / SFTP | russh、russh-sftp                                                | 进程内认证、终端、exec 和文件传输          |
 | 凭据       | keyring                                                          | macOS Keychain、Windows Credential Manager |
+| 原生菜单   | Tauri Menu                                                       | macOS 中文菜单、系统角色与应用动作分发     |
 | 质量门禁   | ESLint、Prettier、Stylelint、Vitest、rustfmt、Clippy、Cargo Test | 静态检查、测试和构建                       |
 
 具体版本由 `package.json`、`pnpm-lock.yaml`、`Cargo.toml` 和 `Cargo.lock` 唯一确定。

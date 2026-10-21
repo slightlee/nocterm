@@ -22,9 +22,13 @@ pub fn run() {
     if let Some(endpoint) = mcp_stdio_args() {
         std::process::exit(commands::ai_bridge::run_stdio(&endpoint));
     }
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+    #[cfg(target_os = "macos")]
+    let builder = platform::macos_menu::configure(builder);
+
+    let app = builder
         .setup(|app| {
             let database_path = app.path().app_data_dir()?.join("nocterm.db");
             let repository = Arc::new(
@@ -59,6 +63,8 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 platform::windows_icon::attach_dpi_aware_icon(&window);
             }
+            #[cfg(target_os = "macos")]
+            platform::macos_menu::finish_setup(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
