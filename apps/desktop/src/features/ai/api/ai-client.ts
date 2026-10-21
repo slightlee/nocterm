@@ -81,6 +81,9 @@ export interface AiConversationSnapshot {
   title: string;
   provider: AiProviderId;
   commandPolicy: string | null;
+  targetKind: 'local' | 'ssh' | null;
+  targetId: string | null;
+  targetLabel: string | null;
   createdAtMs: number;
   updatedAtMs: number;
   messages: AiMessageSnapshot[];

@@ -10,7 +10,7 @@ use nocterm_domain::settings::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// 列顺序即 `map_profile` 的下标契约：新增列只能追加在末尾，避免改动既有下标。
 const PROFILE_COLUMNS: &str = "connection_profiles.id, connection_profiles.name, connection_profiles.host, connection_profiles.port, connection_profiles.username, connection_profiles.authentication, connection_profiles.created_at, connection_profiles.updated_at,
@@ -719,6 +719,25 @@ fn migrate(connection: &mut Connection) -> Result<(), ConnectionRepositoryError>
             .map_err(repository_error)?;
     }
 
+    if current_version < 8 {
+        // 旧会话无法可靠推断原终端，新增列保持 NULL；前端将其作为未绑定只读历史，
+        // 禁止在当前活动终端中静默续聊。目标字段不参与执行授权。
+        transaction
+            .execute_batch(
+                "ALTER TABLE ai_conversations ADD COLUMN target_kind TEXT CHECK (
+                     target_kind IS NULL OR target_kind IN ('local', 'ssh')
+                 );
+                 ALTER TABLE ai_conversations ADD COLUMN target_id TEXT CHECK (
+                     target_id IS NULL OR length(target_id) BETWEEN 1 AND 128
+                 );
+                 ALTER TABLE ai_conversations ADD COLUMN target_label TEXT CHECK (
+                     target_label IS NULL OR length(target_label) BETWEEN 1 AND 200
+                 );
+                 INSERT INTO schema_migrations (version) VALUES (8);",
+            )
+            .map_err(repository_error)?;
+    }
+
     transaction.commit().map_err(repository_error)
 }
 
@@ -867,7 +886,7 @@ mod tests {
             )
             .expect("read audit table");
 
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         assert_eq!(table, "ai_tool_audit_events");
     }
 
@@ -902,8 +921,65 @@ mod tests {
             )
             .expect("read audit table");
 
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         assert_eq!(table, "ai_tool_audit_events");
+    }
+
+    #[test]
+    fn upgrades_v7_ai_conversations_without_changing_existing_history() {
+        let mut connection = Connection::open_in_memory().expect("open database");
+        configure_connection(&connection).expect("configure");
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                     version INTEGER PRIMARY KEY,
+                     applied_at INTEGER NOT NULL DEFAULT (unixepoch())
+                 );
+                 CREATE TABLE ai_conversations (
+                     id TEXT PRIMARY KEY NOT NULL,
+                     title TEXT NOT NULL,
+                     provider TEXT NOT NULL,
+                     command_policy TEXT,
+                     created_at_ms INTEGER NOT NULL,
+                     updated_at_ms INTEGER NOT NULL
+                 );
+                 CREATE TABLE ai_messages (
+                     id TEXT PRIMARY KEY NOT NULL,
+                     conversation_id TEXT NOT NULL REFERENCES ai_conversations (id) ON DELETE CASCADE,
+                     role TEXT NOT NULL,
+                     content TEXT NOT NULL,
+                     parts_json TEXT,
+                     created_at_ms INTEGER NOT NULL
+                 );
+                 INSERT INTO schema_migrations (version) VALUES (7);
+                 INSERT INTO ai_conversations
+                     (id, title, provider, command_policy, created_at_ms, updated_at_ms)
+                 VALUES ('legacy', '旧会话', 'codex', 'auto_safe', 1000, 2000);
+                 INSERT INTO ai_messages
+                     (id, conversation_id, role, content, parts_json, created_at_ms)
+                 VALUES ('message-1', 'legacy', 'user', '保留这条消息', NULL, 1500);",
+            )
+            .expect("seed v7 schema and history");
+
+        migrate(&mut connection).expect("migrate v7 database");
+
+        let row: (String, Option<String>, Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT title, target_kind, target_id, target_label
+                 FROM ai_conversations WHERE id = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read migrated history");
+        assert_eq!(row, ("旧会话".into(), None, None, None));
+        let message: String = connection
+            .query_row(
+                "SELECT content FROM ai_messages WHERE conversation_id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated message");
+        assert_eq!(message, "保留这条消息");
     }
 
     #[test]

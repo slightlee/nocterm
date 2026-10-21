@@ -53,7 +53,9 @@ fn ai_conversation_error(
 
 #[cfg(test)]
 mod tests {
-    use nocterm_domain::ai_conversation::{AiMessageRecord, AiMessageRole};
+    use nocterm_domain::ai_conversation::{
+        AiConversationTargetRecord, AiMessageRecord, AiMessageRole,
+    };
 
     use super::*;
 
@@ -88,6 +90,11 @@ mod tests {
             title: "排查磁盘".into(),
             provider: "codex".into(),
             command_policy: Some("auto_safe".into()),
+            target: Some(AiConversationTargetRecord {
+                kind: "ssh".into(),
+                id: "7".into(),
+                label: "Production".into(),
+            }),
             created_at_ms: 1_000,
             updated_at_ms: 2_000,
             messages: vec![AiMessageRecord {

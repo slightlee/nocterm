@@ -1,8 +1,8 @@
 //! SQLite AI 会话历史适配器。迁移仍由统一数据库入口负责，本模块只实现会话快照的读写与删除。
 
 use nocterm_domain::ai_conversation::{
-    AiConversationRecord, AiConversationRepository, AiConversationRepositoryError, AiMessageRecord,
-    AiMessageRole,
+    AiConversationRecord, AiConversationRepository, AiConversationRepositoryError,
+    AiConversationTargetRecord, AiMessageRecord, AiMessageRole,
 };
 use rusqlite::params;
 
@@ -20,7 +20,8 @@ impl AiConversationRepository for SqliteConnectionRepository {
             .map_err(|_| ai_conversation_error("database lock poisoned"))?;
         let mut statement = connection
             .prepare(
-                "SELECT id, title, provider, command_policy, created_at_ms, updated_at_ms
+                "SELECT id, title, provider, command_policy, created_at_ms, updated_at_ms,
+                        target_kind, target_id, target_label
                  FROM ai_conversations
                  ORDER BY updated_at_ms DESC",
             )
@@ -56,14 +57,18 @@ impl AiConversationRepository for SqliteConnectionRepository {
         transaction
             .execute(
                 "INSERT INTO ai_conversations
-                     (id, title, provider, command_policy, created_at_ms, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     (id, title, provider, command_policy, created_at_ms, updated_at_ms,
+                      target_kind, target_id, target_label)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(id) DO UPDATE SET
                      title = excluded.title,
                      provider = excluded.provider,
                      command_policy = excluded.command_policy,
                      created_at_ms = excluded.created_at_ms,
-                     updated_at_ms = excluded.updated_at_ms",
+                     updated_at_ms = excluded.updated_at_ms,
+                     target_kind = excluded.target_kind,
+                     target_id = excluded.target_id,
+                     target_label = excluded.target_label",
                 params![
                     conversation.id,
                     conversation.title,
@@ -71,6 +76,18 @@ impl AiConversationRepository for SqliteConnectionRepository {
                     conversation.command_policy,
                     conversation.created_at_ms,
                     conversation.updated_at_ms,
+                    conversation
+                        .target
+                        .as_ref()
+                        .map(|target| target.kind.as_str()),
+                    conversation
+                        .target
+                        .as_ref()
+                        .map(|target| target.id.as_str()),
+                    conversation
+                        .target
+                        .as_ref()
+                        .map(|target| target.label.as_str()),
                 ],
             )
             .map_err(ai_conversation_error)?;
@@ -152,11 +169,26 @@ impl SqliteConnectionRepository {
 }
 
 fn map_conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiConversationRecord> {
+    let target_kind = row.get::<_, Option<String>>(6)?;
+    let target_id = row.get::<_, Option<String>>(7)?;
+    let target_label = row.get::<_, Option<String>>(8)?;
+    let target = match (target_kind, target_id, target_label) {
+        (None, None, None) => None,
+        (Some(kind), Some(id), Some(label)) => Some(AiConversationTargetRecord { kind, id, label }),
+        _ => {
+            return Err(rusqlite::Error::InvalidColumnType(
+                6,
+                "target binding".into(),
+                rusqlite::types::Type::Null,
+            ));
+        }
+    };
     Ok(AiConversationRecord {
         id: row.get(0)?,
         title: row.get(1)?,
         provider: row.get(2)?,
         command_policy: row.get(3)?,
+        target,
         created_at_ms: row.get(4)?,
         updated_at_ms: row.get(5)?,
         // 消息在 list 主流程中单独装载，这里先留空。
@@ -180,6 +212,11 @@ mod tests {
             title: "排查磁盘".into(),
             provider: "codex".into(),
             command_policy: Some("auto_safe".into()),
+            target: Some(AiConversationTargetRecord {
+                kind: "ssh".into(),
+                id: "7".into(),
+                label: "Production".into(),
+            }),
             created_at_ms: 1_000,
             updated_at_ms: 2_000,
             messages: vec![
@@ -215,6 +252,7 @@ mod tests {
         assert_eq!(listed[0].id, "conv-2");
         assert_eq!(listed[1].id, "conv-1");
         assert_eq!(listed[1].messages.len(), 2);
+        assert_eq!(listed[1].target, conversation("conv-1").target);
         assert_eq!(listed[1].messages[0].role, AiMessageRole::User);
         assert_eq!(
             listed[1].messages[1].parts_json.as_deref(),

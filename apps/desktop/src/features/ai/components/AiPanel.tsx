@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -7,19 +8,34 @@ import {
   type KeyboardEvent,
 } from 'react';
 
-import { useTerminalStore } from '../../terminal';
+import { useTerminalStore, type TerminalSessionId } from '../../terminal';
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import { resetAiConversation } from '../api/ai-client';
-import { useAiRuntime } from '../hooks/use-ai-runtime';
 import { useAiPersistence } from '../hooks/use-ai-persistence';
-import { useAiStore } from '../model/ai-store';
+import { useAiRuntime } from '../hooks/use-ai-runtime';
+import { readAiAttachment, type AiAttachment } from '../model/ai-attachment';
 import {
   buildInputHistory,
   navigateInputHistory,
   type AiHistoryBrowseState,
 } from '../model/ai-input-history';
-import { readAiAttachment, type AiAttachment } from '../model/ai-attachment';
 import {
+  conversationTargetKey,
+  resolveActiveAiConversation,
+  resolveAiComposerState,
+  useAiStore,
+} from '../model/ai-store';
+import { canBeginAiConversation, resolveAiTaskNavigation } from '../model/ai-panel-state';
+import {
+  findAiRuntimeTaskByConversation,
+  findAiRuntimeTaskByTarget,
+  listBackgroundAiRuntimeTasks,
+  listCompletedAiTaskResults,
+  type AiTaskNavigationSource,
+} from '../model/ai-runtime-task';
+import {
+  aiConversationTargetKey,
+  aiConversationTargetsEqual,
   isAiTerminalTargetReady,
   resolveAiWorkspaceTarget,
   type AiWorkspaceView,
@@ -29,25 +45,29 @@ import { AiComposer } from './AiComposer';
 import { AiConversationView } from './AiConversationView';
 import { AiHistoryMenu } from './AiHistoryMenu';
 import { AiPanelToggle } from './AiPanelToggle';
+import { AiTaskMenu } from './AiTaskMenu';
 import styles from './AiPanel.module.css';
 
 interface AiPanelProps {
   activeView: AiWorkspaceView;
+  onActivateTerminal: (sessionId: TerminalSessionId) => void;
   visible: boolean;
 }
 
-/** AI 工作台是 Agent 的宿主界面；组件常驻，折叠或切页不会丢失任务事件。 */
-export function AiPanel({ activeView, visible }: AiPanelProps) {
+/** AI 工作台常驻接收任务事件；Tab 切换只选择目标视图，不创建空会话。 */
+export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProps) {
   const sessions = useTerminalStore((state) => state.sessions);
   const activeId = useTerminalStore((state) => state.activeId);
+  const recentRemoteSessionIds = useTerminalStore((state) => state.recentRemoteSessionIds);
   const terminalStatuses = useTerminalStore((state) => state.statuses);
   const conversations = useAiStore((state) => state.conversations);
-  const activeConversationId = useAiStore((state) => state.activeConversationId);
-  const draft = useAiStore((state) => state.draft);
+  const activeConversationIds = useAiStore((state) => state.activeConversationIds);
+  const composers = useAiStore((state) => state.composers);
   const setOpen = useAiStore((state) => state.setOpen);
   const setProvider = useAiStore((state) => state.setProvider);
   const setCommandPolicy = useAiStore((state) => state.setCommandPolicy);
   const setDraft = useAiStore((state) => state.setDraft);
+  const beginConversation = useAiStore((state) => state.beginConversation);
   const addMessage = useAiStore((state) => state.addMessage);
   const deleteMessage = useAiStore((state) => state.deleteMessage);
   const clearMessages = useAiStore((state) => state.clearMessages);
@@ -55,19 +75,26 @@ export function AiPanel({ activeView, visible }: AiPanelProps) {
   const deleteConversation = useAiStore((state) => state.deleteConversation);
   const selectConversation = useAiStore((state) => state.selectConversation);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [taskMenuOpen, setTaskMenuOpen] = useState(false);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
-  const [attachment, setAttachment] = useState<AiAttachment | null>(null);
-  const [attachmentLoading, setAttachmentLoading] = useState(false);
+  const [inspectedConversationId, setInspectedConversationId] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<Record<string, AiAttachment | null>>({});
+  const [attachmentLoadingTargetKey, setAttachmentLoadingTargetKey] = useState<string | null>(null);
+  const [panelNotices, setPanelNotices] = useState<Record<string, string | null>>({});
+  const [persistenceNotice, setPersistenceNotice] = useState<string | null>(null);
+  const [taskNavigationNotice, setTaskNavigationNotice] = useState<{
+    conversationId: string;
+    message: string;
+  } | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // 历史输入浏览状态；null 表示不在浏览中，任何手动编辑都会退出浏览。
+  // 历史输入浏览状态属于当前目标；Tab 变化时必须清空，不能把 A 的游标带到 B。
   const historyBrowserRef = useRef<AiHistoryBrowseState | null>(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeId) ?? null,
     [activeId, sessions]
   );
-  // 目标绑定必须以终端后端确认的 connected 为准；标签存在不等于 SSH/PTY 已认证。
   const activeSessionStatus = activeSession
     ? (terminalStatuses[String(activeSession.id)] ?? 'connecting')
     : 'idle';
@@ -75,60 +102,157 @@ export function AiPanel({ activeView, visible }: AiPanelProps) {
     () => resolveAiWorkspaceTarget(activeView, activeSession, activeSessionStatus),
     [activeSession, activeSessionStatus, activeView]
   );
-  const targetReady = isAiTerminalTargetReady(workspaceTarget);
-  const targetUnavailableMessage =
-    activeView === 'sftp' ? '文件会话暂未接入 AI 执行上下文' : '请先连接本地终端或远程服务器';
-  const activeConversation =
-    conversations.find((item) => item.id === activeConversationId) ?? conversations[0];
-  const conversationId = activeConversation?.id ?? activeConversationId;
-  const provider = activeConversation?.provider ?? 'codex';
-  const commandPolicy: AiCommandPolicy = activeConversation?.commandPolicy ?? 'auto_safe';
+  const workspaceTargetKey = workspaceTarget.binding
+    ? aiConversationTargetKey(workspaceTarget.binding)
+    : null;
+  const panelViewKey = workspaceTargetKey ?? `view:${activeView}`;
+  const targetConversation = useMemo(
+    () =>
+      workspaceTargetKey
+        ? resolveActiveAiConversation(conversations, activeConversationIds, workspaceTargetKey)
+        : null,
+    [activeConversationIds, conversations, workspaceTargetKey]
+  );
+  const inspectedConversation = inspectedConversationId
+    ? (conversations.find((conversation) => conversation.id === inspectedConversationId) ?? null)
+    : null;
+  const activeConversation = inspectedConversation ?? targetConversation;
+  const activeConversationId = activeConversation?.id ?? null;
+  const viewingCurrentTarget = activeConversation
+    ? aiConversationTargetsEqual(activeConversation.target, workspaceTarget.binding)
+    : Boolean(workspaceTarget.binding);
+  const composerState = workspaceTargetKey
+    ? resolveAiComposerState(composers, workspaceTargetKey)
+    : { draft: '', provider: 'codex' as const, commandPolicy: 'auto_safe' as const };
+  const provider = activeConversation?.provider ?? composerState.provider;
+  const commandPolicy: AiCommandPolicy =
+    activeConversation?.commandPolicy ?? composerState.commandPolicy;
+  const currentTargetProvider = targetConversation?.provider ?? composerState.provider;
   const selectedProvider = AI_PROVIDERS.find((item) => item.id === provider) ?? AI_PROVIDERS[0];
   const messages = activeConversation?.messages ?? [];
+  const draft = inspectedConversation ? '' : composerState.draft;
+  const attachment =
+    workspaceTargetKey && !inspectedConversation ? (attachments[workspaceTargetKey] ?? null) : null;
+  const attachmentLoading = attachmentLoadingTargetKey === workspaceTargetKey;
+  const targetReady = viewingCurrentTarget && isAiTerminalTargetReady(workspaceTarget);
   const {
-    notice,
-    setNotice,
-    canRetryQuestion,
-    runningSessionId,
-    streamText,
-    runParts,
-    pendingApproval,
-    approvalSubmitting,
+    tasks,
+    completedTaskResults,
+    presentations,
+    globalNotice,
     providerAvailability,
     sendQuestion,
     resolveApproval,
     requestSessionStop,
-    resetPresentation,
+    markTaskResultRead,
+    markAllTaskResultsRead,
+    clearConversationPresentation,
   } = useAiRuntime({ addMessage });
-  // 会话历史持久化：启动恢复 + 变更写盘；失败提示与运行时共用同一个通知位。
-  useAiPersistence({ onError: setNotice });
-  // 失败提示跟随最后一条提问展示，让“重新发送”与被重发的消息在视觉上绑定。
-  const lastUserMessageId = canRetryQuestion
+  useAiPersistence({ onError: setPersistenceNotice });
+
+  const activeTask = findAiRuntimeTaskByConversation(tasks, activeConversationId);
+  const currentTargetTask = findAiRuntimeTaskByTarget(tasks, workspaceTargetKey);
+  const backgroundTasks = listBackgroundAiRuntimeTasks(
+    tasks,
+    workspaceTargetKey,
+    activeConversationId
+  );
+  const unreadTaskResults = listCompletedAiTaskResults(completedTaskResults).filter(
+    (result) => !(visible && result.conversationId === activeConversationId)
+  );
+  const taskAttentionCount = backgroundTasks.length + unreadTaskResults.length;
+  const taskAttentionBadge = taskAttentionCount > 99 ? '99+' : taskAttentionCount;
+  const runningConversationIds = Object.values(tasks).map((task) => task.conversationId);
+  const runningConversationIdSet = new Set(runningConversationIds);
+  const activePresentation = activeConversationId ? presentations[activeConversationId] : undefined;
+  const currentTargetBusyElsewhere = Boolean(currentTargetTask && !activeTask);
+  const panelNotice = panelNotices[panelViewKey] ?? persistenceNotice;
+  const visibleNotice =
+    activeTask?.notice ??
+    activePresentation?.notice ??
+    (taskNavigationNotice?.conversationId === activeConversationId
+      ? taskNavigationNotice.message
+      : null) ??
+    globalNotice ??
+    panelNotice;
+  const lastUserMessageId = activePresentation?.canRetryQuestion
     ? [...messages].reverse().find((message) => message.role === 'user')?.id
     : undefined;
 
+  useEffect(() => {
+    // 同一 SSH 连接的多个终端 Tab 共享 target key，因此不会误清其会话视图。
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 目标身份切换必须原子退出跨目标历史查看态。
+    setInspectedConversationId(null);
+    setHistoryOpen(false);
+    setTaskMenuOpen(false);
+    setProviderMenuOpen(false);
+    setTaskNavigationNotice(null);
+    historyBrowserRef.current = null;
+  }, [panelViewKey]);
+
+  useEffect(() => {
+    if (!visible || !activeConversationId || !completedTaskResults[activeConversationId]) return;
+    markTaskResultRead(activeConversationId);
+  }, [activeConversationId, completedTaskResults, markTaskResultRead, visible]);
+
+  useEffect(() => {
+    if (taskAttentionCount > 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 入口消失时必须同步关闭浮层，避免后续任务自动展开。
+    setTaskMenuOpen(false);
+  }, [taskAttentionCount]);
+
   if (!visible) return null;
+
+  const targetUnavailableMessage = (() => {
+    if (activeConversation && !viewingCurrentTarget) {
+      return activeConversation.target
+        ? `该会话绑定 ${activeConversation.target.label}，请切回对应终端`
+        : '旧版历史没有终端绑定，只可查看';
+    }
+    if (activeView === 'sftp') return '文件会话暂未接入 AI 执行上下文';
+    if (!workspaceTarget.binding) return '请先连接本地终端或远程服务器';
+    if (activeSessionStatus === 'connecting') return '终端连接完成后才能发送请求';
+    if (activeSessionStatus === 'error') return '请先恢复终端连接';
+    return '当前终端不可用';
+  })();
+
+  const clearCurrentAttachment = () => {
+    if (!workspaceTargetKey) return;
+    setAttachments((current) => ({ ...current, [workspaceTargetKey]: null }));
+  };
+
+  /** 异步操作必须把结果写回发起操作的目标，不能跟随之后切换到的 Tab。 */
+  const setTargetPanelNotice = (targetKey: string, message: string | null) => {
+    setPanelNotices((current) => ({ ...current, [targetKey]: message }));
+  };
+
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    if (runningSessionId) return;
+    if (currentTargetTask || !workspaceTargetKey || !workspaceTarget.binding) return;
     const content = draft.trim();
     if (!content && !attachment) return;
     if (!targetReady) {
-      setNotice(`${targetUnavailableMessage}，暂时无法发送新请求。`);
+      setTargetPanelNotice(panelViewKey, `${targetUnavailableMessage}，暂时无法发送新请求。`);
       return;
     }
+
     const selectedAttachment = attachment;
     const question = content || `请分析附件：${selectedAttachment?.name ?? '未命名文件'}`;
     const visibleMessage = selectedAttachment
       ? `${question}\n\n附件：${selectedAttachment.name}`
       : question;
-    addMessage('user', visibleMessage);
-    setDraft('');
-    setAttachment(null);
+    const conversationId =
+      activeConversation?.id ??
+      createConversation(workspaceTarget.binding, provider, commandPolicy);
+    const history = activeConversation?.messages ?? [];
+    addMessage(conversationId, 'user', visibleMessage);
+    setDraft(workspaceTargetKey, '');
+    clearCurrentAttachment();
+    setTargetPanelNotice(panelViewKey, null);
     sendQuestion({
       question,
       attachment: selectedAttachment,
-      history: messages,
+      history,
       conversationId,
       provider,
       target: workspaceTarget,
@@ -136,160 +260,246 @@ export function AiPanel({ activeView, visible }: AiPanelProps) {
     });
   };
 
-  /** 失败重试：撤销本轮消息（最后一条提问及其后的残留输出），再按原话重新发送。 */
+  /** 失败重试只能回到原目标和原会话；目标不匹配时禁止复制上下文执行。 */
   const retryLastQuestion = () => {
-    if (runningSessionId) return;
+    if (currentTargetTask || !activeConversation || !targetReady) return;
     let lastUserIndex = -1;
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i]?.role === 'user') {
-        lastUserIndex = i;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === 'user') {
+        lastUserIndex = index;
         break;
       }
     }
     const retried = lastUserIndex >= 0 ? messages[lastUserIndex] : undefined;
     if (!retried) return;
-    if (!targetReady) {
-      setNotice(`${targetUnavailableMessage}，暂时无法重新发送。`);
-      return;
-    }
-    // 附件正文不落盘、无法随重试重读，只发送文本部分并去掉“附件：名称”标记。
     const question = retried.content.replace(/\n\n附件：[^\n]*$/, '');
-    messages.slice(lastUserIndex).forEach((message) => deleteMessage(message.id));
-    addMessage('user', question);
+    messages
+      .slice(lastUserIndex)
+      .forEach((message) => deleteMessage(activeConversation.id, message.id));
+    addMessage(activeConversation.id, 'user', question);
     sendQuestion({
       question,
       attachment: null,
       history: messages.slice(0, lastUserIndex),
-      conversationId,
+      conversationId: activeConversation.id,
       provider,
       target: workspaceTarget,
       commandPolicy,
     });
   };
 
-  // 用户手动编辑一律退出历史浏览；导航回填直接走 setDraft，不经过这里。
   const handleDraftChange = (value: string) => {
+    if (!workspaceTargetKey) return;
     historyBrowserRef.current = null;
-    setDraft(value);
+    setDraft(workspaceTargetKey, value);
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // IME 组字期间的按键属于拼音输入流程，统一不拦截（也避免组字回车误发送）。
-    if (event.nativeEvent.isComposing) return;
+    if (!workspaceTargetKey || event.nativeEvent.isComposing) return;
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
       historyBrowserRef.current = null;
       submit();
       return;
     }
-    // 浏览中按 Esc 取消翻页并还原进入前的草稿；必须在方向键过滤之前判断。
     if (event.key === 'Escape' && historyBrowserRef.current !== null) {
       event.preventDefault();
-      setDraft(historyBrowserRef.current.savedDraft);
+      setDraft(workspaceTargetKey, historyBrowserRef.current.savedDraft);
       historyBrowserRef.current = null;
       return;
     }
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
 
-    // 方向键路径统一读取 store 最新快照：快速连按可能命中重渲染前的旧闭包，
-    // 用闭包 draft 回填会把刚还原的草稿覆盖成过期值。
     const latestState = useAiStore.getState();
+    const latestComposer = resolveAiComposerState(latestState.composers, workspaceTargetKey);
+    const entries = buildInputHistory(
+      latestState.conversations.filter(
+        (conversation) => conversationTargetKey(conversation) === workspaceTargetKey
+      )
+    );
     const browsing = historyBrowserRef.current !== null;
-    // 光标位置判断（Slack 式）：只有光标在第一行按 ↑ 才进入浏览，
-    // 多行编辑的光标移动不受影响；已在浏览中则 ↑↓ 始终继续导航，
-    // 浏览外的 ↓ 保持原生行为（回退只由浏览态内的 ↓ 完成）。
     if (!browsing) {
       if (event.key === 'ArrowDown') return;
       const { selectionStart } = event.currentTarget;
-      if (latestState.draft.slice(0, selectionStart).includes('\n')) return;
-      const entries = buildInputHistory(latestState.conversations);
-      if (entries.length === 0) return;
+      if (latestComposer.draft.slice(0, selectionStart).includes('\n') || entries.length === 0)
+        return;
       event.preventDefault();
-      const step = navigateInputHistory(null, entries, latestState.draft, 'up');
+      const step = navigateInputHistory(null, entries, latestComposer.draft, 'up');
       historyBrowserRef.current = step.browser;
-      setDraft(step.text);
+      setDraft(workspaceTargetKey, step.text);
       return;
     }
 
     event.preventDefault();
     const step = navigateInputHistory(
       historyBrowserRef.current,
-      buildInputHistory(latestState.conversations),
-      latestState.draft,
+      entries,
+      latestComposer.draft,
       event.key === 'ArrowUp' ? 'up' : 'down'
     );
     historyBrowserRef.current = step.browser;
-    setDraft(step.text);
+    setDraft(workspaceTargetKey, step.text);
   };
 
   const handleAttachmentChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file) return;
+    if (!file || !workspaceTargetKey || !viewingCurrentTarget) return;
 
-    setAttachmentLoading(true);
+    const targetKey = workspaceTargetKey;
+    setAttachmentLoadingTargetKey(targetKey);
     void readAiAttachment(file)
       .then((nextAttachment) => {
-        setAttachment(nextAttachment);
-        setNotice(null);
+        setAttachments((current) => ({ ...current, [targetKey]: nextAttachment }));
+        setTargetPanelNotice(targetKey, null);
       })
       .catch((error: unknown) => {
-        setAttachment(null);
-        setNotice(error instanceof Error ? error.message : '读取附件失败。');
+        setAttachments((current) => ({ ...current, [targetKey]: null }));
+        setTargetPanelNotice(targetKey, error instanceof Error ? error.message : '读取附件失败。');
       })
-      .finally(() => setAttachmentLoading(false));
+      .finally(() =>
+        setAttachmentLoadingTargetKey((current) => (current === targetKey ? null : current))
+      );
   };
 
-  // 浏览器预览没有 Tauri IPC；会话 UI 仍可操作，Provider 运行时只在桌面端重置。
-  const resetProviderConversation = async (id: string): Promise<boolean> => {
+  const resetProviderConversation = async (id: string, noticeKey: string): Promise<boolean> => {
     if (!isDesktopRuntime()) return true;
     try {
       await resetAiConversation(id);
       return true;
     } catch (error: unknown) {
-      setNotice(error instanceof Error ? error.message : '重置 AI 会话失败。');
+      setTargetPanelNotice(
+        noticeKey,
+        error instanceof Error ? error.message : '重置 AI 会话失败。'
+      );
       return false;
     }
   };
 
   const handleProviderChange = async (nextProvider: AiProviderId) => {
-    if (nextProvider === provider) {
+    if (
+      !workspaceTargetKey ||
+      !viewingCurrentTarget ||
+      currentTargetTask ||
+      nextProvider === provider
+    ) {
       setProviderMenuOpen(false);
       return;
     }
-    if (!(await resetProviderConversation(conversationId))) return;
-    setProvider(nextProvider);
+    if (
+      activeConversation &&
+      !(await resetProviderConversation(activeConversation.id, panelViewKey))
+    ) {
+      return;
+    }
+    setProvider(workspaceTargetKey, activeConversationId, nextProvider);
     setProviderMenuOpen(false);
   };
 
   const handleCreateConversation = async () => {
-    if (runningSessionId) return;
-    if (!(await resetProviderConversation(conversationId))) return;
-    createConversation();
+    if (
+      !workspaceTargetKey ||
+      !workspaceTarget.binding ||
+      !canBeginAiConversation(workspaceTargetKey, tasks)
+    ) {
+      return;
+    }
+    if (
+      activeConversation &&
+      !runningConversationIdSet.has(activeConversation.id) &&
+      !(await resetProviderConversation(activeConversation.id, panelViewKey))
+    ) {
+      return;
+    }
+    // 新会话可沿用当前目标的 Provider，但权限必须恢复为默认的“变更前确认”。
+    beginConversation(workspaceTargetKey, currentTargetProvider, 'auto_safe');
+    setInspectedConversationId(null);
     setHistoryOpen(false);
+    setTaskMenuOpen(false);
     setProviderMenuOpen(false);
-    setAttachment(null);
-    resetPresentation();
+    clearCurrentAttachment();
     composerRef.current?.focus();
   };
 
   const handleClearConversation = async () => {
-    if (!(await resetProviderConversation(conversationId))) return;
-    clearMessages();
+    if (!activeConversation || runningConversationIdSet.has(activeConversation.id)) return;
+    if (!(await resetProviderConversation(activeConversation.id, panelViewKey))) return;
+    clearMessages(activeConversation.id);
+    clearConversationPresentation(activeConversation.id);
   };
 
   const handleSelectConversation = async (id: string) => {
-    if (id !== conversationId && !(await resetProviderConversation(conversationId))) return;
-    selectConversation(id);
-    setAttachment(null);
+    const selected = conversations.find((conversation) => conversation.id === id);
+    if (!selected) return;
+    if (
+      activeConversation &&
+      activeConversation.id !== id &&
+      !runningConversationIdSet.has(activeConversation.id) &&
+      !(await resetProviderConversation(activeConversation.id, panelViewKey))
+    ) {
+      return;
+    }
+    const selectedTargetKey = conversationTargetKey(selected);
+    if (selectedTargetKey && selectedTargetKey === workspaceTargetKey) {
+      selectConversation(selectedTargetKey, id);
+      setInspectedConversationId(null);
+      setAttachments((current) => ({ ...current, [selectedTargetKey]: null }));
+    } else {
+      setInspectedConversationId(id);
+    }
+    setTaskNavigationNotice(null);
     setHistoryOpen(false);
+    setTaskMenuOpen(false);
+  };
+
+  const handleSelectTask = (task: AiTaskNavigationSource) => {
+    const destination = resolveAiTaskNavigation(task, sessions, recentRemoteSessionIds);
+    selectConversation(destination.targetKey, destination.conversationId);
+    setHistoryOpen(false);
+    setTaskMenuOpen(false);
+    setProviderMenuOpen(false);
+
+    if (destination.terminalSessionId !== null) {
+      setInspectedConversationId(null);
+      setTaskNavigationNotice(null);
+      onActivateTerminal(destination.terminalSessionId);
+      return;
+    }
+
+    // 来源 Tab 已关闭时仍允许查看和处理任务，但不能静默创建终端或重连。
+    setInspectedConversationId(destination.conversationId);
+    setTaskNavigationNotice({
+      conversationId: destination.conversationId,
+      message:
+        task.target.kind === 'ssh'
+          ? `${task.target.label} 的原终端标签已关闭，且当前没有该连接的其他终端；不会自动重连。`
+          : `${task.target.label} 的原终端标签已关闭；不会自动新建终端。`,
+    });
   };
 
   const handleDeleteConversation = async (id: string) => {
-    if (!(await resetProviderConversation(id))) return;
+    if (runningConversationIdSet.has(id) || !(await resetProviderConversation(id, panelViewKey))) {
+      return;
+    }
     deleteConversation(id);
-    setAttachment(null);
+    clearConversationPresentation(id);
+    if (inspectedConversationId === id) setInspectedConversationId(null);
   };
+
+  const contextText = (() => {
+    if (activeConversation && !viewingCurrentTarget) {
+      return activeConversation.target
+        ? `正在查看 ${activeConversation.target.label} 的会话 · 当前目标不匹配`
+        : '正在查看未绑定历史 · 仅可查看';
+    }
+    if (activeView === 'sftp') return '文件会话 · 暂未接入 AI 执行上下文';
+    if (activeSession && activeSessionStatus === 'connected') {
+      return `已连接 ${activeSession.name}，可分析命令、日志与报错`;
+    }
+    if (activeSessionStatus === 'connecting') return '终端连接中，连接完成后可发送请求';
+    if (activeSessionStatus === 'error') return '终端连接异常，请先恢复连接';
+    return '连接终端后，可分析命令、日志与报错';
+  })();
 
   return (
     <aside className={styles.panel} aria-label="AI 工作台" id="ai-panel">
@@ -301,7 +511,10 @@ export function AiPanel({ activeView, visible }: AiPanelProps) {
           <button
             aria-expanded={historyOpen}
             className={styles.iconButton}
-            onClick={() => setHistoryOpen((open) => !open)}
+            onClick={() => {
+              setHistoryOpen((open) => !open);
+              setTaskMenuOpen(false);
+            }}
             title="历史会话"
             type="button"
           >
@@ -309,11 +522,32 @@ export function AiPanel({ activeView, visible }: AiPanelProps) {
               <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2" />
             </svg>
           </button>
+          {taskAttentionCount ? (
+            <button
+              aria-expanded={taskMenuOpen}
+              aria-label={`${taskAttentionCount} 个需要关注的 AI 任务`}
+              className={`${styles.iconButton} ${styles.taskButton} ${
+                backgroundTasks.some((task) => task.pendingApproval) ? styles.taskButtonWaiting : ''
+              }`}
+              onClick={() => {
+                setTaskMenuOpen((open) => !open);
+                setHistoryOpen(false);
+              }}
+              title="AI 任务"
+              type="button"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 7h12M6 12h12M6 17h7" />
+                <circle cx="18" cy="17" r="2" />
+              </svg>
+              <span className={styles.taskBadge}>{taskAttentionBadge}</span>
+            </button>
+          ) : null}
           <button
             aria-label="新建 AI 会话"
             className={styles.iconButton}
-            disabled={Boolean(runningSessionId)}
-            onClick={handleCreateConversation}
+            disabled={!canBeginAiConversation(workspaceTargetKey, tasks)}
+            onClick={() => void handleCreateConversation()}
             title="新建会话"
             type="button"
           >
@@ -330,81 +564,101 @@ export function AiPanel({ activeView, visible }: AiPanelProps) {
           activeConversationId={activeConversationId}
           canClear={messages.length > 0}
           conversations={conversations}
-          disabled={Boolean(runningSessionId)}
+          currentTargetKey={workspaceTargetKey}
           onClear={() => void handleClearConversation()}
           onDelete={(id) => void handleDeleteConversation(id)}
           onSelect={(id) => void handleSelectConversation(id)}
+          runningConversationIds={runningConversationIds}
+        />
+      ) : null}
+
+      {taskMenuOpen && taskAttentionCount ? (
+        <AiTaskMenu
+          activeConversationId={activeConversationId}
+          completedResults={unreadTaskResults}
+          onMarkAllRead={markAllTaskResultsRead}
+          onSelect={handleSelectTask}
+          runningTasks={backgroundTasks}
         />
       ) : null}
 
       <div className={styles.contextBar}>
         <span
           className={`${styles.contextStatusDot} ${
-            activeView === 'sftp'
-              ? styles.contextStatusInactive
-              : activeSessionStatus === 'connected'
-                ? styles.contextStatusConnected
-                : activeSessionStatus === 'connecting'
-                  ? styles.contextStatusConnecting
-                  : activeSessionStatus === 'error'
-                    ? styles.contextStatusError
-                    : styles.contextStatusInactive
+            activeConversation && !viewingCurrentTarget
+              ? styles.contextStatusConnecting
+              : activeView === 'sftp'
+                ? styles.contextStatusInactive
+                : activeSessionStatus === 'connected'
+                  ? styles.contextStatusConnected
+                  : activeSessionStatus === 'connecting'
+                    ? styles.contextStatusConnecting
+                    : activeSessionStatus === 'error'
+                      ? styles.contextStatusError
+                      : styles.contextStatusInactive
           }`}
         />
-        <span>
-          {activeView === 'sftp'
-            ? '文件会话 · 暂未接入 AI 执行上下文'
-            : activeSession && activeSessionStatus === 'connected'
-              ? `已连接 ${activeSession.name}，可分析命令、日志与报错`
-              : activeSessionStatus === 'connecting'
-                ? '终端连接中，连接完成后可分析命令、日志与报错'
-                : activeSessionStatus === 'error'
-                  ? '终端连接异常，请先恢复连接后再让 AI 执行操作'
-                  : '连接终端后，可分析命令、日志与报错'}
-        </span>
+        <span>{contextText}</span>
       </div>
 
       <div className={styles.conversation}>
         <AiConversationView
-          approvalSubmitting={approvalSubmitting}
+          approvalSubmitting={activeTask?.approvalSubmitting ?? false}
           lastUserMessageId={lastUserMessageId}
           messages={messages}
-          notice={notice}
-          onResolveApproval={resolveApproval}
+          notice={visibleNotice}
+          onResolveApproval={(approved) => {
+            if (activeTask) resolveApproval(activeTask.sessionId, approved);
+          }}
           onRetry={retryLastQuestion}
-          pendingApproval={pendingApproval}
+          pendingApproval={activeTask?.pendingApproval ?? null}
           providerName={selectedProvider.name}
-          runParts={runParts}
-          running={Boolean(runningSessionId)}
-          streamText={streamText}
+          runParts={activeTask?.runParts ?? []}
+          running={Boolean(activeTask)}
+          streamText={activeTask?.streamText ?? ''}
         />
       </div>
 
       <AiComposer
         attachment={attachment}
         attachmentLoading={attachmentLoading}
-        targetReady={targetReady}
-        targetUnavailableMessage={targetUnavailableMessage}
+        commandPolicy={commandPolicy}
+        composerDisabled={
+          !viewingCurrentTarget || !workspaceTargetKey || currentTargetBusyElsewhere
+        }
         composerRef={composerRef}
+        controlsDisabled={Boolean(currentTargetTask)}
         draft={draft}
         fileInputRef={fileInputRef}
         onAttachmentChange={handleAttachmentChange}
-        onAttachmentRemove={() => setAttachment(null)}
+        onAttachmentRemove={clearCurrentAttachment}
+        onCommandPolicyChange={(policy) => {
+          if (workspaceTargetKey) {
+            setCommandPolicy(workspaceTargetKey, activeConversationId, policy);
+          }
+        }}
         onComposerKeyDown={handleComposerKeyDown}
         onDraftChange={handleDraftChange}
-        onProviderChange={handleProviderChange}
-        commandPolicy={commandPolicy}
-        onCommandPolicyChange={setCommandPolicy}
+        onProviderChange={(nextProvider) => void handleProviderChange(nextProvider)}
         onProviderMenuToggle={() => setProviderMenuOpen((open) => !open)}
         onStop={() => {
-          if (runningSessionId) requestSessionStop(runningSessionId);
+          if (activeTask) requestSessionStop(activeTask.sessionId);
         }}
         onSubmit={submit}
         provider={selectedProvider}
         providerAvailable={providerAvailability[provider]}
         providerId={provider}
         providerMenuOpen={providerMenuOpen}
-        runningSessionId={runningSessionId}
+        running={Boolean(activeTask)}
+        statusMessage={
+          currentTargetBusyElsewhere
+            ? '当前终端的另一会话正在执行，请从历史会话中返回任务。'
+            : !viewingCurrentTarget || !targetReady
+              ? targetUnavailableMessage
+              : undefined
+        }
+        targetReady={targetReady}
+        targetUnavailableMessage={targetUnavailableMessage}
       />
     </aside>
   );

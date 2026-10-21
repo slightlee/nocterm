@@ -18,11 +18,17 @@ describe('resolveAiTerminalTarget', () => {
     };
 
     const connecting = resolveAiTerminalTarget(session, 'connecting');
-    expect(connecting).toEqual({ context: '' });
+    expect(connecting).toEqual({
+      binding: { kind: 'ssh', id: '7', label: 'Production' },
+      context: '',
+      workspaceSessionId: 'remote:7:session-a',
+    });
     expect(isAiTerminalTargetReady(connecting)).toBe(false);
     const target = resolveAiTerminalTarget(session, 'connected');
     expect(isAiTerminalTargetReady(target)).toBe(true);
     expect(target.connectionId).toBe(7);
+    expect(target.workspaceSessionId).toBe('remote:7:session-a');
+    expect(target.binding).toEqual({ kind: 'ssh', id: '7', label: 'Production' });
     expect(target.connectionId).not.toBe(session.id);
     expect(target.targetSessionId).toBeUndefined();
     expect(target.context).toContain('不要假设它继承可见终端中的 cd');
@@ -58,18 +64,27 @@ describe('resolveAiTerminalTarget', () => {
     expect(second.connectionId).toBe(7);
     expect(first.targetSessionId).toBeUndefined();
     expect(second.targetSessionId).toBeUndefined();
+    expect(first.binding).toEqual(second.binding);
+    expect(first.workspaceSessionId).toBe('remote:7:session-a');
+    expect(second.workspaceSessionId).toBe('remote:7:session-b');
   });
 
   it('binds only a connected local session as a local target', () => {
     const session = { id: 'local:1', kind: 'local' as const, name: '本地终端' };
 
     const closed = resolveAiTerminalTarget(session, 'closed');
-    expect(closed).toEqual({ context: '' });
+    expect(closed).toEqual({
+      binding: { kind: 'local', id: 'local:1', label: '本地终端' },
+      context: '',
+      workspaceSessionId: 'local:1',
+    });
     expect(isAiTerminalTargetReady(closed)).toBe(false);
     const target = resolveAiTerminalTarget(session, 'connected');
     expect(isAiTerminalTargetReady(target)).toBe(true);
     expect(target.connectionId).toBeUndefined();
     expect(target.targetSessionId).toBe('local:1');
+    expect(target.workspaceSessionId).toBe('local:1');
+    expect(target.binding).toEqual({ kind: 'local', id: 'local:1', label: '本地终端' });
     expect(target.context).not.toContain('local_terminal_exec');
     expect(target.context).toContain('必须先实际调用');
     expect(target.context).toContain('真实返回错误后才能报告不可用');

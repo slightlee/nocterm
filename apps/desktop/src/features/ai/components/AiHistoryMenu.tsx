@@ -1,10 +1,13 @@
-import type { AiConversation } from '../model/ai-store';
+import { useState } from 'react';
+
+import { conversationTargetKey, type AiConversation } from '../model/ai-store';
 import styles from './AiHistoryMenu.module.css';
 
 interface AiHistoryMenuProps {
   conversations: AiConversation[];
-  activeConversationId: string;
-  disabled: boolean;
+  activeConversationId: string | null;
+  currentTargetKey: string | null;
+  runningConversationIds: string[];
   canClear: boolean;
   onClear: () => void;
   onSelect: (id: string) => void;
@@ -15,45 +18,75 @@ interface AiHistoryMenuProps {
 export function AiHistoryMenu({
   conversations,
   activeConversationId,
-  disabled,
+  currentTargetKey,
+  runningConversationIds,
   canClear,
   onClear,
   onSelect,
   onDelete,
 }: AiHistoryMenuProps) {
+  const [scope, setScope] = useState<'current' | 'all'>(currentTargetKey ? 'current' : 'all');
+  const runningConversationIdSet = new Set(runningConversationIds);
+  const visibleConversations = conversations
+    .filter(
+      (conversation) => scope === 'all' || conversationTargetKey(conversation) === currentTargetKey
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
   return (
     <div className={styles.historyPanel}>
       <div className={styles.historyHeader}>
         <span>历史会话</span>
         <div className={styles.historyActions}>
           {canClear ? (
-            <button disabled={disabled} onClick={onClear} type="button">
+            <button
+              disabled={Boolean(
+                activeConversationId && runningConversationIdSet.has(activeConversationId)
+              )}
+              onClick={onClear}
+              type="button"
+            >
               清空
             </button>
           ) : null}
         </div>
       </div>
+      <div className={styles.historyScope} role="group" aria-label="历史范围">
+        <button
+          aria-pressed={scope === 'current'}
+          disabled={!currentTargetKey}
+          onClick={() => setScope('current')}
+          type="button"
+        >
+          当前目标
+        </button>
+        <button aria-pressed={scope === 'all'} onClick={() => setScope('all')} type="button">
+          全部
+        </button>
+      </div>
       <div className={styles.historyList}>
-        {conversations
-          .slice()
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-          .map((conversation) => (
+        {visibleConversations.length ? (
+          visibleConversations.map((conversation) => (
             <div
               className={`${styles.historyItem} ${conversation.id === activeConversationId ? styles.historyItemActive : ''}`}
               key={conversation.id}
             >
               <button
                 className={styles.historySelect}
-                disabled={disabled}
                 onClick={() => onSelect(conversation.id)}
                 type="button"
               >
-                <span>{conversation.title}</span>
+                <span className={styles.historyCopy}>
+                  <span>{conversation.title}</span>
+                  {scope === 'all' ? (
+                    <small>{conversation.target?.label ?? '未绑定历史'}</small>
+                  ) : null}
+                </span>
               </button>
               <button
                 aria-label={`删除会话：${conversation.title}`}
                 className={styles.historyDelete}
-                disabled={disabled}
+                disabled={runningConversationIdSet.has(conversation.id)}
                 onClick={() => onDelete(conversation.id)}
                 title="删除会话"
                 type="button"
@@ -63,7 +96,10 @@ export function AiHistoryMenu({
                 </svg>
               </button>
             </div>
-          ))}
+          ))
+        ) : (
+          <div className={styles.historyEmpty}>暂无会话</div>
+        )}
       </div>
     </div>
   );
