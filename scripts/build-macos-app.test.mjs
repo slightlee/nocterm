@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { assertMacosHost, buildAppTauriArguments, buildMacosApp } from './build-macos-app.mjs';
+
+const REPOSITORY_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('build-macos-app', () => {
   it('uses app-only bundling with skipped beforeBuildCommand', () => {
@@ -27,5 +32,31 @@ describe('build-macos-app', () => {
     assert.throws(() => buildMacosApp({ pnpmCli: '', runStep: () => {} }), /pnpm CLI/);
     assert.throws(() => assertMacosHost('win32'), /macOS/);
     assert.doesNotThrow(() => assertMacosHost('darwin'));
+  });
+
+  it('bundles Simplified Chinese localization for AppKit-owned menu items', () => {
+    const tauriRoot = join(REPOSITORY_ROOT, 'apps', 'desktop', 'src-tauri');
+    const config = JSON.parse(readFileSync(join(tauriRoot, 'tauri.conf.json'), 'utf8'));
+    const infoPlist = readFileSync(join(tauriRoot, 'Info.plist'), 'utf8');
+    const localization = 'resources/zh-Hans.lproj/InfoPlist.strings';
+
+    assert.match(infoPlist, /<key>CFBundleDevelopmentRegion<\/key>\s*<string>zh-Hans<\/string>/);
+    assert.equal(
+      config.bundle.macOS.files[localization],
+      'Resources/zh-Hans.lproj/InfoPlist.strings'
+    );
+    assert.match(readFileSync(join(tauriRoot, localization), 'utf8'), /CFBundleDisplayName/);
+  });
+
+  it('keeps the native Edit and Window menus limited to product-owned items', () => {
+    const menuSource = readFileSync(
+      join(REPOSITORY_ROOT, 'apps', 'desktop', 'src-tauri', 'src', 'platform', 'macos_menu.rs'),
+      'utf8'
+    );
+
+    assert.doesNotMatch(menuSource, /WINDOW_SUBMENU_ID|bring_all_to_front/);
+    assert.match(menuSource, /NSDisabledDictationMenuItem/);
+    assert.match(menuSource, /NSDisabledCharacterPaletteMenuItem/);
+    assert.match(menuSource, /const EDIT_MENU_ITEM_COUNT: isize = 7;/);
   });
 });

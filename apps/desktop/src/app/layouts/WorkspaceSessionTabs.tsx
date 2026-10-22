@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type WheelEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type WheelEvent,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { AiPanelToggle } from '../../features/ai';
@@ -19,16 +27,16 @@ import {
   terminalWorkspaceTabKey,
   type WorkspaceSessionTabKey,
 } from '../model/workspace-session-tabs';
+import { onAppMenuAction } from '../platform/app-menu-client';
 import styles from './TerminalWorkspace.module.css';
 import { WorkspaceSessionIndex, type WorkspaceSessionIndexEntry } from './WorkspaceSessionIndex';
 import { WorkspaceSessionTypeIcon } from './WorkspaceSessionTypeIcon';
-
-const EXTRA_LOCAL_TERMINAL_PREFIX = 'local:extra:';
 
 interface WorkspaceSessionTabsProps {
   activeView: 'terminal' | 'sftp';
   aiOpen: boolean;
   compactTop: boolean;
+  onCreateLocalTerminal: () => void;
   onToggleAi: () => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
@@ -48,6 +56,7 @@ export function WorkspaceSessionTabs({
   activeView,
   aiOpen,
   compactTop,
+  onCreateLocalTerminal,
   onToggleAi,
   sidebarCollapsed,
   onToggleSidebar,
@@ -60,7 +69,6 @@ export function WorkspaceSessionTabs({
   const activeTerminalStatus = useTerminalStore((state) => state.status);
   const activateTerminal = useTerminalStore((state) => state.activateConnection);
   const closeTerminal = useTerminalStore((state) => state.closeConnection);
-  const openLocalSession = useTerminalStore((state) => state.openLocalSession);
   const sftpSessions = useSftpStore((state) => state.sessions);
   const activeSftpId = useSftpStore((state) => state.activeId);
   const activateSftp = useSftpStore((state) => state.setActive);
@@ -73,11 +81,15 @@ export function WorkspaceSessionTabs({
     terminalSessions.map((session) => session.id),
     sftpSessions.map((session) => session.connectionId)
   );
-  const terminalSessionsByKey = new Map(
-    terminalSessions.map((session) => [terminalWorkspaceTabKey(session.id), session])
+  const terminalSessionsByKey = useMemo(
+    () =>
+      new Map(terminalSessions.map((session) => [terminalWorkspaceTabKey(session.id), session])),
+    [terminalSessions]
   );
-  const sftpSessionsByKey = new Map(
-    sftpSessions.map((session) => [sftpWorkspaceTabKey(session.connectionId), session])
+  const sftpSessionsByKey = useMemo(
+    () =>
+      new Map(sftpSessions.map((session) => [sftpWorkspaceTabKey(session.connectionId), session])),
+    [sftpSessions]
   );
   // 弹层只消费统一的展示模型；终端与 SFTP Store 继续各自负责会话生命周期。
   const sessionIndexEntries: WorkspaceSessionIndexEntry[] = [
@@ -170,13 +182,6 @@ export function WorkspaceSessionTabs({
     event.preventDefault();
   };
 
-  const createLocalTerminal = () => {
-    const localCount = terminalSessions.filter((session) => session.kind === 'local').length;
-    const name = localCount === 0 ? '本地终端' : `本地终端 ${localCount + 1}`;
-    openLocalSession(`${EXTRA_LOCAL_TERMINAL_PREFIX}${crypto.randomUUID()}`, name);
-    navigate('/connections');
-  };
-
   const scrollTabs = (direction: -1 | 1) => {
     const viewport = tabViewportRef.current;
     if (!viewport) return;
@@ -203,44 +208,83 @@ export function WorkspaceSessionTabs({
     }
   };
 
-  const handleCloseTabs = async (keys: WorkspaceSessionTabKey[]) => {
-    const terminalIds = keys
-      .map((key) => terminalSessionsByKey.get(key)?.id)
-      .filter((id): id is string => id !== undefined);
-    const sftpIds = keys
-      .map((key) => sftpSessionsByKey.get(key)?.connectionId)
-      .filter((id): id is string => id !== undefined);
+  const handleCloseTabs = useCallback(
+    async (keys: WorkspaceSessionTabKey[]) => {
+      const terminalIds = keys
+        .map((key) => terminalSessionsByKey.get(key)?.id)
+        .filter((id): id is string => id !== undefined);
+      const sftpIds = keys
+        .map((key) => sftpSessionsByKey.get(key)?.connectionId)
+        .filter((id): id is string => id !== undefined);
 
-    if (sftpIds.length > 0 && hasRunningTransfers(sftpIds)) {
-      const confirmed = await requestConfirm({
-        title: '关闭文件标签',
-        message:
-          sftpIds.length === 1
-            ? '该标签仍有文件正在传输，关闭会取消传输并断开连接。是否继续？'
-            : '待关闭标签中仍有文件正在传输，关闭会取消相关传输并断开连接。是否继续？',
-        confirmLabel: '关闭标签',
-        danger: true,
-      });
-      if (!confirmed) return;
-    }
+      if (sftpIds.length > 0 && hasRunningTransfers(sftpIds)) {
+        const confirmed = await requestConfirm({
+          title: '关闭文件标签',
+          message:
+            sftpIds.length === 1
+              ? '该标签仍有文件正在传输，关闭会取消传输并断开连接。是否继续？'
+              : '待关闭标签中仍有文件正在传输，关闭会取消相关传输并断开连接。是否继续？',
+          confirmLabel: '关闭标签',
+          danger: true,
+        });
+        if (!confirmed) return;
+      }
 
-    terminalIds.forEach((id) => closeTerminal(id));
-    let failureCount = 0;
-    for (const connectionId of sftpIds) {
-      try {
-        await disconnectSftpSession(connectionId);
-        closeSftp(connectionId);
-      } catch (error) {
-        failureCount += 1;
-        if (sftpIds.length === 1) {
-          showToast(`断开 SFTP 失败：${getSftpErrorMessage(error)}`);
+      terminalIds.forEach((id) => closeTerminal(id));
+      let failureCount = 0;
+      for (const connectionId of sftpIds) {
+        try {
+          await disconnectSftpSession(connectionId);
+          closeSftp(connectionId);
+        } catch (error) {
+          failureCount += 1;
+          if (sftpIds.length === 1) {
+            showToast(`断开 SFTP 失败：${getSftpErrorMessage(error)}`);
+          }
         }
       }
-    }
-    if (sftpIds.length > 1 && failureCount > 0) {
-      showToast(`有 ${failureCount} 个文件标签关闭失败，请重试。`);
-    }
-  };
+      if (sftpIds.length > 1 && failureCount > 0) {
+        showToast(`有 ${failureCount} 个文件标签关闭失败，请重试。`);
+      }
+    },
+    [
+      closeSftp,
+      closeTerminal,
+      hasRunningTransfers,
+      requestConfirm,
+      sftpSessionsByKey,
+      showToast,
+      terminalSessionsByKey,
+    ]
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void onAppMenuAction((action) => {
+      if (action !== 'close-current-tab') return;
+      const activeKey =
+        activeView === 'terminal' && activeTerminalId !== null
+          ? terminalWorkspaceTabKey(activeTerminalId)
+          : activeView === 'sftp' && activeSftpId !== null
+            ? sftpWorkspaceTabKey(activeSftpId)
+            : null;
+      if (activeKey) void handleCloseTabs([activeKey]);
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch(() => {
+        console.error('Workspace menu subscription failed');
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [activeSftpId, activeTerminalId, activeView, handleCloseTabs]);
 
   return (
     <div className={styles.tabThemeScope} data-terminal-theme={terminalThemeId}>
@@ -274,7 +318,7 @@ export function WorkspaceSessionTabs({
           <button
             aria-label="新建本地终端"
             className={styles.panelToggle}
-            onClick={createLocalTerminal}
+            onClick={onCreateLocalTerminal}
             title="新建本地终端"
             type="button"
           >
@@ -431,7 +475,7 @@ export function WorkspaceSessionTabs({
                 <button
                   aria-label="新建本地终端"
                   className={styles.newLocalTabButton}
-                  onClick={createLocalTerminal}
+                  onClick={onCreateLocalTerminal}
                   title="新建本地终端"
                   type="button"
                 >
