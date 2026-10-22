@@ -99,6 +99,7 @@ shared/                 无业务归属的组件、样式和工具
 - 业务 UI 不直接调用 `@tauri-apps/api`，IPC 收口到 Feature `api/`；
 - Zustand 只管理 UI 状态，不访问数据库、凭据或子进程；
 - 高频输出使用 event，状态变更使用 command，订阅必须可释放。
+- macOS 菜单由 desktop host 的平台 Adapter 构建，标准编辑和窗口动作继续使用原生菜单角色；只保留产品需要的系统菜单项，并通过 `Info.plist` 和 `zh-Hans.lproj` 资源声明简体中文；会话、设置和面板动作通过白名单事件交给应用壳，复用现有业务生命周期。
 
 ### 3.2 Rust 边界
 
@@ -124,6 +125,7 @@ Domain 不依赖 Tauri、SQLite、文件系统或操作系统 API。Infrastructu
 | 本地终端   | portable-pty                                                     | macOS PTY 与 Windows ConPTY                |
 | SSH / SFTP | russh、russh-sftp                                                | 进程内认证、终端、exec 和文件传输          |
 | 凭据       | keyring                                                          | macOS Keychain、Windows Credential Manager |
+| 原生菜单   | Tauri Menu                                                       | macOS 中文菜单、系统角色与应用动作分发     |
 | 质量门禁   | ESLint、Prettier、Stylelint、Vitest、rustfmt、Clippy、Cargo Test | 静态检查、测试和构建                       |
 
 具体版本由 `package.json`、`pnpm-lock.yaml`、`Cargo.toml` 和 `Cargo.lock` 唯一确定。
@@ -180,7 +182,7 @@ SFTP 使用 russh-sftp，不通过系统 `sftp`、远程 Shell 或 `tar` 模拟�
 
 设置 Feature 已实现跟随系统、浅色、深色主题，终端字体大小、终端配色和关于页。连接、分组、设置、AI 历史与 AI 审计保存在本机 SQLite。
 
-- Schema 使用显式版本和原地迁移，当前版本为 v6；
+- Schema 使用显式版本和原地迁移，当前版本为 v8；
 - Repository 拥有 SQL，Domain 和 Application 不拼接 SQL；
 - 数据库初始化统一设置 WAL、foreign keys 和 busy timeout；
 - 运行时终端、传输和 Provider 进程不持久化；
@@ -195,6 +197,12 @@ Nocterm 不重新实现模型、Agent loop、登录或通用 MCP 客户端。Cod
 - Provider 发现、启动、协议适配、流式输出、取消和回收；
 - Provider 发现只做文件系统检查，不启动探测子进程。macOS 图形界面启动的进程只继承 launchd 最小 PATH，因此发现与 Provider 子进程共用"进程 PATH + 固定用户级 CLI 目录"的合成搜索路径，目录列表固定在代码中，不提供用户可执行路径配置；
 - 把每轮任务绑定到发送时的本地终端或 SSH 连接；
+- AI 面板跟随当前工作区目标，但切换标签只选择已有会话或空白态，不创建持久化记录；首次发送时才创建对话，并把对话固定绑定到本地终端会话或 SSH 连接；
+- 每个目标独立保留最近选择的会话和未发送草稿；同一 SSH 连接的多个终端标签共享目标，本地终端按会话 ID 隔离；
+- 运行中的任务保留发送时的对话与目标，输出、退出、审批、超时和停止都按 Provider `sessionId` 路由；同一终端目标最多运行一个 AI 任务，不同终端目标可以并发；
+- 切换标签后，当前目标只展示自己的会话和运行态；其他终端的运行任务及尚未查看的完成结果收口到标题栏任务入口及数量徽标，完成、失败、停止和超时结果在对应会话可见后才清除，也可由用户批量标为已读；用户点击任务时同步回到任务发起 Tab 和对应 AI 会话，从文件视图点击时同时返回终端视图；
+- 任务入口只导航到已存在的终端：发起 Tab 已关闭时，SSH 可回退到同一连接最近仍存在的终端 Tab，本地终端不回退；没有可用 Tab 时停留在任务会话并提示，不新建终端或重连；从全部历史打开其他目标会话仍只查看，不切换终端；
+- v8 之前没有目标元数据的 AI 历史按未绑定只读记录展示，不得静默挂到当前终端继续执行；
 - AI 面板的展开状态在终端与文件标签之间保持；文件视图尚未接入目标时保留面板、历史和运行状态，但禁用新请求且不得复用后台终端；
 - 提供统一工具、参数校验、权限、审批、审计和限流；
 - 在当前本地 PTY 或已认证 SSH 连接中执行并返回真实结果；

@@ -13,6 +13,7 @@ const conversation = (id: string, overrides: Partial<AiConversation> = {}): AiCo
   title: `会话 ${id}`,
   provider: 'codex',
   commandPolicy: 'auto_safe',
+  target: { kind: 'ssh', id: '7', label: 'Production' },
   createdAt: 1,
   updatedAt: 2,
   messages: [
@@ -58,6 +59,17 @@ describe('conversation snapshots', () => {
     };
 
     expect(snapshotToConversation(snapshot).commandPolicy).toBeUndefined();
+  });
+
+  it('keeps legacy history without target metadata unbound', () => {
+    const snapshot: AiConversationSnapshot = {
+      ...conversationToSnapshot(conversation('legacy')),
+      targetKind: null,
+      targetId: null,
+      targetLabel: null,
+    };
+
+    expect(snapshotToConversation(snapshot).target).toBeNull();
   });
 });
 

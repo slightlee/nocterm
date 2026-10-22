@@ -18,7 +18,10 @@ interface AiComposerProps {
   providerId: AiProviderId;
   providerAvailable: boolean | undefined;
   providerMenuOpen: boolean;
-  runningSessionId: string | null;
+  running: boolean;
+  controlsDisabled: boolean;
+  composerDisabled: boolean;
+  statusMessage?: string;
   draft: string;
   attachment: AiAttachment | null;
   attachmentLoading: boolean;
@@ -44,7 +47,10 @@ export function AiComposer({
   providerId,
   providerAvailable,
   providerMenuOpen,
-  runningSessionId,
+  running,
+  controlsDisabled,
+  composerDisabled,
+  statusMessage,
   draft,
   attachment,
   attachmentLoading,
@@ -72,9 +78,16 @@ export function AiComposer({
           <span>未安装 {provider.command}</span>
         </div>
       ) : null}
+      {statusMessage ? (
+        <div className={styles.bridgeNotice} role="status">
+          <span className={styles.bridgeDot} />
+          <span>{statusMessage}</span>
+        </div>
+      ) : null}
       <form className={styles.composer} onSubmit={onSubmit}>
         <textarea
           aria-label="输入 AI 请求"
+          disabled={composerDisabled}
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={onComposerKeyDown}
           placeholder="输入问题或直接告诉我想做什么…"
@@ -86,6 +99,7 @@ export function AiComposer({
           <div className={styles.attachmentRow}>
             <AiAttachmentChip
               attachment={attachment}
+              disabled={composerDisabled || controlsDisabled}
               fileInputRef={fileInputRef}
               onRemove={onAttachmentRemove}
             />
@@ -94,12 +108,13 @@ export function AiComposer({
         <div className={styles.composerFooter}>
           <div className={styles.composerTools}>
             <AiAttachmentPicker
+              disabled={composerDisabled || controlsDisabled}
               fileInputRef={fileInputRef}
               loading={attachmentLoading}
               onChange={onAttachmentChange}
             />
             <AiProviderSelector
-              disabled={Boolean(runningSessionId)}
+              disabled={composerDisabled || controlsDisabled}
               onChange={onProviderChange}
               onToggle={() => {
                 setCommandPolicyMenuOpen(false);
@@ -110,7 +125,7 @@ export function AiComposer({
               providerId={providerId}
             />
             <AiCommandPolicySelector
-              disabled={Boolean(runningSessionId)}
+              disabled={composerDisabled || controlsDisabled}
               onChange={(policy) => {
                 onCommandPolicyChange(policy);
                 setCommandPolicyMenuOpen(false);
@@ -123,7 +138,7 @@ export function AiComposer({
               policy={commandPolicy}
             />
           </div>
-          {runningSessionId ? (
+          {running ? (
             <button
               aria-label="停止 AI 会话"
               className={styles.sendButton}
@@ -139,7 +154,12 @@ export function AiComposer({
             <button
               aria-label="发送请求"
               className={styles.sendButton}
-              disabled={!targetReady || (!draft.trim() && !attachment) || attachmentLoading}
+              disabled={
+                composerDisabled ||
+                !targetReady ||
+                (!draft.trim() && !attachment) ||
+                attachmentLoading
+              }
               title={targetReady ? '发送请求' : targetUnavailableMessage}
               type="submit"
             >

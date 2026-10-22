@@ -1,0 +1,180 @@
+.taskPanel {
+  position: absolute;
+  top: 50px;
+  right: 12px;
+  z-index: var(--z-dropdown);
+  width: min(260px, calc(100% - 24px));
+  padding: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+}
+
+.taskHeader {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 7px 5px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.taskHeader > span:last-child {
+  color: var(--term-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.taskList {
+  display: flex;
+  max-height: 220px;
+  flex-direction: column;
+  overflow-y: auto;
+  padding-top: 4px;
+}
+
+.taskSection {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.taskSection + .taskSection {
+  padding-top: 5px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-secondary);
+}
+
+.taskSectionHeader {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 7px;
+  color: var(--term-muted);
+  font-size: 10px;
+}
+
+.taskSectionHeader > button {
+  padding: 2px 0;
+  color: var(--term-blue);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.taskSectionHeader > button:hover {
+  color: var(--text-primary);
+}
+
+.taskSectionHeader > button:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.taskItem {
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 8px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.taskItem:hover,
+.taskItem[aria-current='true'] {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.taskItem:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 0;
+}
+
+.taskStatus {
+  width: 7px;
+  height: 7px;
+  background: var(--term-blue);
+  border-radius: 50%;
+  animation: task-pulse 1.4s ease-in-out infinite;
+}
+
+.taskStatusWaiting {
+  background: var(--term-yellow);
+}
+
+.taskStatusCompleted,
+.taskStatusFailed,
+.taskStatusStopped {
+  animation: none;
+}
+
+.taskStatusCompleted {
+  background: var(--term-green);
+}
+
+.taskStatusFailed {
+  background: var(--term-red);
+}
+
+.taskStatusStopped {
+  background: var(--term-muted);
+}
+
+.taskCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.taskCopy strong,
+.taskCopy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskCopy strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.taskCopy small {
+  color: var(--term-muted);
+  font-size: 10px;
+}
+
+.taskItem svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+@keyframes task-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}

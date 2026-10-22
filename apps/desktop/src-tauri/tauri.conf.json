@@ -43,6 +43,9 @@
       "icons/icon.ico"
     ],
     "macOS": {
+      "files": {
+        "resources/zh-Hans.lproj/InfoPlist.strings": "Resources/zh-Hans.lproj/InfoPlist.strings"
+      },
       "minimumSystemVersion": "14.0"
     },
     "windows": {

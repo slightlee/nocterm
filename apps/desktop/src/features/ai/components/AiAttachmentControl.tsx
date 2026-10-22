@@ -5,22 +5,30 @@ import styles from './AiComposerControls.module.css';
 
 interface AiAttachmentPickerProps {
   loading: boolean;
+  disabled?: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onChange: (event: ChangeEvent<HTMLInputElement>) => void;
 }
 
 interface AiAttachmentChipProps {
   attachment: AiAttachment;
+  disabled?: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onRemove: () => void;
 }
 
 /** 已选附件独立于工具栏展示，文件名变化不会挤压 Provider 和权限控件。 */
-export function AiAttachmentChip({ attachment, fileInputRef, onRemove }: AiAttachmentChipProps) {
+export function AiAttachmentChip({
+  attachment,
+  disabled = false,
+  fileInputRef,
+  onRemove,
+}: AiAttachmentChipProps) {
   return (
     <div className={styles.attachmentChip} title={attachment.name}>
       <button
         className={styles.attachmentName}
+        disabled={disabled}
         onClick={() => fileInputRef.current?.click()}
         title="更换附件"
         type="button"
@@ -33,6 +41,7 @@ export function AiAttachmentChip({ attachment, fileInputRef, onRemove }: AiAttac
       <button
         aria-label={`移除附件：${attachment.name}`}
         className={styles.attachmentRemove}
+        disabled={disabled}
         onClick={onRemove}
         title="移除附件"
         type="button"
@@ -46,13 +55,19 @@ export function AiAttachmentChip({ attachment, fileInputRef, onRemove }: AiAttac
 }
 
 /** 文件输入只保留一个实例；已选附件由输入区中的独立 Chip 展示。 */
-export function AiAttachmentPicker({ loading, fileInputRef, onChange }: AiAttachmentPickerProps) {
+export function AiAttachmentPicker({
+  loading,
+  disabled = false,
+  fileInputRef,
+  onChange,
+}: AiAttachmentPickerProps) {
   return (
     <>
       <input
         accept=".log,.txt,.md,.json,.yaml,.yml,.toml,.xml,.csv,.conf,.ini,.sh,.ps1,text/*,application/json"
         aria-label="选择文件"
         className={styles.fileInput}
+        disabled={disabled}
         onChange={onChange}
         ref={fileInputRef}
         type="file"
@@ -60,9 +75,9 @@ export function AiAttachmentPicker({ loading, fileInputRef, onChange }: AiAttach
       <button
         aria-label={loading ? '正在读取文件' : '添加文件'}
         className={styles.attachmentButton}
-        disabled={loading}
+        disabled={disabled || loading}
         onClick={() => fileInputRef.current?.click()}
-        title={loading ? '正在读取文件' : '添加文件'}
+        title={loading ? '正在读取文件' : disabled ? '当前会话不可编辑' : '添加文件'}
         type="button"
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">

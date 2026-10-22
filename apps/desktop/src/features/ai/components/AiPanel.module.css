@@ -72,6 +72,11 @@ p {
   background: var(--bg-hover);
 }
 
+.iconButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
 .iconButton svg {
   width: 18px;
   height: 18px;
@@ -80,6 +85,38 @@ p {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.8;
+}
+
+/* 数量徽标汇总后台运行任务与未读结果；当前可见会话不重复计数。 */
+.taskButton {
+  position: relative;
+}
+
+.taskButtonWaiting {
+  color: var(--term-yellow);
+}
+
+.taskBadge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  display: inline-flex;
+  min-width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  color: var(--term);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--term-blue);
+  border: 1px solid var(--term);
+  border-radius: 7px;
+}
+
+.taskButtonWaiting .taskBadge {
+  background: var(--term-yellow);
 }
 
 .contextStatusDot {
@@ -118,6 +155,13 @@ p {
   background: var(--term-panel);
   border: 0;
   border-radius: 6px;
+}
+
+.contextBar > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation {

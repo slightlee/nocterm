@@ -10,11 +10,44 @@ use crate::{
     dto::ai::{AiConversationDto, AiMessageDto},
     state::AppState,
 };
-use nocterm_domain::ai_conversation::{AiConversationRecord, AiMessageRecord, AiMessageRole};
+use nocterm_domain::ai_conversation::{
+    AiConversationRecord, AiConversationTargetRecord, AiMessageRecord, AiMessageRole,
+};
 
 /// 会话级命令策略白名单：与数据库 CHECK 约束和现有策略枚举保持一致。
 const ALLOWED_COMMAND_POLICIES: [&str; 4] =
     ["deny_all", "confirm_each", "auto_safe", "full_access"];
+
+fn validate_target(
+    conversation: &AiConversationDto,
+) -> Result<Option<AiConversationTargetRecord>, String> {
+    match (
+        conversation.target_kind.as_deref(),
+        conversation.target_id.as_deref(),
+        conversation.target_label.as_deref(),
+    ) {
+        (None, None, None) => Ok(None),
+        (Some(kind), Some(id), Some(label)) => {
+            if !matches!(kind, "local" | "ssh") {
+                return Err("AI 会话目标类型无效".to_string());
+            }
+            let id = id.trim();
+            let label = label.trim();
+            if id.is_empty() || id.len() > 128 || id.contains('\0') {
+                return Err("AI 会话目标标识无效".to_string());
+            }
+            if label.is_empty() || label.len() > 200 || label.contains('\0') {
+                return Err("AI 会话目标名称无效".to_string());
+            }
+            Ok(Some(AiConversationTargetRecord {
+                kind: kind.to_string(),
+                id: id.to_string(),
+                label: label.to_string(),
+            }))
+        }
+        _ => Err("AI 会话目标信息不完整".to_string()),
+    }
+}
 
 fn validate_conversation(conversation: &AiConversationDto) -> Result<AiConversationRecord, String> {
     let id = validate_conversation_id(&conversation.id)?;
@@ -28,6 +61,7 @@ fn validate_conversation(conversation: &AiConversationDto) -> Result<AiConversat
         Some(raw) if ALLOWED_COMMAND_POLICIES.contains(&raw) => Some(raw.to_string()),
         Some(_) => return Err("终端命令执行策略无效".to_string()),
     };
+    let target = validate_target(conversation)?;
     validate_timestamp_ms(conversation.created_at_ms, "会话创建时间")?;
     validate_timestamp_ms(conversation.updated_at_ms, "会话更新时间")?;
     if conversation.messages.len() > 1_000 {
@@ -67,6 +101,7 @@ fn validate_conversation(conversation: &AiConversationDto) -> Result<AiConversat
         title: title.to_string(),
         provider,
         command_policy,
+        target,
         created_at_ms: conversation.created_at_ms,
         updated_at_ms: conversation.updated_at_ms,
         messages,
@@ -79,6 +114,9 @@ fn conversation_to_dto(record: &AiConversationRecord) -> AiConversationDto {
         title: record.title.clone(),
         provider: record.provider.clone(),
         command_policy: record.command_policy.clone(),
+        target_kind: record.target.as_ref().map(|target| target.kind.clone()),
+        target_id: record.target.as_ref().map(|target| target.id.clone()),
+        target_label: record.target.as_ref().map(|target| target.label.clone()),
         created_at_ms: record.created_at_ms,
         updated_at_ms: record.updated_at_ms,
         messages: record
@@ -140,6 +178,9 @@ mod tests {
             title: "排查磁盘".into(),
             provider: "codex".into(),
             command_policy: Some("auto_safe".into()),
+            target_kind: Some("ssh".into()),
+            target_id: Some("7".into()),
+            target_label: Some("Production".into()),
             created_at_ms: 1_000,
             updated_at_ms: 2_000,
             messages: vec![AiMessageDto {
@@ -174,6 +215,24 @@ mod tests {
         let mut invalid = conversation();
         invalid.command_policy = Some("full_access_everything".into());
         assert!(validate_conversation(&invalid).is_err());
+
+        let mut invalid = conversation();
+        invalid.target_id = None;
+        assert!(validate_conversation(&invalid).is_err());
+
+        let mut invalid = conversation();
+        invalid.target_kind = Some("container".into());
+        assert!(validate_conversation(&invalid).is_err());
+    }
+
+    #[test]
+    fn accepts_legacy_conversations_without_a_target() {
+        let mut legacy = conversation();
+        legacy.target_kind = None;
+        legacy.target_id = None;
+        legacy.target_label = None;
+
+        assert!(validate_conversation(&legacy).is_ok());
     }
 
     #[test]

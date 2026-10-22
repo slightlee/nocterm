@@ -37,6 +37,14 @@ pub struct AiMessageRecord {
     pub created_at_ms: i64,
 }
 
+/// 会话目标只用于恢复 UI 归属；真正执行时仍由当前终端注册表重新解析和授权。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiConversationTargetRecord {
+    pub kind: String,
+    pub id: String,
+    pub label: String,
+}
+
 /// 一次完整的会话快照：upsert 语义以本结构整体覆盖旧记录，
 /// 消息列表随会话一起重建，保证前端状态与数据库内容一致。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +54,8 @@ pub struct AiConversationRecord {
     pub provider: String,
     /// 会话可能从未设置命令策略；空值表示沿用后端默认策略。
     pub command_policy: Option<String>,
+    /// v8 之前的历史没有目标信息，保留为空并在 UI 中按只读历史处理。
+    pub target: Option<AiConversationTargetRecord>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub messages: Vec<AiMessageRecord>,

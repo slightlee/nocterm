@@ -13,22 +13,33 @@ import {
 } from '../api/ai-client';
 import { buildAiPrompt, type AiAttachment } from '../model/ai-attachment';
 import { buildConversationContext } from '../model/ai-conversation';
+import {
+  canStartAiRuntimeTask,
+  completeAiRuntimeTask,
+  recordCompletedAiTaskResult,
+  removeAiRuntimeTask,
+  removeCompletedAiTaskResult,
+  updateAiRuntimeTask,
+  type AiCompletedTaskResults,
+  type AiRuntimeTask,
+  type AiRuntimeTasks,
+  type AiTaskOutcome,
+} from '../model/ai-runtime-task';
 import type { AiTerminalTarget } from '../model/ai-target';
 import { aiRuntimeErrorMessage, reduceAiRuntimeOutput } from '../model/ai-runtime-output';
-import type {
-  AiCommandPolicy,
-  AiMessage,
-  AiMessagePart,
-  AiProviderId,
-  AiToolApprovalEvent,
-} from '../model/ai-types';
+import type { AiCommandPolicy, AiMessage, AiMessagePart, AiProviderId } from '../model/ai-types';
 
-// Provider 握手或网络请求异常时，不能让面板无限显示“输出中”。
+// Provider 握手或网络请求异常时，不能让任何一个任务无限显示“输出中”。
 const AI_IDLE_TIMEOUT_MS = 90_000;
 const AI_IDLE_TIMEOUT_SECONDS = AI_IDLE_TIMEOUT_MS / 1_000;
 
 interface AiRuntimeOptions {
-  addMessage: (role: AiMessage['role'], content: string, parts?: AiMessagePart[]) => void;
+  addMessage: (
+    conversationId: string,
+    role: AiMessage['role'],
+    content: string,
+    parts?: AiMessagePart[]
+  ) => void;
 }
 
 interface StartAiQuestion {
@@ -41,189 +52,254 @@ interface StartAiQuestion {
   commandPolicy: AiCommandPolicy;
 }
 
+export interface AiRuntimePresentation {
+  notice: string | null;
+  canRetryQuestion: boolean;
+}
+
+interface RuntimeTaskRef {
+  task: AiRuntimeTask;
+  answerStreamed: boolean;
+  stderrLast: string;
+  timedOut: boolean;
+  idleTimeoutId: number | null;
+  approvalExpiryTimeoutId: number | null;
+}
+
+const runtimeTaskSnapshots = (taskRefs: Map<string, RuntimeTaskRef>): AiRuntimeTasks =>
+  Object.fromEntries(Array.from(taskRefs, ([sessionId, runtime]) => [sessionId, runtime.task]));
+
 /**
- * 管理 Provider 进程的事件流、超时、审批和停止；面板关闭或切页时仍保持挂载。
- * 这里不保存会话消息，避免运行时生命周期和 Zustand 对话模型相互耦合。
- *
- * 生命周期约束：
- * - 客户端生成会话 ID，并在启动 IPC 前绑定，确保不会漏掉快速返回的事件；
- * - Provider 退出事件负责持久化最终回答，停止请求本身不提前结束前端状态；
- * - 每个空闲计时器和审批计时器都由本 Hook 创建、替换并在卸载时释放；
- * - 所有事件都校验活动会话 ID，迟到事件不能污染下一轮对话；
- * - React state 与 ref 必须同步清理，兼顾渲染一致性和事件回调的即时读取。
+ * Provider 运行态按 sessionId 隔离；切换 Tab 只改变展示，不改变事件归属。
+ * 对话消息仍由 Store 持久化，这里只管理进程存活期间的流、审批与计时器。
  */
 export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
-  /**
-   * React state 驱动展示，对应 ref 保存事件回调必须立即读取的最新快照。
-   * Provider 事件不受 React 提交时机约束，因此不能只依赖闭包中的 state。
-   *
-   * refs 分为三组：
-   * - 当前运行标识，用于丢弃其他会话或迟到的事件；
-   * - 流式内容快照，用于在 React 提交前连续归并输出；
-   * - 定时器与失败诊断，用于统一处理超时、审批过期和异常退出。
-   */
-  const [notice, setNotice] = useState<string | null>(null);
-  const [canRetryQuestion, setCanRetryQuestion] = useState(false);
-  const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
-  const [streamText, setStreamText] = useState('');
-  const [runParts, setRunParts] = useState<AiMessagePart[]>([]);
-  const [pendingApproval, setPendingApproval] = useState<AiToolApprovalEvent | null>(null);
-  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
+  const [tasks, setTasks] = useState<AiRuntimeTasks>({});
+  const [completedTaskResults, setCompletedTaskResults] = useState<AiCompletedTaskResults>({});
+  const [presentations, setPresentations] = useState<
+    Record<string, AiRuntimePresentation | undefined>
+  >({});
+  const [globalNotice, setGlobalNotice] = useState<string | null>(null);
   const [providerAvailability, setProviderAvailability] = useState<Record<string, boolean>>({});
   const [eventListenersReady, setEventListenersReady] = useState(false);
-  const runningSessionRef = useRef<string | null>(null);
-  const streamTextRef = useRef('');
-  const runPartsRef = useRef<AiMessagePart[]>([]);
-  const stderrLastRef = useRef('');
-  const answerStreamedRef = useRef(false);
-  const timeoutRef = useRef<number | null>(null);
-  const approvalExpiryTimeoutRef = useRef<number | null>(null);
-  const timedOutSessionRef = useRef<string | null>(null);
+  // ref 是事件回调的权威快照，避免并发输出早于 React state 提交而丢失。
+  const taskRefs = useRef(new Map<string, RuntimeTaskRef>());
 
-  /** 同步清理当前轮次的流式快照，防止下一轮的首个事件拼接到旧 ref。 */
-  const clearRunPresentation = useCallback(() => {
-    streamTextRef.current = '';
-    runPartsRef.current = [];
-    answerStreamedRef.current = false;
-    setStreamText('');
-    setRunParts([]);
-    setPendingApproval(null);
-    setApprovalSubmitting(false);
+  const setConversationPresentation = useCallback(
+    (conversationId: string, presentation: AiRuntimePresentation | null) => {
+      setPresentations((current) => {
+        if (presentation) return { ...current, [conversationId]: presentation };
+        if (!current[conversationId]) return current;
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
+    },
+    []
+  );
+
+  const recordTaskResult = useCallback((task: AiRuntimeTask, outcome: AiTaskOutcome) => {
+    const result = completeAiRuntimeTask(task, outcome, Date.now());
+    setCompletedTaskResults((current) => recordCompletedAiTaskResult(current, result));
   }, []);
 
-  // stopAiSession 只发出停止请求，最终状态仍由退出事件统一收敛。
-  // 请求失败时保持 runningSessionId，避免前端误判 Provider 已经退出。
-  const requestSessionStop = useCallback((sessionId: string) => {
-    void stopAiSession(sessionId).catch((error: unknown) => {
-      if (runningSessionRef.current !== sessionId) return;
-      timedOutSessionRef.current = null;
-      setNotice(aiRuntimeErrorMessage(error, '停止 AI 会话失败。'));
-      setCanRetryQuestion(false);
-    });
+  const markTaskResultRead = useCallback((conversationId: string) => {
+    setCompletedTaskResults((current) => removeCompletedAiTaskResult(current, conversationId));
   }, []);
+
+  const markAllTaskResultsRead = useCallback(() => {
+    setCompletedTaskResults({});
+  }, []);
+
+  const updateTask = useCallback(
+    (sessionId: string, updater: (task: AiRuntimeTask) => AiRuntimeTask) => {
+      const runtime = taskRefs.current.get(sessionId);
+      if (!runtime) return;
+      runtime.task = updater(runtime.task);
+      setTasks((current) => updateAiRuntimeTask(current, sessionId, runtime.task));
+    },
+    []
+  );
+
+  /** 清理单个任务的资源，绝不能影响其他终端的计时器。 */
+  const clearTaskTimers = useCallback((runtime: RuntimeTaskRef) => {
+    if (runtime.idleTimeoutId !== null) window.clearTimeout(runtime.idleTimeoutId);
+    if (runtime.approvalExpiryTimeoutId !== null) {
+      window.clearTimeout(runtime.approvalExpiryTimeoutId);
+    }
+    runtime.idleTimeoutId = null;
+    runtime.approvalExpiryTimeoutId = null;
+  }, []);
+
+  const removeTask = useCallback(
+    (sessionId: string): RuntimeTaskRef | null => {
+      const runtime = taskRefs.current.get(sessionId);
+      if (!runtime) return null;
+      clearTaskTimers(runtime);
+      taskRefs.current.delete(sessionId);
+      setTasks((current) => removeAiRuntimeTask(current, sessionId));
+      return runtime;
+    },
+    [clearTaskTimers]
+  );
+
+  // 停止只发送请求，最终回答和错误状态仍统一由对应 sessionId 的退出事件收敛。
+  const requestSessionStop = useCallback(
+    (sessionId: string) => {
+      if (!taskRefs.current.has(sessionId)) return;
+      void stopAiSession(sessionId).catch((error: unknown) => {
+        const runtime = taskRefs.current.get(sessionId);
+        if (!runtime) return;
+        runtime.timedOut = false;
+        updateTask(sessionId, (task) => ({
+          ...task,
+          notice: aiRuntimeErrorMessage(error, '停止 AI 会话失败。'),
+        }));
+      });
+    },
+    [updateTask]
+  );
+
+  const restartIdleTimeout = useCallback(
+    (sessionId: string) => {
+      const runtime = taskRefs.current.get(sessionId);
+      if (!runtime) return;
+      if (runtime.idleTimeoutId !== null) window.clearTimeout(runtime.idleTimeoutId);
+      runtime.idleTimeoutId = window.setTimeout(() => {
+        const current = taskRefs.current.get(sessionId);
+        if (!current) return;
+        current.timedOut = true;
+        requestSessionStop(sessionId);
+      }, AI_IDLE_TIMEOUT_MS);
+    },
+    [requestSessionStop]
+  );
+
+  const failTaskStart = useCallback(
+    (sessionId: string, message: string) => {
+      const runtime = removeTask(sessionId);
+      if (!runtime) return;
+      setConversationPresentation(runtime.task.conversationId, {
+        notice: message,
+        canRetryQuestion: true,
+      });
+      recordTaskResult(runtime.task, 'failed');
+    },
+    [recordTaskResult, removeTask, setConversationPresentation]
+  );
 
   useEffect(() => {
-    // 事件监听只注册一次，并覆盖输出、退出和审批这三类运行时状态转换。
-    // AiPanel 隐藏时 Hook 仍然挂载，因此折叠面板不会中断正在执行的任务。
+    // 四类事件监听仅注册一次，每个回调按事件携带的 sessionId 精确路由。
     if (!isDesktopRuntime()) return;
     let disposed = false;
+    const runtimeTasks = taskRefs.current;
     const outputPromise = onAiOutput((event) => {
-      if (disposed || event.sessionId !== runningSessionRef.current) return;
-      // 任意 Provider 输出都代表任务仍有进展，重新计算空闲超时。
-      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-      timeoutRef.current = window.setTimeout(() => {
-        if (runningSessionRef.current !== event.sessionId) return;
-        timedOutSessionRef.current = event.sessionId;
-        requestSessionStop(event.sessionId);
-      }, AI_IDLE_TIMEOUT_MS);
+      if (disposed) return;
+      const runtime = taskRefs.current.get(event.sessionId);
+      if (!runtime) return;
+      restartIdleTimeout(event.sessionId);
       if (event.stream === 'stderr') {
-        // stderr 仅作为失败诊断，不能混入最终助手消息。
         const line = event.data.trim();
-        if (line) stderrLastRef.current = line;
+        if (line) runtime.stderrLast = line;
         return;
       }
       const reduced = reduceAiRuntimeOutput(event.data, {
-        text: streamTextRef.current,
-        parts: runPartsRef.current,
-        answerStreamed: answerStreamedRef.current,
+        text: runtime.task.streamText,
+        parts: runtime.task.runParts,
+        answerStreamed: runtime.answerStreamed,
       });
       if (!reduced.changed) return;
-      // 先更新 ref，再提交 React state；Provider 可能在下次渲染前立即退出。
-      streamTextRef.current = reduced.text;
-      runPartsRef.current = reduced.parts;
-      answerStreamedRef.current = reduced.answerStreamed;
-      setStreamText(reduced.text);
-      setRunParts(reduced.parts);
+      runtime.answerStreamed = reduced.answerStreamed;
+      updateTask(event.sessionId, (task) => ({
+        ...task,
+        streamText: reduced.text,
+        runParts: reduced.parts,
+      }));
     });
     const exitPromise = onAiExit((event) => {
-      if (disposed || event.sessionId !== runningSessionRef.current) return;
-      // 退出事件是唯一完成路径：停止计时、持久化结果并释放审批状态。
-      if (timeoutRef.current !== null) {
-        window.clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
+      if (disposed) return;
+      const runtime = removeTask(event.sessionId);
+      if (!runtime) return;
+      const { task } = runtime;
+      if (task.streamText.trim()) {
+        addMessage(task.conversationId, 'assistant', task.streamText.trim(), task.runParts);
       }
-      setRunningSessionId(null);
-      setPendingApproval(null);
-      setApprovalSubmitting(false);
-      if (approvalExpiryTimeoutRef.current !== null) {
-        window.clearTimeout(approvalExpiryTimeoutRef.current);
-        approvalExpiryTimeoutRef.current = null;
-      }
-      runningSessionRef.current = null;
-      if (streamTextRef.current.trim()) {
-        addMessage('assistant', streamTextRef.current.trim(), runPartsRef.current);
-      }
-      clearRunPresentation();
-      if (timedOutSessionRef.current === event.sessionId) {
-        timedOutSessionRef.current = null;
-        setNotice(
-          `AI 会话超过 ${AI_IDLE_TIMEOUT_SECONDS} 秒没有新的输出，已自动停止。请检查 AI 服务或终端连接状态后重试。`
-        );
-        setCanRetryQuestion(true);
+      let outcome: AiTaskOutcome;
+      if (runtime.timedOut) {
+        outcome = 'timed_out';
+        setConversationPresentation(task.conversationId, {
+          notice: `AI 会话超过 ${AI_IDLE_TIMEOUT_SECONDS} 秒没有新的输出，已自动停止。请检查 AI 服务或终端连接状态后重试。`,
+          canRetryQuestion: true,
+        });
       } else if (event.cancelled) {
-        setNotice('AI 会话已停止。');
-        setCanRetryQuestion(true);
+        outcome = 'stopped';
+        setConversationPresentation(task.conversationId, {
+          notice: 'AI 会话已停止。',
+          canRetryQuestion: true,
+        });
       } else if (event.code !== 0) {
-        const detail = stderrLastRef.current.slice(0, 200);
-        setNotice(
-          `AI Provider 异常退出（代码 ${event.code ?? '未知'}）${detail ? `：${detail}` : ''}。`
-        );
-        setCanRetryQuestion(true);
+        outcome = 'failed';
+        const detail = runtime.stderrLast.slice(0, 200);
+        setConversationPresentation(task.conversationId, {
+          notice: `AI Provider 异常退出（代码 ${event.code ?? '未知'}）${detail ? `：${detail}` : ''}。`,
+          canRetryQuestion: true,
+        });
       } else {
-        setNotice(null);
-        setCanRetryQuestion(false);
+        outcome = 'completed';
+        setConversationPresentation(task.conversationId, null);
       }
+      recordTaskResult(task, outcome);
     });
     const approvalPromise = onAiToolApproval((event) => {
-      if (disposed || event.sessionId !== runningSessionRef.current) return;
-      // 等待人工确认不是 Provider 卡死，审批期间暂停空闲超时。
-      if (timeoutRef.current !== null) {
-        window.clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
+      if (disposed) return;
+      const runtime = taskRefs.current.get(event.sessionId);
+      if (!runtime) return;
+      // 等待人工确认不算 Provider 空闲；到期后只恢复该任务的空闲计时。
+      if (runtime.idleTimeoutId !== null) window.clearTimeout(runtime.idleTimeoutId);
+      runtime.idleTimeoutId = null;
+      if (runtime.approvalExpiryTimeoutId !== null) {
+        window.clearTimeout(runtime.approvalExpiryTimeoutId);
       }
-      setPendingApproval(event);
-      setApprovalSubmitting(false);
-      if (approvalExpiryTimeoutRef.current !== null) {
-        window.clearTimeout(approvalExpiryTimeoutRef.current);
-      }
-      approvalExpiryTimeoutRef.current = window.setTimeout(
+      updateTask(event.sessionId, (task) => ({
+        ...task,
+        pendingApproval: event,
+        approvalSubmitting: false,
+        notice: null,
+      }));
+      runtime.approvalExpiryTimeoutId = window.setTimeout(
         () => {
-          // 后端关闭事件可能因系统休眠而延迟，本地绝对到期时间用于界面自愈。
-          setPendingApproval((current) =>
-            current?.approvalId === event.approvalId ? null : current
-          );
-          setApprovalSubmitting(false);
-          if (runningSessionRef.current === event.sessionId) {
-            setNotice('终端命令确认已超时，命令未执行。');
-            timeoutRef.current = window.setTimeout(() => {
-              if (runningSessionRef.current !== event.sessionId) return;
-              timedOutSessionRef.current = event.sessionId;
-              requestSessionStop(event.sessionId);
-            }, AI_IDLE_TIMEOUT_MS);
-          }
+          const current = taskRefs.current.get(event.sessionId);
+          if (current?.task.pendingApproval?.approvalId !== event.approvalId) return;
+          current.approvalExpiryTimeoutId = null;
+          updateTask(event.sessionId, (task) => ({
+            ...task,
+            pendingApproval: null,
+            approvalSubmitting: false,
+            notice: '终端命令确认已超时，命令未执行。',
+          }));
+          restartIdleTimeout(event.sessionId);
         },
         Math.max(0, event.expiresAtUnixMs - Date.now())
       );
     });
     const approvalClosedPromise = onAiToolApprovalClosed((event) => {
-      if (disposed || event.sessionId !== runningSessionRef.current) return;
-      // 后端是审批结果的权威来源；关闭后恢复 Provider 空闲计时。
-      if (approvalExpiryTimeoutRef.current !== null) {
-        window.clearTimeout(approvalExpiryTimeoutRef.current);
-        approvalExpiryTimeoutRef.current = null;
+      if (disposed) return;
+      const runtime = taskRefs.current.get(event.sessionId);
+      if (!runtime) return;
+      if (runtime.approvalExpiryTimeoutId !== null) {
+        window.clearTimeout(runtime.approvalExpiryTimeoutId);
+        runtime.approvalExpiryTimeoutId = null;
       }
-      setPendingApproval((current) => (current?.approvalId === event.approvalId ? null : current));
-      setApprovalSubmitting(false);
-      if (event.resolution === 'timed_out') setNotice('终端命令确认已超时，命令未执行。');
-      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-      timeoutRef.current = window.setTimeout(() => {
-        if (runningSessionRef.current !== event.sessionId) return;
-        timedOutSessionRef.current = event.sessionId;
-        requestSessionStop(event.sessionId);
-      }, AI_IDLE_TIMEOUT_MS);
+      updateTask(event.sessionId, (task) => ({
+        ...task,
+        pendingApproval:
+          task.pendingApproval?.approvalId === event.approvalId ? null : task.pendingApproval,
+        approvalSubmitting: false,
+        notice: event.resolution === 'timed_out' ? '终端命令确认已超时，命令未执行。' : task.notice,
+      }));
+      restartIdleTimeout(event.sessionId);
     });
     const subscriptions = [outputPromise, exitPromise, approvalPromise, approvalClosedPromise];
-    // 必须等待四个监听全部注册成功，避免会话启动后缺失任一关键事件。
     void Promise.all(subscriptions)
       .then(() => {
         if (!disposed) setEventListenersReady(true);
@@ -231,7 +307,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       .catch((error: unknown) => {
         if (!disposed) {
           setEventListenersReady(false);
-          setNotice(aiRuntimeErrorMessage(error, '初始化 AI 事件监听失败，请重启应用。'));
+          setGlobalNotice(aiRuntimeErrorMessage(error, '初始化 AI 事件监听失败，请重启应用。'));
         }
       });
     void getAiProviderStatus()
@@ -243,22 +319,29 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         }
       })
       .catch((error: unknown) => {
-        if (!disposed) setNotice(aiRuntimeErrorMessage(error, '读取 AI Provider 状态失败。'));
+        if (!disposed) {
+          setGlobalNotice(aiRuntimeErrorMessage(error, '读取 AI Provider 状态失败。'));
+        }
       });
     return () => {
       disposed = true;
-      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-      if (approvalExpiryTimeoutRef.current !== null) {
-        window.clearTimeout(approvalExpiryTimeoutRef.current);
-      }
+      runtimeTasks.forEach(clearTaskTimers);
       subscriptions.forEach((subscription) => {
         // 某个监听注册失败不能阻止其他已注册监听释放。
         void subscription.then((unlisten) => unlisten()).catch(() => undefined);
       });
     };
-  }, [addMessage, clearRunPresentation, requestSessionStop]);
+  }, [
+    addMessage,
+    clearTaskTimers,
+    removeTask,
+    recordTaskResult,
+    restartIdleTimeout,
+    setConversationPresentation,
+    updateTask,
+  ]);
 
-  /** 组装终端上下文并启动 Provider，会话历史与当前轮次分别传给适配层。 */
+  /** 先注册客户端 sessionId，再调用后端，保证快速输出也能找到所属任务。 */
   const sendQuestion = useCallback(
     ({
       question,
@@ -269,32 +352,63 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       target,
       commandPolicy,
     }: StartAiQuestion) => {
-      setNotice(null);
-      setCanRetryQuestion(false);
-      clearRunPresentation();
-      if (approvalExpiryTimeoutRef.current !== null) {
-        window.clearTimeout(approvalExpiryTimeoutRef.current);
-        approvalExpiryTimeoutRef.current = null;
+      setConversationPresentation(conversationId, null);
+      markTaskResultRead(conversationId);
+      if (!target.binding || !target.workspaceSessionId) {
+        setConversationPresentation(conversationId, {
+          notice: '当前终端不可用，无法启动 AI 任务。',
+          canRetryQuestion: true,
+        });
+        return;
       }
-      stderrLastRef.current = '';
-      timedOutSessionRef.current = null;
       if (!isDesktopRuntime()) {
-        setNotice('浏览器预览不具备本机进程权限，请在 Nocterm 桌面客户端中使用 AI Provider。');
+        setConversationPresentation(conversationId, {
+          notice: '浏览器预览不具备本机进程权限，请在 Nocterm 桌面客户端中使用 AI Provider。',
+          canRetryQuestion: true,
+        });
         return;
       }
       if (!eventListenersReady) {
-        setNotice('AI 事件通道尚未就绪，请稍后重试；持续不可用时请重启应用。');
+        setConversationPresentation(conversationId, {
+          notice: 'AI 事件通道尚未就绪，请稍后重试；持续不可用时请重启应用。',
+          canRetryQuestion: true,
+        });
         return;
       }
-      // 先绑定客户端会话 ID 再 invoke，避免极快退出的 Provider 事件被过滤。
+      const currentTasks = runtimeTaskSnapshots(taskRefs.current);
+      if (!canStartAiRuntimeTask(currentTasks, conversationId, target.binding)) {
+        setConversationPresentation(conversationId, {
+          notice: '当前终端已有 AI 任务正在运行，请先处理或停止该任务。',
+          canRetryQuestion: false,
+        });
+        return;
+      }
+
       const clientSessionId = `ai-${crypto.randomUUID()}`;
-      runningSessionRef.current = clientSessionId;
-      setRunningSessionId(clientSessionId);
-      timeoutRef.current = window.setTimeout(() => {
-        if (runningSessionRef.current !== clientSessionId) return;
-        timedOutSessionRef.current = clientSessionId;
-        requestSessionStop(clientSessionId);
-      }, AI_IDLE_TIMEOUT_MS);
+      const task: AiRuntimeTask = {
+        sessionId: clientSessionId,
+        conversationId,
+        target: target.binding,
+        sourceTerminalSessionId: target.workspaceSessionId,
+        provider,
+        startedAt: Date.now(),
+        streamText: '',
+        runParts: [],
+        pendingApproval: null,
+        approvalSubmitting: false,
+        notice: null,
+      };
+      taskRefs.current.set(clientSessionId, {
+        task,
+        answerStreamed: false,
+        stderrLast: '',
+        timedOut: false,
+        idleTimeoutId: null,
+        approvalExpiryTimeoutId: null,
+      });
+      setTasks((current) => ({ ...current, [clientSessionId]: task }));
+      restartIdleTimeout(clientSessionId);
+
       const prompt = `${target.context}${buildAiPrompt(question, attachment)}`;
       void startAiSession(
         clientSessionId,
@@ -308,86 +422,78 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         commandPolicy
       )
         .then((result) => {
-          if (
-            result.sessionId !== clientSessionId &&
-            runningSessionRef.current === clientSessionId
-          ) {
-            if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-            timeoutRef.current = null;
-            runningSessionRef.current = null;
-            setRunningSessionId(null);
-            setNotice('AI Provider 返回了不匹配的会话标识。');
-            setCanRetryQuestion(true);
+          if (result.sessionId !== clientSessionId && taskRefs.current.has(clientSessionId)) {
+            failTaskStart(clientSessionId, 'AI Provider 返回了不匹配的会话标识。');
           }
         })
         .catch((error: unknown) => {
-          if (runningSessionRef.current !== clientSessionId) return;
-          if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-          timeoutRef.current = null;
-          runningSessionRef.current = null;
-          setRunningSessionId(null);
-          setNotice(aiRuntimeErrorMessage(error, '启动 AI Provider 失败。'));
-          setCanRetryQuestion(true);
+          if (!taskRefs.current.has(clientSessionId)) return;
+          failTaskStart(clientSessionId, aiRuntimeErrorMessage(error, '启动 AI Provider 失败。'));
         });
     },
-    [clearRunPresentation, eventListenersReady, requestSessionStop]
+    [
+      eventListenersReady,
+      failTaskStart,
+      markTaskResultRead,
+      restartIdleTimeout,
+      setConversationPresentation,
+    ]
   );
 
-  /** 提交审批后等待后端关闭事件；IPC 成功不等于命令已经完成。 */
+  /** 审批动作显式携带 sessionId，查看后台会话时也不会提交到当前终端。 */
   const resolveApproval = useCallback(
-    (approved: boolean) => {
-      if (!pendingApproval || approvalSubmitting) return;
-      const approvalId = pendingApproval.approvalId;
-      const sessionId = pendingApproval.sessionId;
-      setApprovalSubmitting(true);
-      void resolveAiToolApproval(approvalId, sessionId, approved)
+    (sessionId: string, approved: boolean) => {
+      const runtime = taskRefs.current.get(sessionId);
+      const approval = runtime?.task.pendingApproval;
+      if (!runtime || !approval || runtime.task.approvalSubmitting) return;
+      updateTask(sessionId, (task) => ({ ...task, approvalSubmitting: true }));
+      void resolveAiToolApproval(approval.approvalId, sessionId, approved)
         .then(() => {
-          if (approvalExpiryTimeoutRef.current !== null) {
-            window.clearTimeout(approvalExpiryTimeoutRef.current);
-            approvalExpiryTimeoutRef.current = null;
+          const current = taskRefs.current.get(sessionId);
+          if (!current) return;
+          if (current.approvalExpiryTimeoutId !== null) {
+            window.clearTimeout(current.approvalExpiryTimeoutId);
+            current.approvalExpiryTimeoutId = null;
           }
-          setPendingApproval((current) => (current?.approvalId === approvalId ? null : current));
-          setApprovalSubmitting(false);
-          if (runningSessionRef.current) {
-            if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-            timeoutRef.current = window.setTimeout(() => {
-              const currentSessionId = runningSessionRef.current;
-              if (!currentSessionId) return;
-              timedOutSessionRef.current = currentSessionId;
-              requestSessionStop(currentSessionId);
-            }, AI_IDLE_TIMEOUT_MS);
-          }
+          updateTask(sessionId, (task) => ({
+            ...task,
+            pendingApproval:
+              task.pendingApproval?.approvalId === approval.approvalId
+                ? null
+                : task.pendingApproval,
+            approvalSubmitting: false,
+          }));
+          restartIdleTimeout(sessionId);
         })
         .catch((error: unknown) => {
-          setApprovalSubmitting(false);
-          setNotice(aiRuntimeErrorMessage(error, '提交命令确认失败。'));
+          updateTask(sessionId, (task) => ({
+            ...task,
+            approvalSubmitting: false,
+            notice: aiRuntimeErrorMessage(error, '提交命令确认失败。'),
+          }));
         });
     },
-    [approvalSubmitting, pendingApproval, requestSessionStop]
+    [restartIdleTimeout, updateTask]
   );
 
-  /** 新建会话时清理上一轮的瞬时展示状态；运行中的任务不调用此入口。 */
-  const resetPresentation = useCallback(() => {
-    setNotice(null);
-    setCanRetryQuestion(false);
-    clearRunPresentation();
-    stderrLastRef.current = '';
-    timedOutSessionRef.current = null;
-  }, [clearRunPresentation]);
+  const clearConversationPresentation = useCallback(
+    (conversationId: string | null) => {
+      if (conversationId) setConversationPresentation(conversationId, null);
+    },
+    [setConversationPresentation]
+  );
 
   return {
-    notice,
-    setNotice,
-    canRetryQuestion,
-    runningSessionId,
-    streamText,
-    runParts,
-    pendingApproval,
-    approvalSubmitting,
+    tasks,
+    completedTaskResults,
+    presentations,
+    globalNotice,
     providerAvailability,
     sendQuestion,
     resolveApproval,
     requestSessionStop,
-    resetPresentation,
+    markTaskResultRead,
+    markAllTaskResultsRead,
+    clearConversationPresentation,
   };
 }
