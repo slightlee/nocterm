@@ -30,7 +30,7 @@ export function useSftpDirectoryBrowser({
 }: UseSftpDirectoryBrowserOptions) {
   const [localListing, setLocalListing] = useState<LocalDirectoryListing | null>(null);
   const [remoteListing, setRemoteListing] = useState<RemoteDirectoryListing | null>(null);
-  const [localPath, setLocalPath] = useState<string | undefined>();
+  const [localPath, setLocalPath] = useState<string | undefined>('~');
   const [remotePath, setRemotePath] = useState<string | undefined>();
   const [localLoading, setLocalLoading] = useState(false);
   const [remoteLoading, setRemoteLoading] = useState(false);
@@ -48,13 +48,15 @@ export function useSftpDirectoryBrowser({
 
   const loadLocalDirectory = useCallback(async (path?: string, force = false) => {
     const requestId = ++localRequestIdRef.current;
+    const requestedPath = path || '~';
+    setLocalPath(requestedPath);
     if (!isLocalFileApiAvailable()) {
       setLocalListing(null);
       setLocalError('当前环境不支持读取本地目录，请在 Tauri 客户端中使用。');
       return;
     }
 
-    const cacheKey = path || '';
+    const cacheKey = requestedPath;
     if (!force) {
       const cached = localCacheRef.current.get(cacheKey);
       if (cached) {
@@ -69,7 +71,7 @@ export function useSftpDirectoryBrowser({
     setLocalLoading(true);
     setLocalError('');
     try {
-      const listing = await listLocalDir(path);
+      const listing = await listLocalDir(requestedPath);
       localCacheRef.current.set(cacheKey, listing);
       localCacheRef.current.set(listing.path, listing);
       if (localRequestIdRef.current !== requestId) return;
@@ -77,7 +79,7 @@ export function useSftpDirectoryBrowser({
       setLocalPath(listing.path);
     } catch (err) {
       if (localRequestIdRef.current !== requestId) return;
-      setLocalError(err instanceof Error ? err.message : String(err));
+      setLocalError(getSftpErrorMessage(err));
     } finally {
       if (localRequestIdRef.current === requestId) setLocalLoading(false);
     }

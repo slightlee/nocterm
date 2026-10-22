@@ -394,11 +394,6 @@
   background: var(--accent-red-soft);
 }
 
-.paneNotice-info {
-  border-color: color-mix(in srgb, var(--accent-blue) 28%, var(--border-primary));
-  background: var(--accent-blue-soft);
-}
-
 .noticeIcon {
   width: 20px;
   height: 20px;
@@ -415,11 +410,6 @@
 .paneNotice-error .noticeIcon {
   color: var(--accent-red);
   background: var(--accent-red-soft);
-}
-
-.paneNotice-info .noticeIcon {
-  color: var(--accent-blue);
-  background: var(--accent-blue-soft);
 }
 
 .noticeContent {
@@ -440,6 +430,30 @@
   font-size: 12px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+.noticeActions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.noticeActions button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.noticeActions button:hover {
+  border-color: var(--border-focus);
+  color: var(--text-primary);
 }
 
 .fileRow {

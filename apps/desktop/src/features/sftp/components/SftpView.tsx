@@ -113,7 +113,7 @@ function SFTPView() {
       ) : (
         <main className={styles.manager}>
           <LocalFilePane
-            path={localListing?.path || localPath || '~'}
+            path={localPath || localListing?.path || '~'}
             parent={localListing?.parent ?? null}
             rows={localRows}
             loading={localLoading}
@@ -127,7 +127,7 @@ function SFTPView() {
             onSelectAll={selectAllLocal}
             onClearSelection={resetLocalSelection}
             onOpenDir={(path) => void loadLocalDirectory(path)}
-            onRefresh={() => void loadLocalDirectory(localListing?.path || localPath, true)}
+            onRefresh={() => void loadLocalDirectory(localPath || localListing?.path, true)}
             onSort={(key) => setLocalSort((current) => nextSortState(current, key))}
             onUpload={(rows) => void fileOperations.upload(rows)}
             onCreateDir={fileOperations.startCreateLocalDir}

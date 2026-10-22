@@ -5,7 +5,7 @@ mod state;
 
 use std::sync::Arc;
 
-use commands::sftp::{SftpTransferState, shutdown_sftp};
+use commands::sftp::{SftpLocalDirectoryState, SftpTransferState, shutdown_sftp};
 use nocterm_application::{
     ai_audit::AiAuditService, ai_conversation::AiConversationService,
     connection::ConnectionService, health::HealthService, settings::SettingsService,
@@ -57,6 +57,7 @@ pub fn run() {
             if let Some(state) = app.try_state::<AppState>() {
                 commands::ai_bridge::start_gateway(app.handle().clone(), &state);
             }
+            app.manage(SftpLocalDirectoryState::default());
             app.manage(SftpTransferState::default());
             // 任务栏图标在高缩放下被系统拉伸发糊：按窗口 DPI 显式设置大/小图标。
             #[cfg(target_os = "windows")]
