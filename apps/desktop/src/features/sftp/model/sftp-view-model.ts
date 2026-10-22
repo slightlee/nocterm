@@ -83,7 +83,9 @@ export function sortRows(rows: FileRow[], sort: SortState): FileRow[] {
   const direction = sort.direction === 'asc' ? 1 : -1;
   return [...rows].sort((a, b) => {
     const directoryOrder = Number(Boolean(b.isDir)) - Number(Boolean(a.isDir));
-    if (directoryOrder !== 0) return directoryOrder;
+    // 名称和大小排序沿用文件管理器习惯：目录固定在文件前面。
+    // 修改时间排序则以时间为第一关键字，不能让目录分组覆盖用户选择的排序列。
+    if (sort.key !== 'modified' && directoryOrder !== 0) return directoryOrder;
 
     if (sort.key === 'size') {
       const left = a.sizeBytes ?? -1;
@@ -92,9 +94,13 @@ export function sortRows(rows: FileRow[], sort: SortState): FileRow[] {
     }
 
     if (sort.key === 'modified') {
-      const left = a.modifiedAt ?? 0;
-      const right = b.modifiedAt ?? 0;
-      if (left !== right) return (left - right) * direction;
+      // 缺失时间始终排在已知时间之后，避免升序时“-”条目跑到最前面。
+      if (a.modifiedAt === null && b.modifiedAt !== null) return 1;
+      if (a.modifiedAt !== null && b.modifiedAt === null) return -1;
+      if (a.modifiedAt !== b.modifiedAt) {
+        return ((a.modifiedAt ?? 0) - (b.modifiedAt ?? 0)) * direction;
+      }
+      if (directoryOrder !== 0) return directoryOrder;
     }
 
     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) * direction;
