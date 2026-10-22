@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent } from 'react';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { ContextMenu, type ContextMenuItem } from '../../../shared/components/ContextMenu';
 import type {
   CreateEditState,
@@ -164,22 +164,23 @@ function SortableTableHeader({
 }
 
 function PaneNotice({
-  tone,
   title,
   message,
+  actions,
 }: {
-  tone: 'error' | 'info';
   title: string;
   message: string;
+  actions?: ReactNode;
 }) {
   return (
-    <div className={`${styles.paneNotice} ${styles[`paneNotice-${tone}`]}`}>
+    <div className={`${styles.paneNotice} ${styles['paneNotice-error']}`}>
       <span className={styles.noticeIcon} aria-hidden="true">
-        {tone === 'error' ? '!' : 'i'}
+        !
       </span>
       <div className={styles.noticeContent}>
         <strong>{title}</strong>
         <p>{message}</p>
+        {actions}
       </div>
     </div>
   );
@@ -396,7 +397,17 @@ function FilePane({
           {loading ? (
             <div className={styles.paneMessage}>{loadingMessage}</div>
           ) : error ? (
-            <PaneNotice tone="error" title={errorTitle} message={error} />
+            <PaneNotice
+              title={errorTitle}
+              message={error}
+              actions={
+                <div className={styles.noticeActions}>
+                  <button type="button" onClick={onRefresh}>
+                    重试
+                  </button>
+                </div>
+              }
+            />
           ) : rows.length === 0 && !parent ? (
             <div className={styles.paneMessage}>目录为空</div>
           ) : (

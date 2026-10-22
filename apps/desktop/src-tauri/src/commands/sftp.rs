@@ -10,7 +10,7 @@
 //! - 错误统一归一化为携带前端稳定 `code` 的 `__NOCTERM_SFTP_ERROR__` 哨兵消息。
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -88,6 +88,51 @@ struct TransferControl {
 #[derive(Default)]
 pub struct SftpTransferState {
     controls: Arc<Mutex<HashMap<String, TransferControl>>>,
+}
+
+const LOCAL_DIRECTORY_READ_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// 本地目录读取无法安全取消底层文件系统调用；超时后保留路径占用，阻止重复点击
+/// 为同一受保护目录持续堆积阻塞线程，避免底层读取完成前重复发起请求。
+#[derive(Default)]
+pub struct SftpLocalDirectoryState {
+    active_paths: Arc<Mutex<HashSet<PathBuf>>>,
+}
+
+struct LocalDirectoryReadGuard {
+    active_paths: Arc<Mutex<HashSet<PathBuf>>>,
+    path: PathBuf,
+}
+
+impl SftpLocalDirectoryState {
+    fn acquire(&self, path: &Path) -> Result<LocalDirectoryReadGuard, ErrorResponse> {
+        let mut active_paths = self.active_paths.lock().map_err(|_| {
+            error(
+                "SFTP_LOCAL_READ_INTERRUPTED",
+                "本地目录读取状态不可用",
+                true,
+            )
+        })?;
+        if !active_paths.insert(path.to_path_buf()) {
+            return Err(error(
+                "SFTP_LOCAL_READ_BUSY",
+                "该目录仍在等待系统响应，请稍后重试",
+                true,
+            ));
+        }
+        Ok(LocalDirectoryReadGuard {
+            active_paths: self.active_paths.clone(),
+            path: path.to_path_buf(),
+        })
+    }
+}
+
+impl Drop for LocalDirectoryReadGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active_paths) = self.active_paths.lock() {
+            active_paths.remove(&self.path);
+        }
+    }
 }
 
 impl SftpTransferState {
@@ -229,9 +274,8 @@ fn resolve_local(path: Option<String>) -> Result<PathBuf, ErrorResponse> {
     Ok(PathBuf::from(raw))
 }
 
-fn modified(path: &Path) -> Option<u64> {
-    path.metadata()
-        .ok()?
+fn modified(metadata: &fs::Metadata) -> Option<u64> {
+    metadata
         .modified()
         .ok()?
         .duration_since(UNIX_EPOCH)
@@ -239,27 +283,42 @@ fn modified(path: &Path) -> Option<u64> {
         .map(|v| v.as_secs())
 }
 
-#[tauri::command(async)]
-pub fn list_local_dir(path: Option<String>) -> Result<LocalDirectoryListing, ErrorResponse> {
-    let dir = resolve_local(path)?;
-    if !dir.is_dir() {
+fn local_read_error(err: &std::io::Error) -> ErrorResponse {
+    if err.kind() == std::io::ErrorKind::PermissionDenied {
+        error(
+            "SFTP_LOCAL_PERMISSION_DENIED",
+            "当前应用没有访问该本地目录的权限",
+            true,
+        )
+    } else {
+        error("SFTP_LOCAL_READ_FAILED", "读取本地目录失败", true)
+    }
+}
+
+fn read_local_directory(dir: PathBuf) -> Result<LocalDirectoryListing, ErrorResponse> {
+    let dir_metadata = fs::metadata(&dir).map_err(|err| local_read_error(&err))?;
+    if !dir_metadata.is_dir() {
         return Err(error("SFTP_LOCAL_PATH_INVALID", "目标路径不是目录", false));
     }
     let mut entries = Vec::new();
-    for item in
-        fs::read_dir(&dir).map_err(|_| error("SFTP_LOCAL_READ_FAILED", "读取本地目录失败", true))?
-    {
-        let item = item.map_err(|_| error("SFTP_LOCAL_READ_FAILED", "读取本地目录项失败", true))?;
+    for item in fs::read_dir(&dir).map_err(|err| local_read_error(&err))? {
+        // 单个目录项可能在枚举期间消失或被系统保护；这不应让其余可访问项全部失败。
+        let Ok(item) = item else {
+            continue;
+        };
         let p = item.path();
-        let metadata = item
-            .metadata()
-            .map_err(|_| error("SFTP_LOCAL_READ_FAILED", "读取本地文件信息失败", true))?;
+        let metadata = item.metadata().ok();
+        let is_dir = metadata.as_ref().is_some_and(fs::Metadata::is_dir)
+            || (metadata.is_none() && item.file_type().is_ok_and(|kind| kind.is_dir()));
         entries.push(LocalFileEntry {
             name: item.file_name().to_string_lossy().into_owned(),
             path: p.to_string_lossy().into_owned(),
-            is_dir: metadata.is_dir(),
-            size: metadata.is_file().then_some(metadata.len()),
-            modified_at: modified(&p),
+            is_dir,
+            size: metadata
+                .as_ref()
+                .filter(|value| value.is_file())
+                .map(fs::Metadata::len),
+            modified_at: metadata.as_ref().and_then(modified),
         });
     }
     entries.sort_by(|a, b| {
@@ -272,6 +331,58 @@ pub fn list_local_dir(path: Option<String>) -> Result<LocalDirectoryListing, Err
         parent: dir.parent().map(|p| p.to_string_lossy().into_owned()),
         entries,
     })
+}
+
+async fn run_local_directory_read(
+    guard: LocalDirectoryReadGuard,
+    dir: PathBuf,
+    timeout: Duration,
+    read: impl FnOnce(PathBuf) -> Result<LocalDirectoryListing, ErrorResponse> + Send + 'static,
+) -> Result<LocalDirectoryListing, ErrorResponse> {
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    let timeout_sender = sender.clone();
+    let (cancel_timeout, wait_for_cancel) = std::sync::mpsc::sync_channel(1);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        let _ = sender.blocking_send(read(dir));
+        let _ = cancel_timeout.send(());
+    });
+    thread::spawn(move || {
+        if wait_for_cancel.recv_timeout(timeout).is_err() {
+            let _ = timeout_sender.blocking_send(Err(error(
+                "SFTP_LOCAL_READ_TIMEOUT",
+                "读取本地目录超时，请稍后重试",
+                true,
+            )));
+        }
+    });
+
+    receiver.recv().await.unwrap_or_else(|| {
+        Err(error(
+            "SFTP_LOCAL_READ_INTERRUPTED",
+            "本地目录读取被中断，请重试",
+            true,
+        ))
+    })
+}
+
+/// 文件系统权限弹窗或云盘占位符可能让 `read_dir` 长时间阻塞。命令在专用阻塞线程
+/// 中执行，并在超时后恢复前端交互；底层调用结束前，同一路径由状态守卫拒绝重复读取。
+#[tauri::command]
+pub async fn list_local_dir(
+    state: State<'_, SftpLocalDirectoryState>,
+    path: Option<String>,
+) -> Result<LocalDirectoryListing, ErrorResponse> {
+    let dir = resolve_local(path)?;
+    let guard = state.acquire(&dir)?;
+    run_local_directory_read(
+        guard,
+        dir,
+        LOCAL_DIRECTORY_READ_TIMEOUT,
+        read_local_directory,
+    )
+    .await
 }
 
 /// 拼接远程路径：根目录下避免出现重复分隔符，其余去除末尾斜杠后以 `/` 连接。
@@ -871,9 +982,60 @@ pub fn download_remote_to_local(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, thread, time::Duration};
 
-    use super::{join_remote, now_id, parent_remote, replace_local_path, temp_name, valid_name};
+    use super::{
+        LocalDirectoryListing, SftpLocalDirectoryState, join_remote, now_id, parent_remote,
+        read_local_directory, replace_local_path, run_local_directory_read, temp_name, valid_name,
+    };
+
+    #[test]
+    fn local_directory_read_returns_entries_and_releases_path_guard() {
+        let root = std::env::temp_dir().join(now_id("nocterm-sftp-list-test"));
+        fs::create_dir_all(root.join("folder")).expect("create test directory");
+        fs::write(root.join("file.txt"), "content").expect("write test file");
+
+        let state = SftpLocalDirectoryState::default();
+        let first_guard = state.acquire(&root).expect("acquire first path guard");
+        assert!(state.acquire(&root).is_err());
+        drop(first_guard);
+        assert!(state.acquire(&root).is_ok());
+
+        let listing = read_local_directory(root.clone()).expect("read local directory");
+        assert_eq!(listing.path, root.to_string_lossy());
+        assert_eq!(listing.entries.len(), 2);
+        assert!(listing.entries[0].is_dir);
+        assert_eq!(listing.entries[1].size, Some(7));
+
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn local_directory_read_times_out_without_releasing_running_path() {
+        let root = std::env::temp_dir().join(now_id("nocterm-sftp-timeout-test"));
+        let state = SftpLocalDirectoryState::default();
+        let guard = state.acquire(&root).expect("acquire path guard");
+        let result = tauri::async_runtime::block_on(run_local_directory_read(
+            guard,
+            root.clone(),
+            Duration::from_millis(5),
+            |path| {
+                thread::sleep(Duration::from_millis(30));
+                Ok(LocalDirectoryListing {
+                    path: path.to_string_lossy().into_owned(),
+                    parent: None,
+                    entries: Vec::new(),
+                })
+            },
+        ));
+
+        let error = serde_json::to_value(result.err().expect("directory read should time out"))
+            .expect("serialize timeout error");
+        assert_eq!(error["code"], "SFTP_LOCAL_READ_TIMEOUT");
+        assert!(state.acquire(&root).is_err());
+        thread::sleep(Duration::from_millis(40));
+        assert!(state.acquire(&root).is_ok());
+    }
 
     #[test]
     fn resolves_remote_parent_and_join_at_root() {

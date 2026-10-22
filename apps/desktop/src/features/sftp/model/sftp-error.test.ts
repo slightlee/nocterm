@@ -29,4 +29,16 @@ describe('sftp error messages', () => {
       '读取本地文件失败'
     );
   });
+
+  it('maps local directory timeout and permission errors to plain retryable messages', () => {
+    expect(
+      getSftpErrorMessage({ code: 'SFTP_LOCAL_READ_TIMEOUT', message: '读取本地目录超时' })
+    ).toContain('稍后重试');
+    expect(
+      getSftpErrorMessage({
+        code: 'SFTP_LOCAL_PERMISSION_DENIED',
+        message: '当前应用没有访问该本地目录的权限',
+      })
+    ).toContain('检查目录权限');
+  });
 });

@@ -14,6 +14,10 @@ type SftpErrorCode =
   | 'localCredentialMissing'
   | 'passwordRequired'
   | 'localReadFailed'
+  | 'localReadTimeout'
+  | 'localReadBusy'
+  | 'localPermissionDenied'
+  | 'localPathInvalid'
   | 'localWriteFailed'
   | 'unknown';
 
@@ -41,6 +45,10 @@ const SFTP_ERROR_MESSAGES: Record<SftpErrorCode, string> = {
   passwordRequired:
     '尚未提供登录密码：请先打开该连接的 SSH 终端输入一次密码并保持该标签打开，或编辑连接保存密码。',
   localReadFailed: '读取本地文件失败：请检查文件是否仍存在，以及当前账号是否有读取权限。',
+  localReadTimeout: '读取本地目录超时，请稍后重试。',
+  localReadBusy: '该目录仍在等待系统响应，请稍后再重试。',
+  localPermissionDenied: '没有访问该本地目录的权限，请检查目录权限后重试。',
+  localPathInvalid: '本地路径不存在或不是目录，请检查路径后重试。',
   localWriteFailed: '写入本地文件失败：原目标已保留，请检查磁盘空间和目录权限后重试。',
   unknown: '远程文件操作失败，请检查连接配置或稍后重试。',
 };
@@ -114,8 +122,12 @@ export function getSftpErrorMessage(err: unknown): string {
     SFTP_REMOTE_PROTOCOL_INVALID: 'unknown',
     SFTP_REMOTE_WRITE_FAILED: 'permissionDenied',
     SFTP_DISCONNECT_FAILED: 'unknown',
-    SFTP_LOCAL_PATH_INVALID: 'pathMissing',
+    SFTP_LOCAL_PATH_INVALID: 'localPathInvalid',
     SFTP_LOCAL_READ_FAILED: 'localReadFailed',
+    SFTP_LOCAL_READ_TIMEOUT: 'localReadTimeout',
+    SFTP_LOCAL_READ_BUSY: 'localReadBusy',
+    SFTP_LOCAL_PERMISSION_DENIED: 'localPermissionDenied',
+    SFTP_LOCAL_READ_INTERRUPTED: 'localReadFailed',
     SFTP_LOCAL_WRITE_FAILED: 'permissionDenied',
     SFTP_TRANSFER_FAILED: 'unknown',
   };
