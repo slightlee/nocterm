@@ -12,9 +12,13 @@ import {
   resizeLocalTerminal,
   writeLocalTerminal,
 } from '../api/local-terminal-client';
+import {
+  readTerminalClipboardText,
+  writeTerminalClipboardText,
+} from '../api/terminal-clipboard-client';
 import { createKeywordHighlighter } from '../model/keyword-highlight';
 import { readTerminalHighlightConfig } from '../model/highlight-config';
-import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
+import { attachTerminalClipboard, createCopyKeyHandler } from '../model/terminal-clipboard';
 import {
   applyTerminalAppearance,
   observeTerminalAppearance,
@@ -23,6 +27,7 @@ import {
   TERMINAL_FONT_FAMILY,
 } from '../model/terminal-appearance';
 import { useTerminalStore } from '../model/terminal-store';
+import { useTerminalNotice } from '../model/use-terminal-notice';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
 
@@ -37,6 +42,7 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
   const fitTerminalRef = useRef<(() => void) | null>(null);
   const setSessionStatus = useTerminalStore((state) => state.setSessionStatus);
   const markSessionConnected = useTerminalStore((state) => state.markSessionConnected);
+  const { notice, showNotice } = useTerminalNotice();
 
   useEffect(() => {
     if (active) fitTerminalRef.current?.();
@@ -79,19 +85,34 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
     const input = terminal.onData((data) => {
       if (terminalId) void writeLocalTerminal(terminalId, data);
     });
-    // 与 SSH 终端保持一致的右键粘贴：应用壳禁用了 WebView 原生右键菜单。
-    const detachPaste = attachRightClickPaste(container, {
-      paste: (text) => terminal.paste(text),
-      onUnavailable: (message) => terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`),
-    });
-    // 复制同样要自己接管：Ctrl+C 会被 xterm 当成中断信号，浏览器不会派发 copy 事件。
-    terminal.attachCustomKeyEventHandler(
-      createCopyKeyHandler({
+    // 有选区时右键复制；无选区时才粘贴，避免误把旧剪贴板内容写入 Shell。
+    const detachClipboard = attachTerminalClipboard(
+      container,
+      {
         hasSelection: () => terminal.hasSelection(),
         selection: () => terminal.getSelection(),
         clearSelection: () => terminal.clearSelection(),
-        onUnavailable: (message) => terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`),
-      })
+        paste: (text) => terminal.paste(text),
+        onUnavailable: (message) => {
+          if (!disposed) showNotice(message);
+        },
+      },
+      readTerminalClipboardText,
+      writeTerminalClipboardText
+    );
+    // 复制同样要自己接管：Ctrl+C 会被 xterm 当成中断信号，浏览器不会派发 copy 事件。
+    terminal.attachCustomKeyEventHandler(
+      createCopyKeyHandler(
+        {
+          hasSelection: () => terminal.hasSelection(),
+          selection: () => terminal.getSelection(),
+          clearSelection: () => terminal.clearSelection(),
+          onUnavailable: (message) => {
+            if (!disposed) showNotice(message);
+          },
+        },
+        writeTerminalClipboardText
+      )
     );
     const observer = new ResizeObserver(() => {
       // 从设置页返回时隐藏容器会恢复尺寸，此处重新读取色板，不能只做 fit。
@@ -150,7 +171,7 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
       // 先冲刷高亮器仍持有的尾部文本，再标记 disposed 停止后续写入。
       highlighter.dispose();
       disposed = true;
-      detachPaste();
+      detachClipboard();
       observer.disconnect();
       stopObservingAppearance();
       input.dispose();
@@ -160,9 +181,18 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
       fitTerminalRef.current = null;
       terminal.dispose();
     };
-  }, [markSessionConnected, sessionId, setSessionStatus]);
+  }, [markSessionConnected, sessionId, setSessionStatus, showNotice]);
 
-  return <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />;
+  return (
+    <div className={styles.terminalWrapper}>
+      <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />
+      {notice ? (
+        <div aria-live="polite" className={styles.terminalNotice} role="status">
+          {notice}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function getErrorMessage(error: unknown): string {

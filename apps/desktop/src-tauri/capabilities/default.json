@@ -4,6 +4,8 @@
   "description": "Nocterm desktop core permissions",
   "windows": ["main"],
   "permissions": [
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
     "core:app:allow-set-app-theme",
     "core:default",
     "core:window:allow-close",

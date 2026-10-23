@@ -167,6 +167,8 @@ creating -> running -> closing -> closed
 
 输出事件按终端 ID 隔离；读取端保持跨分块 UTF-8 解码状态；标签关闭、窗口关闭和应用退出必须回收 PTY、进程、SSH task 和事件监听。
 
+终端剪贴板通过 Terminal Feature API 调用 Tauri 原生文本剪贴板插件，主窗口只授予文本读写权限。有选区时右键复制，无选区时右键粘贴；剪贴板内容不进入日志、数据库或业务事件。
+
 ### 5.3 SFTP
 
 SFTP 使用 russh-sftp，不通过系统 `sftp`、远程 Shell 或 `tar` 模拟。

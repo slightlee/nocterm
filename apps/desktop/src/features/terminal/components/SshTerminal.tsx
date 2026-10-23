@@ -15,13 +15,17 @@ import {
   writeSshTerminal,
 } from '../api/ssh-terminal-client';
 import {
+  readTerminalClipboardText,
+  writeTerminalClipboardText,
+} from '../api/terminal-clipboard-client';
+import {
   EMPTY_PASSWORD_PROMPT,
   type PasswordPromptState,
   reducePasswordPrompt,
 } from '../model/password-prompt';
 import { createKeywordHighlighter } from '../model/keyword-highlight';
 import { readTerminalHighlightConfig } from '../model/highlight-config';
-import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
+import { attachTerminalClipboard, createCopyKeyHandler } from '../model/terminal-clipboard';
 import {
   applyTerminalAppearance,
   observeTerminalAppearance,
@@ -30,6 +34,7 @@ import {
   TERMINAL_FONT_FAMILY,
 } from '../model/terminal-appearance';
 import { type RemoteTerminalSession, useTerminalStore } from '../model/terminal-store';
+import { useTerminalNotice } from '../model/use-terminal-notice';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
 
@@ -46,6 +51,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
   const fitTerminalRef = useRef<(() => void) | null>(null);
   const setSessionStatus = useTerminalStore((state) => state.setSessionStatus);
   const markSessionConnected = useTerminalStore((state) => state.markSessionConnected);
+  const { notice, showNotice } = useTerminalNotice();
 
   useEffect(() => {
     if (active) fitTerminalRef.current?.();
@@ -146,14 +152,21 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       if (terminalId) void writeSshTerminal(terminalId, data);
     });
 
-    // 粘贴交回 xterm：口令提示符与已连会话都从 `onData` 收到内容，无需各自处理剪贴板。
-    const detachPaste = attachRightClickPaste(container, {
-      paste: (text) => terminal.paste(text),
-      onUnavailable: (message) => {
-        terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`);
-        drawPrompt();
+    // 即使正在输入口令，用户显式选中的历史输出仍应优先复制；无选区才执行粘贴。
+    const detachClipboard = attachTerminalClipboard(
+      container,
+      {
+        hasSelection: () => terminal.hasSelection(),
+        selection: () => terminal.getSelection(),
+        clearSelection: () => terminal.clearSelection(),
+        paste: (text) => terminal.paste(text),
+        onUnavailable: (message) => {
+          if (!disposed) showNotice(message);
+        },
       },
-    });
+      readTerminalClipboardText,
+      writeTerminalClipboardText
+    );
     /**
      * 复制必须自己接管：Ctrl+C 会先被 xterm 当成中断信号，浏览器不会派发 `copy` 事件。
      *
@@ -161,15 +174,17 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
      * Ctrl+Shift+C 仍被这里吞掉（复制空选区即无操作），不会误发 `\x03` 打断提示。
      */
     terminal.attachCustomKeyEventHandler(
-      createCopyKeyHandler({
-        hasSelection: () => !prompt && terminal.hasSelection(),
-        selection: () => terminal.getSelection(),
-        clearSelection: () => terminal.clearSelection(),
-        onUnavailable: (message) => {
-          terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`);
-          drawPrompt();
+      createCopyKeyHandler(
+        {
+          hasSelection: () => !prompt && terminal.hasSelection(),
+          selection: () => terminal.getSelection(),
+          clearSelection: () => terminal.clearSelection(),
+          onUnavailable: (message) => {
+            if (!disposed) showNotice(message);
+          },
         },
-      })
+        writeTerminalClipboardText
+      )
     );
     const observer = new ResizeObserver(() => {
       // 从设置页返回时隐藏容器会恢复尺寸，此处重新读取色板，不能只做 fit。
@@ -292,7 +307,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       disposed = true;
       // 卸载时先兑现挂起的口令提示，否则等待它的 Promise 永远不会落地。
       settlePrompt(null);
-      detachPaste();
+      detachClipboard();
       observer.disconnect();
       stopObservingAppearance();
       input.dispose();
@@ -302,11 +317,16 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       fitTerminalRef.current = null;
       terminal.dispose();
     };
-  }, [connection, connectionId, markSessionConnected, sessionId, setSessionStatus]);
+  }, [connection, connectionId, markSessionConnected, sessionId, setSessionStatus, showNotice]);
 
   return (
     <div className={styles.terminalWrapper}>
       <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />
+      {notice ? (
+        <div aria-live="polite" className={styles.terminalNotice} role="status">
+          {notice}
+        </div>
+      ) : null}
     </div>
   );
 }

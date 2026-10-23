@@ -1,9 +1,9 @@
 /**
- * 终端的复制与右键粘贴。
+ * 终端的复制与右键操作。
  *
  * 应用壳在捕获阶段统一 `preventDefault` 掉了 WebView 原生右键菜单（`AppShell`），
- * 因此终端里既没有菜单，也就没有"复制/粘贴"菜单项；而右键即粘贴本来就是终端的通用习惯
- * （PuTTY、WindTerm、MobaXterm 默认如此）。这里显式补上这两条路径。
+ * 因此终端里既没有菜单，也就没有"复制/粘贴"菜单项。这里采用与 Windows Terminal
+ * 一致的状态语义：有选区时右键复制，没有选区时右键粘贴，避免把旧剪贴板内容误写进终端。
  *
  * 复制必须由我们自己接管：xterm 只在收到浏览器原生 `copy` 事件时才把选区写进
  * `clipboardData`，而 Ctrl+C 会先被 xterm 的按键处理吃掉并当成中断信号（`\x03`）发给
@@ -16,43 +16,6 @@
  * 原生粘贴不会被抑制（xterm 的自定义按键回调返回 false 只是跳过自身处理，不会
  * `preventDefault`），结果是粘贴两遍。
  */
-
-/** 粘贴目标：`paste` 交回 xterm 处理，让换行归一化与 bracketed paste 包裹保持一致。 */
-export interface TerminalPasteTarget {
-  paste: (text: string) => void;
-  /** 剪贴板不可读时给用户的提示，由调用方决定写到终端还是状态栏。 */
-  onUnavailable: (message: string) => void;
-}
-
-const CLIPBOARD_HINT = '无法读取剪贴板，请改用 Ctrl+V 粘贴';
-
-/** 绑定右键粘贴，返回解绑函数供组件卸载时调用。 */
-export function attachRightClickPaste(
-  container: HTMLElement,
-  target: TerminalPasteTarget
-): () => void {
-  const handleContextMenu = (event: MouseEvent) => {
-    // 阻止冒泡到应用壳，避免业务右键菜单在终端区域里被意外唤起。
-    event.preventDefault();
-    event.stopPropagation();
-
-    const clipboard = navigator.clipboard;
-    if (typeof clipboard?.readText !== 'function') {
-      target.onUnavailable(CLIPBOARD_HINT);
-      return;
-    }
-    void clipboard.readText().then(
-      (text) => {
-        if (text) target.paste(text);
-      },
-      // WebView 可能因权限策略拒绝读取剪贴板，此时明确引导到仍然可用的原生快捷键。
-      () => target.onUnavailable(CLIPBOARD_HINT)
-    );
-  };
-
-  container.addEventListener('contextmenu', handleContextMenu);
-  return () => container.removeEventListener('contextmenu', handleContextMenu);
-}
 
 /** 复制来源：由组件把 xterm 的选区 API 注入进来，便于在无 DOM 环境下单测判定逻辑。 */
 export interface TerminalCopySource {
@@ -91,6 +54,17 @@ export function isCopyShortcut(
 /** 写系统剪贴板；返回是否成功，便于失败时给出提示而不是静默丢弃。 */
 export type ClipboardWriter = (text: string) => Promise<boolean>;
 
+/** 读取系统剪贴板；桌面原生适配接入后可以通过该边界替换 WebView API。 */
+export type ClipboardReader = () => Promise<string>;
+
+/** 右键目标同时提供 xterm 的选区和粘贴能力，保证本地终端与 SSH 终端行为一致。 */
+export interface TerminalClipboardTarget extends TerminalCopySource {
+  /** 交回 xterm 处理换行归一化与 bracketed paste 包裹。 */
+  paste: (text: string) => void;
+}
+
+const PASTE_HINT = '无法读取剪贴板，请改用 Ctrl+V 粘贴';
+
 /**
  * 优先用异步剪贴板 API，失败再退到 `execCommand('copy')`。
  *
@@ -109,6 +83,13 @@ async function writeClipboardText(text: string): Promise<boolean> {
     }
   }
   return copyViaTemporaryTextarea(text);
+}
+
+/** WebView 剪贴板读取的集中边界；API 不可用和权限拒绝统一交给调用方提示。 */
+async function readClipboardText(): Promise<string> {
+  const clipboard = navigator.clipboard;
+  if (typeof clipboard?.readText !== 'function') throw new Error('clipboard read unavailable');
+  return clipboard.readText();
 }
 
 /** 老式兜底：把文本放进一个屏幕外 textarea，选中后执行系统复制命令，随后还原焦点。 */
@@ -151,6 +132,39 @@ export async function copyTerminalSelection(
   }
   source.clearSelection();
   return true;
+}
+
+/**
+ * 绑定终端右键语义：有选区只复制，无选区只粘贴。
+ *
+ * 读写函数可注入，使分支互斥和失败行为无需真实系统剪贴板也能回归测试。
+ */
+export function attachTerminalClipboard(
+  container: HTMLElement,
+  target: TerminalClipboardTarget,
+  read: ClipboardReader = readClipboardText,
+  write: ClipboardWriter = writeClipboardText
+): () => void {
+  const handleContextMenu = (event: MouseEvent) => {
+    // 应用壳已禁用原生菜单；此处完整消费事件，不能再冒泡到其他业务菜单。
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (target.hasSelection()) {
+      void copyTerminalSelection(target, write);
+      return;
+    }
+
+    void read().then(
+      (text) => {
+        if (text) target.paste(text);
+      },
+      () => target.onUnavailable(PASTE_HINT)
+    );
+  };
+
+  container.addEventListener('contextmenu', handleContextMenu);
+  return () => container.removeEventListener('contextmenu', handleContextMenu);
 }
 
 /**

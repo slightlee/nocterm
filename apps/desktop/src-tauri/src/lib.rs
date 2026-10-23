@@ -23,6 +23,7 @@ pub fn run() {
         std::process::exit(commands::ai_bridge::run_stdio(&endpoint));
     }
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
     #[cfg(target_os = "macos")]
