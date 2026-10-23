@@ -32,7 +32,7 @@ describe('buildInputHistory', () => {
     expect(history).toEqual(['查看日志', '重启服务', '检查磁盘']);
   });
 
-  it('ignores assistant messages and strips attachment marks', () => {
+  it('ignores assistant messages and strips file context summaries', () => {
     const withAssistant = conversation('a', [['查看磁盘\n\n附件：df.txt', 10]]);
     withAssistant.messages.push({
       id: 'a-reply',
@@ -46,6 +46,17 @@ describe('buildInputHistory', () => {
     expect(history).toEqual(['查看磁盘']);
   });
 
+  it('strips terminal selection and mixed context summaries', () => {
+    const history = buildInputHistory([
+      conversation('a', [
+        ['检查错误\n\n终端选区 · 3 行', 10],
+        ['比较日志\n\n附件：service.log\n终端选区 · 3 行', 20],
+      ]),
+    ]);
+
+    expect(history).toEqual(['检查错误', '比较日志']);
+  });
+
   it('deduplicates by content keeping the most recent occurrence', () => {
     const history = buildInputHistory([
       conversation('a', [['查看日志', 10]]),
@@ -55,8 +66,13 @@ describe('buildInputHistory', () => {
     expect(history).toEqual(['查看日志']);
   });
 
-  it('drops entries that become empty after stripping attachment marks', () => {
-    const history = buildInputHistory([conversation('a', [['\n\n附件：dump.bin', 10]])]);
+  it('drops entries that become empty after stripping context summaries', () => {
+    const history = buildInputHistory([
+      conversation('a', [
+        ['\n\n附件：dump.bin', 10],
+        ['\n\n终端选区 · 12 行', 20],
+      ]),
+    ]);
 
     expect(history).toEqual([]);
   });

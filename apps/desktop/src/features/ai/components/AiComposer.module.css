@@ -21,6 +21,9 @@
 
 .composer {
   /* Provider 菜单向上弹出，输入器不能裁剪子控件。 */
+  display: flex;
+  height: 132px;
+  flex-direction: column;
   background: var(--term-panel);
   border: 1px solid var(--term-border);
   border-radius: 11px;
@@ -38,8 +41,10 @@
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 52px;
+  min-height: 0;
+  flex: 1;
   padding: 10px 10px 2px;
+  overflow-y: auto;
   resize: none;
   color: var(--term-text);
   font: inherit;
@@ -56,8 +61,18 @@
 
 .attachmentRow {
   display: flex;
+  flex: none;
+  gap: 6px;
   min-width: 0;
-  padding: 4px 8px 2px;
+  padding: 8px 8px 0;
+}
+
+.attachmentRow > * {
+  max-width: calc((100% - 6px) / 2);
+}
+
+.attachmentRow > :only-child {
+  max-width: min(220px, 100%);
 }
 
 .composerFooter {
@@ -65,6 +80,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex: none;
   padding: 6px 8px 8px;
 }
 

@@ -1,7 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import {
@@ -12,9 +12,18 @@ import {
   resizeLocalTerminal,
   writeLocalTerminal,
 } from '../api/local-terminal-client';
+import {
+  readTerminalClipboardText,
+  writeTerminalClipboardText,
+} from '../api/terminal-clipboard-client';
 import { createKeywordHighlighter } from '../model/keyword-highlight';
 import { readTerminalHighlightConfig } from '../model/highlight-config';
-import { attachRightClickPaste, createCopyKeyHandler } from '../model/terminal-clipboard';
+import { attachTerminalClipboard, createCopyKeyHandler } from '../model/terminal-clipboard';
+import {
+  attachTerminalSelectionAction,
+  getTerminalSelectionAnchor,
+  type TerminalSelectionActionState,
+} from '../model/terminal-selection';
 import {
   applyTerminalAppearance,
   observeTerminalAppearance,
@@ -23,23 +32,39 @@ import {
   TERMINAL_FONT_FAMILY,
 } from '../model/terminal-appearance';
 import { useTerminalStore } from '../model/terminal-store';
+import { useTerminalNotice } from '../model/use-terminal-notice';
+import { TerminalSelectionAction } from './TerminalSelectionAction';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
 
 interface LocalTerminalProps {
   sessionId: string;
   active?: boolean;
+  onAddSelectionToAi: (sessionId: string, selection: string) => void;
 }
 
 /** 本地终端复用 SSH 终端的 xterm 呈现，但通过独立 IPC 驱动默认系统 Shell。 */
-export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) {
+export function LocalTerminal({
+  sessionId,
+  active = true,
+  onAddSelectionToAi,
+}: LocalTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const activeRef = useRef(active);
+  const [selectionAction, setSelectionAction] = useState<TerminalSelectionActionState | null>(null);
   const setSessionStatus = useTerminalStore((state) => state.setSessionStatus);
   const markSessionConnected = useTerminalStore((state) => state.markSessionConnected);
+  const { notice, showNotice } = useTerminalNotice();
 
   useEffect(() => {
-    if (active) fitTerminalRef.current?.();
+    activeRef.current = active;
+    if (active) {
+      fitTerminalRef.current?.();
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 隐藏的终端不能保留可点击的旧选区入口。
+      setSelectionAction(null);
+    }
   }, [active]);
 
   useEffect(() => {
@@ -61,11 +86,37 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
     // 角色配色来自设置（预设 + 用户覆盖），设置变化经 observer 热更新。
     const highlighter = createKeywordHighlighter({
       onDeferred: (text) => {
-        if (!disposed) terminal.write(text);
+        if (!disposed) {
+          setSelectionAction(null);
+          terminal.write(text);
+        }
       },
       highlight: readTerminalHighlightConfig(),
     });
     terminal.open(container);
+    const detachSelectionAction = attachTerminalSelectionAction(
+      container,
+      {
+        active: () => activeRef.current,
+        selection: () => terminal.getSelection(),
+        selectionAnchor: () => {
+          const position = terminal.getSelectionPosition();
+          if (!position) return null;
+          return getTerminalSelectionAnchor(
+            container,
+            terminal.element,
+            position,
+            terminal.buffer.active.viewportY,
+            terminal.cols,
+            terminal.rows
+          );
+        },
+        onContentChange: (listener) => terminal.onWriteParsed(listener),
+        onSelectionChange: (listener) => terminal.onSelectionChange(listener),
+        onViewportChange: (listener) => terminal.onScroll(listener),
+      },
+      setSelectionAction
+    );
     fitAddon.fit();
     fitTerminalRef.current = () => {
       fitAddon.fit();
@@ -77,24 +128,41 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
     let outputUnlisten: (() => void) | null = null;
     let exitUnlisten: (() => void) | null = null;
     const input = terminal.onData((data) => {
+      setSelectionAction(null);
       if (terminalId) void writeLocalTerminal(terminalId, data);
     });
-    // 与 SSH 终端保持一致的右键粘贴：应用壳禁用了 WebView 原生右键菜单。
-    const detachPaste = attachRightClickPaste(container, {
-      paste: (text) => terminal.paste(text),
-      onUnavailable: (message) => terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`),
-    });
-    // 复制同样要自己接管：Ctrl+C 会被 xterm 当成中断信号，浏览器不会派发 copy 事件。
-    terminal.attachCustomKeyEventHandler(
-      createCopyKeyHandler({
+    // 有选区时右键复制；无选区时才粘贴，避免误把旧剪贴板内容写入 Shell。
+    const detachClipboard = attachTerminalClipboard(
+      container,
+      {
         hasSelection: () => terminal.hasSelection(),
         selection: () => terminal.getSelection(),
         clearSelection: () => terminal.clearSelection(),
-        onUnavailable: (message) => terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`),
-      })
+        paste: (text) => terminal.paste(text),
+        onUnavailable: (message) => {
+          if (!disposed) showNotice(message);
+        },
+      },
+      readTerminalClipboardText,
+      writeTerminalClipboardText
+    );
+    // 复制同样要自己接管：Ctrl+C 会被 xterm 当成中断信号，浏览器不会派发 copy 事件。
+    terminal.attachCustomKeyEventHandler(
+      createCopyKeyHandler(
+        {
+          hasSelection: () => terminal.hasSelection(),
+          selection: () => terminal.getSelection(),
+          clearSelection: () => terminal.clearSelection(),
+          onUnavailable: (message) => {
+            if (!disposed) showNotice(message);
+          },
+        },
+        writeTerminalClipboardText
+      )
     );
     const observer = new ResizeObserver(() => {
       // 从设置页返回时隐藏容器会恢复尺寸，此处重新读取色板，不能只做 fit。
+      setSelectionAction(null);
       applyTerminalAppearance(terminal, container);
       fitAddon.fit();
       if (terminalId) void resizeLocalTerminal(terminalId, terminal.cols, terminal.rows);
@@ -112,7 +180,9 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
 
     void (async () => {
       const outputListener = await onLocalTerminalOutput((payload) => {
-        if (payload.sessionId === sessionId) terminal.write(highlighter.transform(payload.data));
+        if (payload.sessionId !== sessionId) return;
+        setSelectionAction(null);
+        terminal.write(highlighter.transform(payload.data));
       });
       if (disposed) {
         outputListener();
@@ -122,6 +192,7 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
 
       const exitListener = await onLocalTerminalExit((payload) => {
         if (payload.sessionId !== sessionId) return;
+        setSelectionAction(null);
         terminal.write('\r\n\x1b[90m[本地终端已退出]\x1b[0m\r\n');
         setSessionStatus(sessionId, 'closed');
       });
@@ -150,7 +221,8 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
       // 先冲刷高亮器仍持有的尾部文本，再标记 disposed 停止后续写入。
       highlighter.dispose();
       disposed = true;
-      detachPaste();
+      detachClipboard();
+      detachSelectionAction();
       observer.disconnect();
       stopObservingAppearance();
       input.dispose();
@@ -160,9 +232,25 @@ export function LocalTerminal({ sessionId, active = true }: LocalTerminalProps) 
       fitTerminalRef.current = null;
       terminal.dispose();
     };
-  }, [markSessionConnected, sessionId, setSessionStatus]);
+  }, [markSessionConnected, sessionId, setSessionStatus, showNotice]);
 
-  return <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />;
+  return (
+    <div className={styles.terminalWrapper}>
+      <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />
+      <TerminalSelectionAction
+        action={selectionAction}
+        onAdd={(selection) => {
+          setSelectionAction(null);
+          onAddSelectionToAi(sessionId, selection);
+        }}
+      />
+      {notice ? (
+        <div aria-live="polite" className={styles.terminalNotice} role="status">
+          {notice}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function getErrorMessage(error: unknown): string {

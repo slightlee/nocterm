@@ -44,7 +44,7 @@ interface AiRuntimeOptions {
 
 interface StartAiQuestion {
   question: string;
-  attachment: AiAttachment | null;
+  attachments: readonly AiAttachment[];
   history: AiMessage[];
   conversationId: string;
   provider: AiProviderId;
@@ -55,10 +55,13 @@ interface StartAiQuestion {
 export interface AiRuntimePresentation {
   notice: string | null;
   canRetryQuestion: boolean;
+  /** 失败重试所需的瞬时上下文；成功后随 presentation 清理，不进入消息持久化。 */
+  retryAttachments?: readonly AiAttachment[];
 }
 
 interface RuntimeTaskRef {
   task: AiRuntimeTask;
+  attachments: readonly AiAttachment[];
   answerStreamed: boolean;
   stderrLast: string;
   timedOut: boolean;
@@ -182,6 +185,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       setConversationPresentation(runtime.task.conversationId, {
         notice: message,
         canRetryQuestion: true,
+        retryAttachments: runtime.attachments,
       });
       recordTaskResult(runtime.task, 'failed');
     },
@@ -230,12 +234,14 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         setConversationPresentation(task.conversationId, {
           notice: `AI 会话超过 ${AI_IDLE_TIMEOUT_SECONDS} 秒没有新的输出，已自动停止。请检查 AI 服务或终端连接状态后重试。`,
           canRetryQuestion: true,
+          retryAttachments: runtime.attachments,
         });
       } else if (event.cancelled) {
         outcome = 'stopped';
         setConversationPresentation(task.conversationId, {
           notice: 'AI 会话已停止。',
           canRetryQuestion: true,
+          retryAttachments: runtime.attachments,
         });
       } else if (event.code !== 0) {
         outcome = 'failed';
@@ -243,6 +249,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         setConversationPresentation(task.conversationId, {
           notice: `AI Provider 异常退出（代码 ${event.code ?? '未知'}）${detail ? `：${detail}` : ''}。`,
           canRetryQuestion: true,
+          retryAttachments: runtime.attachments,
         });
       } else {
         outcome = 'completed';
@@ -345,7 +352,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
   const sendQuestion = useCallback(
     ({
       question,
-      attachment,
+      attachments,
       history,
       conversationId,
       provider,
@@ -358,6 +365,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         setConversationPresentation(conversationId, {
           notice: '当前终端不可用，无法启动 AI 任务。',
           canRetryQuestion: true,
+          retryAttachments: attachments,
         });
         return;
       }
@@ -365,6 +373,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         setConversationPresentation(conversationId, {
           notice: '浏览器预览不具备本机进程权限，请在 Nocterm 桌面客户端中使用 AI Provider。',
           canRetryQuestion: true,
+          retryAttachments: attachments,
         });
         return;
       }
@@ -372,6 +381,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         setConversationPresentation(conversationId, {
           notice: 'AI 事件通道尚未就绪，请稍后重试；持续不可用时请重启应用。',
           canRetryQuestion: true,
+          retryAttachments: attachments,
         });
         return;
       }
@@ -400,6 +410,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       };
       taskRefs.current.set(clientSessionId, {
         task,
+        attachments: [...attachments],
         answerStreamed: false,
         stderrLast: '',
         timedOut: false,
@@ -409,12 +420,12 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       setTasks((current) => ({ ...current, [clientSessionId]: task }));
       restartIdleTimeout(clientSessionId);
 
-      const prompt = `${target.context}${buildAiPrompt(question, attachment)}`;
+      const prompt = `${target.context}${buildAiPrompt(question, attachments)}`;
       void startAiSession(
         clientSessionId,
         conversationId,
         provider,
-        `${target.context}${buildConversationContext(history)}${buildAiPrompt(question, attachment)}`,
+        `${target.context}${buildConversationContext(history)}${buildAiPrompt(question, attachments)}`,
         prompt,
         undefined,
         target.connectionId,

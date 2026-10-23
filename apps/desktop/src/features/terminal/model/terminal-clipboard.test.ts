@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  type TerminalClipboardTarget,
   type TerminalCopySource,
+  attachTerminalClipboard,
   copyTerminalSelection,
   createCopyKeyHandler,
   isCopyShortcut,
@@ -29,6 +31,40 @@ function copySource(overrides: Partial<TerminalCopySource> = {}): TerminalCopySo
     clearSelection: vi.fn(),
     onUnavailable: vi.fn(),
     ...overrides,
+  };
+}
+
+function clipboardTarget(
+  overrides: Partial<TerminalClipboardTarget> = {}
+): TerminalClipboardTarget {
+  return {
+    ...copySource(),
+    paste: vi.fn(),
+    ...overrides,
+  };
+}
+
+/** 用最小事件目标驱动原生 contextmenu 监听，无需在单元测试中启动 WebView。 */
+function contextMenuHarness() {
+  let listener: ((event: MouseEvent) => void) | null = null;
+  const container = {
+    addEventListener: vi.fn((_type: string, next: (event: MouseEvent) => void) => {
+      listener = next;
+    }),
+    removeEventListener: vi.fn(),
+  } as unknown as HTMLElement;
+  const event = {
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  } as unknown as MouseEvent;
+
+  return {
+    container,
+    event,
+    trigger: () => {
+      if (!listener) throw new Error('contextmenu listener was not attached');
+      listener(event);
+    },
   };
 }
 
@@ -82,6 +118,73 @@ describe('copyTerminalSelection', () => {
     await expect(copyTerminalSelection(source, () => Promise.resolve(false))).resolves.toBe(false);
     expect(source.onUnavailable).toHaveBeenCalledOnce();
     expect(source.clearSelection).not.toHaveBeenCalled();
+  });
+});
+
+describe('attachTerminalClipboard', () => {
+  it('copies a selection without reading or pasting clipboard content', async () => {
+    const harness = contextMenuHarness();
+    const target = clipboardTarget();
+    const read = vi.fn().mockResolvedValue('old clipboard');
+    const write = vi.fn().mockResolvedValue(true);
+    attachTerminalClipboard(harness.container, target, read, write);
+
+    harness.trigger();
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledWith('selected'));
+    expect(read).not.toHaveBeenCalled();
+    expect(target.paste).not.toHaveBeenCalled();
+    expect(target.clearSelection).toHaveBeenCalledOnce();
+    expect(harness.event.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.event.stopPropagation).toHaveBeenCalledOnce();
+  });
+
+  it('pastes clipboard content only when the terminal has no selection', async () => {
+    const harness = contextMenuHarness();
+    const target = clipboardTarget({ hasSelection: () => false, selection: () => '' });
+    const read = vi.fn().mockResolvedValue('paste me');
+    const write = vi.fn().mockResolvedValue(true);
+    attachTerminalClipboard(harness.container, target, read, write);
+
+    harness.trigger();
+
+    await vi.waitFor(() => expect(target.paste).toHaveBeenCalledWith('paste me'));
+    expect(write).not.toHaveBeenCalled();
+    expect(target.clearSelection).not.toHaveBeenCalled();
+  });
+
+  it('does not paste or report an error for an empty clipboard', async () => {
+    const harness = contextMenuHarness();
+    const target = clipboardTarget({ hasSelection: () => false, selection: () => '' });
+    const read = vi.fn().mockResolvedValue('');
+    attachTerminalClipboard(harness.container, target, read);
+
+    harness.trigger();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+
+    expect(target.paste).not.toHaveBeenCalled();
+    expect(target.onUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('reports clipboard read failures without attempting a paste', async () => {
+    const harness = contextMenuHarness();
+    const target = clipboardTarget({ hasSelection: () => false, selection: () => '' });
+    attachTerminalClipboard(harness.container, target, () => Promise.reject(new Error('denied')));
+
+    harness.trigger();
+
+    await vi.waitFor(() => expect(target.onUnavailable).toHaveBeenCalledOnce());
+    expect(target.paste).not.toHaveBeenCalled();
+  });
+
+  it('removes the same contextmenu listener when detached', () => {
+    const harness = contextMenuHarness();
+    const detach = attachTerminalClipboard(harness.container, clipboardTarget());
+
+    detach();
+
+    const attached = vi.mocked(harness.container.addEventListener).mock.calls[0]?.[1];
+    expect(harness.container.removeEventListener).toHaveBeenCalledWith('contextmenu', attached);
   });
 });
 

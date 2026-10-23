@@ -13,7 +13,18 @@ import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import { resetAiConversation } from '../api/ai-client';
 import { useAiPersistence } from '../hooks/use-ai-persistence';
 import { useAiRuntime } from '../hooks/use-ai-runtime';
-import { readAiAttachment, type AiAttachment } from '../model/ai-attachment';
+import {
+  buildAiVisibleContextSummary,
+  createTerminalSelectionAttachment,
+  EMPTY_AI_COMPOSER_ATTACHMENTS,
+  listAiAttachments,
+  readAiAttachment,
+  removeAiAttachment,
+  setAiAttachment,
+  stripAiVisibleContextSummary,
+  type AiAttachment,
+  type AiComposerAttachments,
+} from '../model/ai-attachment';
 import {
   buildInputHistory,
   navigateInputHistory,
@@ -51,11 +62,25 @@ import styles from './AiPanel.module.css';
 interface AiPanelProps {
   activeView: AiWorkspaceView;
   onActivateTerminal: (sessionId: TerminalSessionId) => void;
+  onTerminalSelectionHandled: (requestId: string) => void;
+  terminalSelectionRequest: AiTerminalSelectionRequest | null;
   visible: boolean;
 }
 
+export interface AiTerminalSelectionRequest {
+  id: string;
+  terminalSessionId: TerminalSessionId;
+  selection: string;
+}
+
 /** AI 工作台常驻接收任务事件；Tab 切换只选择目标视图，不创建空会话。 */
-export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProps) {
+export function AiPanel({
+  activeView,
+  onActivateTerminal,
+  onTerminalSelectionHandled,
+  terminalSelectionRequest,
+  visible,
+}: AiPanelProps) {
   const sessions = useTerminalStore((state) => state.sessions);
   const activeId = useTerminalStore((state) => state.activeId);
   const recentRemoteSessionIds = useTerminalStore((state) => state.recentRemoteSessionIds);
@@ -78,7 +103,7 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
   const [taskMenuOpen, setTaskMenuOpen] = useState(false);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [inspectedConversationId, setInspectedConversationId] = useState<string | null>(null);
-  const [attachments, setAttachments] = useState<Record<string, AiAttachment | null>>({});
+  const [attachments, setAttachments] = useState<Record<string, AiComposerAttachments>>({});
   const [attachmentLoadingTargetKey, setAttachmentLoadingTargetKey] = useState<string | null>(null);
   const [panelNotices, setPanelNotices] = useState<Record<string, string | null>>({});
   const [persistenceNotice, setPersistenceNotice] = useState<string | null>(null);
@@ -131,9 +156,14 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
   const selectedProvider = AI_PROVIDERS.find((item) => item.id === provider) ?? AI_PROVIDERS[0];
   const messages = activeConversation?.messages ?? [];
   const draft = inspectedConversation ? '' : composerState.draft;
-  const attachment =
-    workspaceTargetKey && !inspectedConversation ? (attachments[workspaceTargetKey] ?? null) : null;
-  const attachmentLoading = attachmentLoadingTargetKey === workspaceTargetKey;
+  const composerAttachments =
+    workspaceTargetKey && !inspectedConversation
+      ? (attachments[workspaceTargetKey] ?? EMPTY_AI_COMPOSER_ATTACHMENTS)
+      : EMPTY_AI_COMPOSER_ATTACHMENTS;
+  const attachmentItems = listAiAttachments(composerAttachments);
+  const attachmentLoading = Boolean(
+    workspaceTargetKey && attachmentLoadingTargetKey === workspaceTargetKey
+  );
   const targetReady = viewingCurrentTarget && isAiTerminalTargetReady(workspaceTarget);
   const {
     tasks,
@@ -181,7 +211,6 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
 
   useEffect(() => {
     // 同一 SSH 连接的多个终端 Tab 共享 target key，因此不会误清其会话视图。
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 目标身份切换必须原子退出跨目标历史查看态。
     setInspectedConversationId(null);
     setHistoryOpen(false);
     setTaskMenuOpen(false);
@@ -197,9 +226,38 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
 
   useEffect(() => {
     if (taskAttentionCount > 0) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 入口消失时必须同步关闭浮层，避免后续任务自动展开。
     setTaskMenuOpen(false);
   }, [taskAttentionCount]);
+
+  useEffect(() => {
+    if (!terminalSelectionRequest) return;
+    const request = terminalSelectionRequest;
+    if (String(activeId) !== String(request.terminalSessionId) || !workspaceTargetKey) {
+      onTerminalSelectionHandled(request.id);
+      return;
+    }
+
+    try {
+      const nextAttachment = createTerminalSelectionAttachment(request.selection);
+      setInspectedConversationId(null);
+      setAttachments((current) => ({
+        ...current,
+        [workspaceTargetKey]: setAiAttachment(
+          current[workspaceTargetKey] ?? EMPTY_AI_COMPOSER_ATTACHMENTS,
+          nextAttachment
+        ),
+      }));
+      setPanelNotices((current) => ({ ...current, [workspaceTargetKey]: null }));
+      requestAnimationFrame(() => composerRef.current?.focus());
+    } catch (error: unknown) {
+      setPanelNotices((current) => ({
+        ...current,
+        [workspaceTargetKey]: error instanceof Error ? error.message : '读取终端选区失败。',
+      }));
+    } finally {
+      onTerminalSelectionHandled(request.id);
+    }
+  }, [activeId, onTerminalSelectionHandled, terminalSelectionRequest, workspaceTargetKey]);
 
   if (!visible) return null;
 
@@ -216,9 +274,23 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
     return '当前终端不可用';
   })();
 
-  const clearCurrentAttachment = () => {
+  const clearCurrentAttachments = () => {
     if (!workspaceTargetKey) return;
-    setAttachments((current) => ({ ...current, [workspaceTargetKey]: null }));
+    setAttachments((current) => ({
+      ...current,
+      [workspaceTargetKey]: EMPTY_AI_COMPOSER_ATTACHMENTS,
+    }));
+  };
+
+  const removeCurrentAttachment = (kind: AiAttachment['kind']) => {
+    if (!workspaceTargetKey) return;
+    setAttachments((current) => {
+      const existing = current[workspaceTargetKey] ?? EMPTY_AI_COMPOSER_ATTACHMENTS;
+      return {
+        ...current,
+        [workspaceTargetKey]: removeAiAttachment(existing, kind),
+      };
+    });
   };
 
   /** 异步操作必须把结果写回发起操作的目标，不能跟随之后切换到的 Tab。 */
@@ -230,16 +302,25 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
     event?.preventDefault();
     if (currentTargetTask || !workspaceTargetKey || !workspaceTarget.binding) return;
     const content = draft.trim();
-    if (!content && !attachment) return;
+    if (!content && attachmentItems.length === 0) return;
     if (!targetReady) {
       setTargetPanelNotice(panelViewKey, `${targetUnavailableMessage}，暂时无法发送新请求。`);
       return;
     }
 
-    const selectedAttachment = attachment;
-    const question = content || `请分析附件：${selectedAttachment?.name ?? '未命名文件'}`;
-    const visibleMessage = selectedAttachment
-      ? `${question}\n\n附件：${selectedAttachment.name}`
+    const selectedAttachments = attachmentItems;
+    const selectedFile = composerAttachments.file;
+    const selectedTerminal = composerAttachments.terminalSelection;
+    const question =
+      content ||
+      (selectedFile && selectedTerminal
+        ? '请结合文件和终端选区分析问题。'
+        : selectedTerminal
+          ? '请分析这段终端输出。'
+          : `请分析附件：${selectedFile?.name ?? '未命名文件'}`);
+    const visibleContextSummary = buildAiVisibleContextSummary(selectedAttachments);
+    const visibleMessage = visibleContextSummary
+      ? `${question}\n\n${visibleContextSummary}`
       : question;
     const conversationId =
       activeConversation?.id ??
@@ -247,11 +328,11 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
     const history = activeConversation?.messages ?? [];
     addMessage(conversationId, 'user', visibleMessage);
     setDraft(workspaceTargetKey, '');
-    clearCurrentAttachment();
+    clearCurrentAttachments();
     setTargetPanelNotice(panelViewKey, null);
     sendQuestion({
       question,
-      attachment: selectedAttachment,
+      attachments: selectedAttachments,
       history,
       conversationId,
       provider,
@@ -272,14 +353,19 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
     }
     const retried = lastUserIndex >= 0 ? messages[lastUserIndex] : undefined;
     if (!retried) return;
-    const question = retried.content.replace(/\n\n附件：[^\n]*$/, '');
+    const question = stripAiVisibleContextSummary(retried.content);
+    const retryAttachments = activePresentation?.retryAttachments ?? [];
+    const visibleContextSummary = buildAiVisibleContextSummary(retryAttachments);
+    const visibleMessage = visibleContextSummary
+      ? `${question}\n\n${visibleContextSummary}`
+      : question;
     messages
       .slice(lastUserIndex)
       .forEach((message) => deleteMessage(activeConversation.id, message.id));
-    addMessage(activeConversation.id, 'user', question);
+    addMessage(activeConversation.id, 'user', visibleMessage);
     sendQuestion({
       question,
-      attachment: null,
+      attachments: retryAttachments,
       history: messages.slice(0, lastUserIndex),
       conversationId: activeConversation.id,
       provider,
@@ -350,11 +436,16 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
     setAttachmentLoadingTargetKey(targetKey);
     void readAiAttachment(file)
       .then((nextAttachment) => {
-        setAttachments((current) => ({ ...current, [targetKey]: nextAttachment }));
+        setAttachments((current) => ({
+          ...current,
+          [targetKey]: setAiAttachment(
+            current[targetKey] ?? EMPTY_AI_COMPOSER_ATTACHMENTS,
+            nextAttachment
+          ),
+        }));
         setTargetPanelNotice(targetKey, null);
       })
       .catch((error: unknown) => {
-        setAttachments((current) => ({ ...current, [targetKey]: null }));
         setTargetPanelNotice(targetKey, error instanceof Error ? error.message : '读取附件失败。');
       })
       .finally(() =>
@@ -417,7 +508,7 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
     setHistoryOpen(false);
     setTaskMenuOpen(false);
     setProviderMenuOpen(false);
-    clearCurrentAttachment();
+    clearCurrentAttachments();
     composerRef.current?.focus();
   };
 
@@ -443,7 +534,10 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
     if (selectedTargetKey && selectedTargetKey === workspaceTargetKey) {
       selectConversation(selectedTargetKey, id);
       setInspectedConversationId(null);
-      setAttachments((current) => ({ ...current, [selectedTargetKey]: null }));
+      setAttachments((current) => ({
+        ...current,
+        [selectedTargetKey]: EMPTY_AI_COMPOSER_ATTACHMENTS,
+      }));
     } else {
       setInspectedConversationId(id);
     }
@@ -620,7 +714,7 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
       </div>
 
       <AiComposer
-        attachment={attachment}
+        attachments={attachmentItems}
         attachmentLoading={attachmentLoading}
         commandPolicy={commandPolicy}
         composerDisabled={
@@ -631,7 +725,7 @@ export function AiPanel({ activeView, onActivateTerminal, visible }: AiPanelProp
         draft={draft}
         fileInputRef={fileInputRef}
         onAttachmentChange={handleAttachmentChange}
-        onAttachmentRemove={clearCurrentAttachment}
+        onAttachmentRemove={removeCurrentAttachment}
         onCommandPolicyChange={(policy) => {
           if (workspaceTargetKey) {
             setCommandPolicy(workspaceTargetKey, activeConversationId, policy);
