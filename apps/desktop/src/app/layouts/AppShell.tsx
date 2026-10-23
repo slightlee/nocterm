@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { ConnectionList } from '../../features/connections';
-import { AiPanel, useAiStore } from '../../features/ai';
+import { AiPanel, useAiStore, type AiTerminalSelectionRequest } from '../../features/ai';
 import { useTerminalStore } from '../../features/terminal';
 import { useTopWindowDoubleClick, useTopWindowDrag } from '../../shared/hooks/useWindowDrag';
 import { isWindowsDesktopRuntime } from '../../shared/lib/desktop-platform';
@@ -20,6 +20,8 @@ export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [terminalSelectionRequest, setTerminalSelectionRequest] =
+    useState<AiTerminalSelectionRequest | null>(null);
   const connectionRoute = location.pathname.startsWith('/connections');
   const sidebarRoute = connectionRoute || location.pathname.startsWith('/sftp');
   const settingsRoute = location.pathname.startsWith('/settings');
@@ -27,8 +29,25 @@ export function AppShell() {
   const handleTopWindowDoubleClick = useTopWindowDoubleClick();
   const windowsDesktop = isWindowsDesktopRuntime();
   const aiOpen = useAiStore((state) => state.open);
+  const setAiOpen = useAiStore((state) => state.setOpen);
   const toggleAi = useAiStore((state) => state.toggle);
   const activateTerminal = useTerminalStore((state) => state.activateConnection);
+
+  const addTerminalSelectionToAi = useCallback(
+    (terminalSessionId: string, selection: string) => {
+      setTerminalSelectionRequest({
+        id: crypto.randomUUID(),
+        terminalSessionId,
+        selection,
+      });
+      setAiOpen(true);
+    },
+    [setAiOpen]
+  );
+
+  const handleTerminalSelectionHandled = useCallback((requestId: string) => {
+    setTerminalSelectionRequest((current) => (current?.id === requestId ? null : current));
+  }, []);
 
   const createLocalTerminal = useCallback(() => {
     const { sessions, openLocalSession } = useTerminalStore.getState();
@@ -171,7 +190,7 @@ export function AppShell() {
           <div
             className={`${styles.terminalWorkspace} ${connectionRoute ? '' : styles.hiddenWorkspace}`}
           >
-            <TerminalWorkspace />
+            <TerminalWorkspace onAddSelectionToAi={addTerminalSelectionToAi} />
           </div>
           {!connectionRoute ? (
             <Outlet
@@ -190,6 +209,8 @@ export function AppShell() {
             activateTerminal(sessionId);
             navigate('/connections');
           }}
+          onTerminalSelectionHandled={handleTerminalSelectionHandled}
+          terminalSelectionRequest={terminalSelectionRequest}
           visible={sidebarRoute && aiOpen}
         />
       </div>

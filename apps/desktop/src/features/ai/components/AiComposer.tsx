@@ -23,7 +23,7 @@ interface AiComposerProps {
   composerDisabled: boolean;
   statusMessage?: string;
   draft: string;
-  attachment: AiAttachment | null;
+  attachments: readonly AiAttachment[];
   attachmentLoading: boolean;
   targetReady: boolean;
   targetUnavailableMessage: string;
@@ -33,7 +33,7 @@ interface AiComposerProps {
   onDraftChange: (value: string) => void;
   onComposerKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onAttachmentChange: (event: ChangeEvent<HTMLInputElement>) => void;
-  onAttachmentRemove: () => void;
+  onAttachmentRemove: (kind: AiAttachment['kind']) => void;
   onProviderMenuToggle: () => void;
   onProviderChange: (provider: AiProviderId) => void;
   commandPolicy: AiCommandPolicy;
@@ -52,7 +52,7 @@ export function AiComposer({
   composerDisabled,
   statusMessage,
   draft,
-  attachment,
+  attachments,
   attachmentLoading,
   targetReady,
   targetUnavailableMessage,
@@ -85,26 +85,31 @@ export function AiComposer({
         </div>
       ) : null}
       <form className={styles.composer} onSubmit={onSubmit}>
+        {attachments.length > 0 ? (
+          <div className={styles.attachmentRow}>
+            {attachments.map((attachment) => (
+              <AiAttachmentChip
+                attachment={attachment}
+                disabled={composerDisabled || controlsDisabled}
+                key={attachment.kind}
+                onRemove={() => onAttachmentRemove(attachment.kind)}
+                onReplace={
+                  attachment.kind === 'file' ? () => fileInputRef.current?.click() : undefined
+                }
+              />
+            ))}
+          </div>
+        ) : null}
         <textarea
           aria-label="输入 AI 请求"
           disabled={composerDisabled}
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={onComposerKeyDown}
           placeholder="输入问题或直接告诉我想做什么…"
-          rows={3}
+          rows={2}
           ref={composerRef}
           value={draft}
         />
-        {attachment ? (
-          <div className={styles.attachmentRow}>
-            <AiAttachmentChip
-              attachment={attachment}
-              disabled={composerDisabled || controlsDisabled}
-              fileInputRef={fileInputRef}
-              onRemove={onAttachmentRemove}
-            />
-          </div>
-        ) : null}
         <div className={styles.composerFooter}>
           <div className={styles.composerTools}>
             <AiAttachmentPicker
@@ -157,7 +162,7 @@ export function AiComposer({
               disabled={
                 composerDisabled ||
                 !targetReady ||
-                (!draft.trim() && !attachment) ||
+                (!draft.trim() && attachments.length === 0) ||
                 attachmentLoading
               }
               title={targetReady ? '发送请求' : targetUnavailableMessage}

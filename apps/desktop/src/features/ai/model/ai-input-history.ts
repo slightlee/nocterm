@@ -1,5 +1,6 @@
 import type { AiConversation } from './ai-store';
 import type { AiMessage } from './ai-types';
+import { stripAiVisibleContextSummary } from './ai-attachment';
 
 /** 历史输入条数上限：与用户消息持久化解耦，超出后只保留最近输入。 */
 const INPUT_HISTORY_LIMIT = 100;
@@ -18,8 +19,8 @@ export function buildInputHistory(conversations: AiConversation[]): string[] {
   const seen = new Set<string>();
   const recentFirst: string[] = [];
   for (const message of messages) {
-    const content = stripAttachmentSuffix(message.content).trim();
-    // 纯附件提问剥离标记后没有可复用的文本，跳过；重复内容只保留最近一次。
+    const content = stripAiVisibleContextSummary(message.content).trim();
+    // 纯上下文提问剥离展示摘要后没有可复用的文本，跳过；重复内容只保留最近一次。
     if (!content || seen.has(content)) continue;
     seen.add(content);
     recentFirst.push(content);
@@ -27,11 +28,6 @@ export function buildInputHistory(conversations: AiConversation[]): string[] {
   }
   // 去重和截断都在“最近优先”方向完成后统一反转，保证最近输入位于数组末尾。
   return recentFirst.reverse();
-}
-
-/** 发送时附加的“附件：名称”标记属于展示文案，历史输入只回收用户原话。 */
-function stripAttachmentSuffix(content: string): string {
-  return content.replace(/\n\n附件：[^\n]*$/, '');
 }
 
 /** 浏览状态：null 表示不在历史浏览中；index 指向 entries 下标，等于长度时回到草稿。 */

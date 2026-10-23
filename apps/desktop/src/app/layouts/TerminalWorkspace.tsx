@@ -12,8 +12,12 @@ import styles from './TerminalWorkspace.module.css';
 
 const PRIMARY_LOCAL_TERMINAL_ID = 'local:default';
 
+interface TerminalWorkspaceProps {
+  onAddSelectionToAi: (sessionId: string, selection: string) => void;
+}
+
 /** 终端容器沿用旧客户端结构，负责多会话切换、状态反馈和重连入口。 */
-export function TerminalWorkspace() {
+export function TerminalWorkspace({ onAddSelectionToAi }: TerminalWorkspaceProps) {
   const { terminalThemeId } = useSettings();
 
   // 主题作用域属性挂在本容器上；React 提交完成后再广播，终端 observer
@@ -59,9 +63,17 @@ export function TerminalWorkspace() {
                   key={`${session.id}-${reconnectNonces[String(session.id)] ?? 0}`}
                 >
                   {session.kind === 'local' ? (
-                    <LocalTerminal active={session.id === activeId} sessionId={session.id} />
+                    <LocalTerminal
+                      active={session.id === activeId}
+                      onAddSelectionToAi={onAddSelectionToAi}
+                      sessionId={session.id}
+                    />
                   ) : (
-                    <SshTerminal active={session.id === activeId} connection={session} />
+                    <SshTerminal
+                      active={session.id === activeId}
+                      connection={session}
+                      onAddSelectionToAi={onAddSelectionToAi}
+                    />
                   )}
                 </div>
               ))}

@@ -1,7 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import {
@@ -27,6 +27,11 @@ import { createKeywordHighlighter } from '../model/keyword-highlight';
 import { readTerminalHighlightConfig } from '../model/highlight-config';
 import { attachTerminalClipboard, createCopyKeyHandler } from '../model/terminal-clipboard';
 import {
+  attachTerminalSelectionAction,
+  getTerminalSelectionAnchor,
+  type TerminalSelectionActionState,
+} from '../model/terminal-selection';
+import {
   applyTerminalAppearance,
   observeTerminalAppearance,
   readTerminalFontSize,
@@ -35,6 +40,7 @@ import {
 } from '../model/terminal-appearance';
 import { type RemoteTerminalSession, useTerminalStore } from '../model/terminal-store';
 import { useTerminalNotice } from '../model/use-terminal-notice';
+import { TerminalSelectionAction } from './TerminalSelectionAction';
 import '@xterm/xterm/css/xterm.css';
 import styles from './SshTerminal.module.css';
 
@@ -42,19 +48,28 @@ import styles from './SshTerminal.module.css';
 interface SshTerminalProps {
   connection: RemoteTerminalSession;
   active?: boolean;
+  onAddSelectionToAi: (sessionId: string, selection: string) => void;
 }
 
-export function SshTerminal({ connection, active = true }: SshTerminalProps) {
+export function SshTerminal({ connection, active = true, onAddSelectionToAi }: SshTerminalProps) {
   const sessionId = connection.id;
   const connectionId = connection.connectionId;
   const containerRef = useRef<HTMLDivElement>(null);
   const fitTerminalRef = useRef<(() => void) | null>(null);
+  const activeRef = useRef(active);
+  const [selectionAction, setSelectionAction] = useState<TerminalSelectionActionState | null>(null);
   const setSessionStatus = useTerminalStore((state) => state.setSessionStatus);
   const markSessionConnected = useTerminalStore((state) => state.markSessionConnected);
   const { notice, showNotice } = useTerminalNotice();
 
   useEffect(() => {
-    if (active) fitTerminalRef.current?.();
+    activeRef.current = active;
+    if (active) {
+      fitTerminalRef.current?.();
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 标签切换后旧选区动作不能在返回时重新出现。
+      setSelectionAction(null);
+    }
   }, [active]);
 
   useEffect(() => {
@@ -76,11 +91,37 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     // 角色配色来自设置（预设 + 用户覆盖），设置变化经 observer 热更新。
     const highlighter = createKeywordHighlighter({
       onDeferred: (text) => {
-        if (!disposed) terminal.write(text);
+        if (!disposed) {
+          setSelectionAction(null);
+          terminal.write(text);
+        }
       },
       highlight: readTerminalHighlightConfig(),
     });
     terminal.open(container);
+    const detachSelectionAction = attachTerminalSelectionAction(
+      container,
+      {
+        active: () => activeRef.current,
+        selection: () => terminal.getSelection(),
+        selectionAnchor: () => {
+          const position = terminal.getSelectionPosition();
+          if (!position) return null;
+          return getTerminalSelectionAnchor(
+            container,
+            terminal.element,
+            position,
+            terminal.buffer.active.viewportY,
+            terminal.cols,
+            terminal.rows
+          );
+        },
+        onContentChange: (listener) => terminal.onWriteParsed(listener),
+        onSelectionChange: (listener) => terminal.onSelectionChange(listener),
+        onViewportChange: (listener) => terminal.onScroll(listener),
+      },
+      setSelectionAction
+    );
     fitAddon.fit();
     fitTerminalRef.current = () => {
       fitAddon.fit();
@@ -141,6 +182,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       });
 
     const input = terminal.onData((data) => {
+      setSelectionAction(null);
       if (prompt) {
         const next = reducePasswordPrompt(prompt.state, data);
         prompt.state = next;
@@ -188,6 +230,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     );
     const observer = new ResizeObserver(() => {
       // 从设置页返回时隐藏容器会恢复尺寸，此处重新读取色板，不能只做 fit。
+      setSelectionAction(null);
       applyTerminalAppearance(terminal, container);
       fitAddon.fit();
       if (terminalId) void resizeSshTerminal(terminalId, terminal.cols, terminal.rows);
@@ -228,6 +271,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
 
     /** 会话收尾的统一落点：失败与正常结束的状态迁移只在这里做一次。 */
     const applyExit = (reason: string) => {
+      setSelectionAction(null);
       if (reason === 'failed') {
         const message = 'SSH 连接已失败，请检查认证、主机指纹和网络';
         terminal.write(`\r\n\x1b[31m[${message}]\x1b[0m\r\n`);
@@ -242,6 +286,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     const flushPending = (ownId: string) => {
       const buffered = pendingOutput;
       pendingOutput = [];
+      if (buffered.some((item) => item.terminalId === ownId)) setSelectionAction(null);
       for (const item of buffered) {
         if (item.terminalId === ownId) terminal.write(highlighter.transform(item.data));
       }
@@ -253,8 +298,10 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
     void (async () => {
       const outputListener = await onSshTerminalOutput((payload) => {
         if (terminalId) {
-          if (payload.terminalId === terminalId)
+          if (payload.terminalId === terminalId) {
+            setSelectionAction(null);
             terminal.write(highlighter.transform(payload.data));
+          }
           return;
         }
         if (payload.connectionId !== connectionId) return;
@@ -308,6 +355,7 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
       // 卸载时先兑现挂起的口令提示，否则等待它的 Promise 永远不会落地。
       settlePrompt(null);
       detachClipboard();
+      detachSelectionAction();
       observer.disconnect();
       stopObservingAppearance();
       input.dispose();
@@ -322,6 +370,13 @@ export function SshTerminal({ connection, active = true }: SshTerminalProps) {
   return (
     <div className={styles.terminalWrapper}>
       <div className={`${styles.terminal} nocterm-terminal`} ref={containerRef} />
+      <TerminalSelectionAction
+        action={selectionAction}
+        onAdd={(selection) => {
+          setSelectionAction(null);
+          onAddSelectionToAi(sessionId, selection);
+        }}
+      />
       {notice ? (
         <div aria-live="polite" className={styles.terminalNotice} role="status">
           {notice}

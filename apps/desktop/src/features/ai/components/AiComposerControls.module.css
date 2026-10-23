@@ -265,7 +265,6 @@
 .attachmentChip {
   display: inline-flex;
   min-width: 0;
-  height: 30px;
   align-items: center;
   color: var(--term-muted);
   font: inherit;
@@ -278,6 +277,7 @@
 
 .attachmentButton {
   width: 30px;
+  height: 30px;
   justify-content: center;
   padding: 0;
   cursor: pointer;
@@ -288,6 +288,8 @@
 }
 
 .attachmentChip {
+  height: 28px;
+  flex-shrink: 1;
   max-width: min(220px, 100%);
   padding-left: 7px;
 }
@@ -299,8 +301,12 @@
 }
 
 .attachmentButton:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.65;
+}
+
+.attachmentButtonLoading:disabled {
+  cursor: wait;
 }
 
 .attachmentButton svg,
@@ -328,6 +334,10 @@
   background: transparent;
   border: 0;
   cursor: pointer;
+}
+
+.attachmentNameStatic {
+  cursor: default;
 }
 
 .attachmentName span {

@@ -2,6 +2,7 @@
   --terminal-content-inset-x: 6px;
 
   position: relative;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   padding: 0;
@@ -13,6 +14,7 @@
 .terminalWrapper {
   position: relative;
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex: 1;
 }
@@ -32,4 +34,67 @@
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
   pointer-events: none;
+}
+
+.selectionAction {
+  position: absolute;
+  z-index: var(--z-tooltip);
+  display: inline-flex;
+  width: 92px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: var(--term-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  background: color-mix(in srgb, var(--term-panel) 96%, var(--term-text));
+  border: 0;
+  border-radius: 999px;
+  box-shadow: 0 3px 10px rgb(0 0 0 / 12%);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast),
+    background var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+
+.selectionAction:hover {
+  color: var(--term-text);
+  background: color-mix(in srgb, var(--term-panel) 92%, var(--term-text));
+  box-shadow: 0 4px 12px rgb(0 0 0 / 16%);
+}
+
+.selectionAction:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+.selectionAction svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: color var(--dur-fast);
+}
+
+.selectionAction:hover svg {
+  color: var(--term-blue);
+}
+
+.selectionActionCompact {
+  width: 28px;
+  gap: 0;
+  padding: 0;
+}
+
+.selectionActionCompact span {
+  display: none;
 }
