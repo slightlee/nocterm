@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0-beta.7](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.6...v0.2.0-beta.7) (2026-10-24)
+
+
+### Features
+
+* add native macOS application menus ([#69](https://github.com/slightlee/nocterm/issues/69)) ([f5463fc](https://github.com/slightlee/nocterm/commit/f5463fc203e1ef2348270bde0496064c425181b4))
+* add scoped AI sessions and task tracking ([#67](https://github.com/slightlee/nocterm/issues/67)) ([b1374e5](https://github.com/slightlee/nocterm/commit/b1374e55f4327487ae50eaee3a97ecd1b5d9b089))
+* send terminal selection context to AI ([#75](https://github.com/slightlee/nocterm/issues/75)) ([6128760](https://github.com/slightlee/nocterm/commit/6128760685a0a36e92db091f9090545e202886a6)), closes [#74](https://github.com/slightlee/nocterm/issues/74)
+
+
+### Bug Fixes
+
+* sort file entries by modification time ([#71](https://github.com/slightlee/nocterm/issues/71)) ([b7935a3](https://github.com/slightlee/nocterm/commit/b7935a3078cbec51786b7504e0bc0568cbcd7af4))
+* stabilize macOS local directory access ([#73](https://github.com/slightlee/nocterm/issues/73)) ([16344bd](https://github.com/slightlee/nocterm/commit/16344bd2cf73876072886033343d80d2901c85d0)), closes [#72](https://github.com/slightlee/nocterm/issues/72)
+
 ## [0.2.0-beta.6](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.5...v0.2.0-beta.6) (2026-10-20)
 
 
