@@ -9,6 +9,8 @@
 //!   保持与命令层既有的同步调用契约一致；
 //! - 传输在命令层的独立线程中调用，进度经原子计数轮询上报，取消经 `AtomicBool`
 //!   协作式检查，配合 select 让阻塞读写也能及时中断；
+//! - 本地磁盘 IO（元数据探测、目录枚举、逐块读写）统一派发到阻塞线程池执行，
+//!   慢速磁盘不占用 SFTP 运行时的工作线程，避免饿死同池的其他会话；
 //! - 错误统一归一化为携带前端稳定 `code` 的 `SftpError`，与 `__NOCTERM_SFTP_ERROR__`
 //!   契约保持一致；连接断开类错误额外标记 `evict`，触发会话池剔除以便下次重连。
 
@@ -521,6 +523,24 @@ fn remove_recursive<'a>(
     })
 }
 
+/// 把本地磁盘 IO 派发到阻塞线程池执行。
+///
+/// SFTP 运行时的工作线程只负责推进网络协议；慢速磁盘（网络盘、外置盘）上的
+/// 元数据调用、目录枚举和逐块读写若直接占用工作线程，会饿死同一运行时上其他
+/// SFTP 会话的异步任务。本地 IO 的失败语义（`localReadFailed` / `localWriteFailed`）
+/// 由闭包自行映射；本函数只兜底闭包线程异常终止（panic）的情况，归一化为
+/// `unknown` 且不触发会话剔除——本地任务崩溃不代表网络连接已断。
+async fn run_local_io<T>(
+    op: impl FnOnce() -> Result<T, SftpError> + Send + 'static,
+) -> Result<T, SftpError>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(op)
+        .await
+        .map_err(|_| SftpError::new("unknown", "本地文件任务异常终止"))?
+}
+
 /// 上传临时文件名的单调序列，保证同目录并发上传的临时名互不冲突。
 static UPLOAD_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -542,9 +562,16 @@ async fn do_upload(
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
         .ok_or_else(|| SftpError::new("invalidPath", "本地路径缺少文件名"))?;
-    // 用 symlink_metadata 判断本地类型，符号链接目录不被误当作目录递归。
-    let metadata = std::fs::symlink_metadata(&local_path)
-        .map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
+    // 用 symlink_metadata 判断本地类型，符号链接目录不被误当作目录递归；
+    // 探测走阻塞池，网络盘上单次 stat 也可能长时间不返回。
+    let metadata = {
+        let probe_path = local_path.clone();
+        run_local_io(move || {
+            std::fs::symlink_metadata(&probe_path)
+                .map_err(|error| SftpError::new("localReadFailed", error.to_string()))
+        })
+        .await?
+    };
     if metadata.is_dir() {
         let dest = join_remote(&remote_dir, &name);
         upload_tree(&connection.sftp, local_path, dest, &cancel, &transferred).await
@@ -632,7 +659,7 @@ async fn commit_remote(sftp: &SftpSession, temp: &str, dest: &str) -> Result<(),
     }
 }
 
-/// 流式上传单个文件：本地按块读取（同步）→ 远程异步写入，逐块累计进度并检查取消。
+/// 流式上传单个文件：本地按块读取（阻塞池）→ 远程异步写入，逐块累计进度并检查取消。
 async fn upload_file_raw(
     sftp: &SftpSession,
     local_path: &Path,
@@ -640,8 +667,15 @@ async fn upload_file_raw(
     cancel: &Arc<AtomicBool>,
     transferred: &Arc<AtomicU64>,
 ) -> Result<(), SftpError> {
-    let mut local = std::fs::File::open(local_path)
-        .map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
+    // 打开本地文件同样可能阻塞在慢速磁盘上，与逐块读取一样走阻塞池。
+    let mut local = {
+        let open_path = local_path.to_path_buf();
+        run_local_io(move || {
+            std::fs::File::open(&open_path)
+                .map_err(|error| SftpError::new("localReadFailed", error.to_string()))
+        })
+        .await?
+    };
     // create 语义为 创建+截断+写入，等价覆盖式新建，用于写入临时文件。
     let mut remote_file = sftp
         .create(remote.to_string())
@@ -654,8 +688,18 @@ async fn upload_file_raw(
             let _ = remote_file.shutdown().await;
             return Err(SftpError::cancelled());
         }
-        let read = std::io::Read::read(&mut local, &mut buffer)
-            .map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
+        // 读取在阻塞池执行；文件句柄与缓冲区随任务往返（仅所有权传递，无数据拷贝），
+        // 同一时刻同一句柄只有一个读取在途，无需额外同步。
+        let (local_returned, buffer_returned, read) = {
+            run_local_io(move || {
+                let read = std::io::Read::read(&mut local, &mut buffer)
+                    .map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
+                Ok((local, buffer, read))
+            })
+            .await?
+        };
+        local = local_returned;
+        buffer = buffer_returned;
         if read == 0 {
             break;
         }
@@ -677,6 +721,35 @@ async fn upload_file_raw(
     Ok(())
 }
 
+/// 收集本地目录的直接子项（阻塞调用，必须经 `run_local_io` 派发）：一次性取回
+/// 路径、无损名称与类型，避免在递归 await 之间持有 `ReadDir` 迭代器，也让目录
+/// 枚举的磁盘阻塞集中发生在阻塞池内。
+fn collect_local_children(local_dir: &Path) -> Result<Vec<(PathBuf, String, bool)>, SftpError> {
+    let read = std::fs::read_dir(local_dir)
+        .map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
+    let mut children = Vec::new();
+    for entry in read {
+        let entry = entry.map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
+        // 本地名转远端名必须无损：`to_string_lossy` 会把非 UTF-8 字节换成 U+FFFD，
+        // 于是"上传成功"但远端文件名已被悄悄改写。显式拒绝比静默改名好。
+        let raw_name = entry.file_name();
+        let Some(name) = raw_name.to_str().map(str::to_string) else {
+            return Err(SftpError::new(
+                "localReadFailed",
+                format!(
+                    "本地文件名不是合法 UTF-8，无法无损映射到远端：{}",
+                    raw_name.to_string_lossy()
+                ),
+            ));
+        };
+        let file_type = entry
+            .file_type()
+            .map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
+        children.push((entry.path(), name, file_type.is_dir()));
+    }
+    Ok(children)
+}
+
 /// 递归上传目录：确保远程目录存在后逐项处理，子目录递归、文件直接流式上传。
 fn upload_tree<'a>(
     sftp: &'a SftpSession,
@@ -696,32 +769,17 @@ fn upload_tree<'a>(
                 .await
                 .map_err(map_sftp_error)?;
         }
-        let read = std::fs::read_dir(&local_dir)
-            .map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
-        for entry in read {
+        // 先在阻塞池内收齐子项再逐个上传：枚举期间不再持有跨 await 的本地迭代器。
+        let children = {
+            let scan_dir = local_dir.clone();
+            run_local_io(move || collect_local_children(&scan_dir)).await?
+        };
+        for (child_local, name, is_dir) in children {
             if cancel.load(Ordering::Relaxed) {
                 return Err(SftpError::cancelled());
             }
-            let entry =
-                entry.map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
-            // 本地名转远端名必须无损：`to_string_lossy` 会把非 UTF-8 字节换成 U+FFFD，
-            // 于是"上传成功"但远端文件名已被悄悄改写。显式拒绝比静默改名好。
-            let raw_name = entry.file_name();
-            let Some(name) = raw_name.to_str().map(str::to_string) else {
-                return Err(SftpError::new(
-                    "localReadFailed",
-                    format!(
-                        "本地文件名不是合法 UTF-8，无法无损映射到远端：{}",
-                        raw_name.to_string_lossy()
-                    ),
-                ));
-            };
-            let child_local = entry.path();
             let child_remote = join_remote(&remote_dir, &name);
-            let file_type = entry
-                .file_type()
-                .map_err(|error| SftpError::new("localReadFailed", error.to_string()))?;
-            if file_type.is_dir() {
+            if is_dir {
                 upload_tree(sftp, child_local, child_remote, cancel, transferred).await?;
             } else {
                 // 目录内文件直接写入目标名（不逐个临时提交），语义与整目录传输一致。
@@ -767,7 +825,7 @@ async fn do_download(
     }
 }
 
-/// 流式下载单个文件到本地暂存路径：远程异步读取 → 本地同步写入，逐块累计进度与取消。
+/// 流式下载单个文件到本地暂存路径：远程异步读取 → 本地写入（阻塞池），逐块累计进度与取消。
 async fn download_file_raw(
     sftp: &SftpSession,
     remote: &str,
@@ -775,17 +833,27 @@ async fn download_file_raw(
     cancel: &Arc<AtomicBool>,
     transferred: &Arc<AtomicU64>,
 ) -> Result<(), SftpError> {
-    // 确保暂存文件的父目录存在，避免因中间目录缺失而写入失败。
+    // 确保暂存文件的父目录存在，避免因中间目录缺失而写入失败；目录创建走阻塞池。
     if let Some(parent) = staged_local.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))?;
+        let parent = parent.to_path_buf();
+        run_local_io(move || {
+            std::fs::create_dir_all(&parent)
+                .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))
+        })
+        .await?;
     }
     let mut remote_file = sftp
         .open(remote.to_string())
         .await
         .map_err(map_sftp_error)?;
-    let mut local = std::fs::File::create(staged_local)
-        .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))?;
+    let mut local = {
+        let create_path = staged_local.to_path_buf();
+        run_local_io(move || {
+            std::fs::File::create(&create_path)
+                .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))
+        })
+        .await?
+    };
     let mut buffer = vec![0u8; TRANSFER_CHUNK_BYTES];
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -798,12 +866,27 @@ async fn download_file_raw(
         if read == 0 {
             break;
         }
-        std::io::Write::write_all(&mut local, &buffer[..read])
-            .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))?;
+        // 本地写入在阻塞池执行；句柄与缓冲区随任务往返（仅所有权传递，无数据拷贝），
+        // 同一时刻同一句柄只有一个写入在途。
+        let (local_returned, buffer_returned) = {
+            run_local_io(move || {
+                std::io::Write::write_all(&mut local, &buffer[..read])
+                    .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))?;
+                Ok((local, buffer))
+            })
+            .await?
+        };
+        local = local_returned;
+        buffer = buffer_returned;
         transferred.fetch_add(read as u64, Ordering::Relaxed);
     }
-    std::io::Write::flush(&mut local)
-        .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))?;
+    // flush 同样可能阻塞在慢速磁盘；完成后句柄在闭包内自然关闭。
+    run_local_io(move || {
+        std::io::Write::flush(&mut local)
+            .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))?;
+        Ok(())
+    })
+    .await?;
     Ok(())
 }
 
@@ -855,8 +938,15 @@ fn download_tree<'a>(
     transferred: &'a Arc<AtomicU64>,
 ) -> Pin<Box<dyn Future<Output = Result<(), SftpError>> + Send + 'a>> {
     Box::pin(async move {
-        std::fs::create_dir_all(&local_dir)
-            .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))?;
+        // 本地目录创建走阻塞池，网络盘上的递归建目录同样可能长时间阻塞。
+        {
+            let create_dir = local_dir.clone();
+            run_local_io(move || {
+                std::fs::create_dir_all(&create_dir)
+                    .map_err(|error| SftpError::new("localWriteFailed", error.to_string()))
+            })
+            .await?;
+        }
         let read = sftp
             .read_dir(remote_dir.clone())
             .await
@@ -885,12 +975,51 @@ fn download_tree<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_safe_child_name, join_remote};
+    use super::{collect_local_children, ensure_safe_child_name, join_remote};
 
     #[test]
     fn joins_remote_paths_without_duplicating_the_separator() {
         assert_eq!(join_remote("/home/demo", "a.txt"), "/home/demo/a.txt");
         assert_eq!(join_remote("/", "a.txt"), "/a.txt");
+    }
+
+    /// 构造仅本测试使用的临时目录并在结束时清理；同进程内以测试名保证唯一。
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("nocterm-sftp-test-{}-{}", std::process::id(), tag));
+        std::fs::remove_dir_all(&dir).ok();
+        dir
+    }
+
+    #[test]
+    fn collects_local_children_with_paths_names_and_types() {
+        let base = scratch_dir("collect");
+        std::fs::create_dir_all(base.join("sub")).expect("创建临时子目录");
+        std::fs::write(base.join("a.txt"), b"x").expect("写入临时文件");
+
+        let children = collect_local_children(&base).expect("收集子项");
+        // read_dir 顺序随平台变化，统一排序后断言名称与类型被无损收集。
+        let mut summary: Vec<(String, bool)> = children
+            .into_iter()
+            .map(|(path, name, is_dir)| {
+                assert!(path.starts_with(&base), "子项路径必须位于被扫描目录内");
+                (name, is_dir)
+            })
+            .collect();
+        summary.sort();
+        assert_eq!(
+            summary,
+            vec![("a.txt".to_string(), false), ("sub".to_string(), true)]
+        );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn collect_local_children_reports_missing_directory_with_stable_code() {
+        let missing = scratch_dir("missing");
+        let error = collect_local_children(&missing).expect_err("缺失目录应报错");
+        assert_eq!(error.code, "localReadFailed");
     }
 
     #[test]
