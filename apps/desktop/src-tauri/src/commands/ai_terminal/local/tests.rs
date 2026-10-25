@@ -189,7 +189,11 @@ fn failed_interrupt_write_does_not_release_the_terminal() {
 #[test]
 fn local_approved_execution_uses_the_existing_visible_pty() {
     let service = LocalTerminalService::new(Arc::new(LocalTerminalManager::default()));
-    let opened = service.open(40, 24).expect("open local terminal");
+    // 完成标记结果行（提示符 + 58 字符 marker/退出码）必须落在单行内：部分 Windows
+    // conhost（如 Win11 23H2，22631）对换行的发射会在 marker 中间插入 CRLF 与光标
+    // 转义并重叠边界字符，连续子串匹配随之失败；加宽到 160 列让结果行不可能换行，
+    // 本用例专注验证授权执行生命周期而非窄终端渲染（窄终端场景见单独 Issue 跟踪）。
+    let opened = service.open(160, 24).expect("open local terminal");
     let terminal_id = opened.id;
     let registry = Arc::new(LocalTerminalRegistry::default());
     registry.bind("local:test".into(), terminal_id.clone());
