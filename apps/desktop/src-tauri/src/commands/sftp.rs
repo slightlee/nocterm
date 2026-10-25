@@ -982,7 +982,10 @@ pub fn download_remote_to_local(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, thread, time::Duration};
+    use std::{
+        fs, thread,
+        time::{Duration, Instant},
+    };
 
     use super::{
         LocalDirectoryListing, SftpLocalDirectoryState, join_remote, now_id, parent_remote,
@@ -1015,12 +1018,17 @@ mod tests {
         let root = std::env::temp_dir().join(now_id("nocterm-sftp-timeout-test"));
         let state = SftpLocalDirectoryState::default();
         let guard = state.acquire(&root).expect("acquire path guard");
+        // 读取器用通道门控代替固定睡眠：测试放行前闭包必然仍在运行，超时必然发生；
+        // 守卫何时释放通过有界轮询观察，不再假设线程池的调度速度。固定毫秒级
+        // 睡眠在繁忙的共享 Runner 上会因调度延迟耗尽裕度，是本用例此前偶发失败的原因。
+        let (release_reader, reader_gate) = std::sync::mpsc::channel::<()>();
         let result = tauri::async_runtime::block_on(run_local_directory_read(
             guard,
             root.clone(),
             Duration::from_millis(5),
-            |path| {
-                thread::sleep(Duration::from_millis(30));
+            move |path| {
+                // 阻塞等待测试确认超时路径后再返回；期间守卫始终被持有。
+                let _ = reader_gate.recv();
                 Ok(LocalDirectoryListing {
                     path: path.to_string_lossy().into_owned(),
                     parent: None,
@@ -1033,8 +1041,24 @@ mod tests {
             .expect("serialize timeout error");
         assert_eq!(error["code"], "SFTP_LOCAL_READ_TIMEOUT");
         assert!(state.acquire(&root).is_err());
-        thread::sleep(Duration::from_millis(40));
-        assert!(state.acquire(&root).is_ok());
+        release_reader.send(()).expect("release the gated reader");
+        // 读取器完成后守卫必须释放：轮询观察而非定时断言，等待上限只是防挂死保险。
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match state.acquire(&root) {
+                Ok(reacquired) => {
+                    drop(reacquired);
+                    break;
+                }
+                Err(_) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "读取器完成后守卫应在合理时间内释放"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
     }
 
     #[test]
