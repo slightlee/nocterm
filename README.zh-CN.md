@@ -16,7 +16,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![Built with](https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20React%2019%20%C2%B7%20Rust-24C8DB)
 
-[下载安装](#-下载安装) · [核心特性](#-核心特性) · [本地开发](#-本地开发) · [文档](#-文档)
+[下载安装](#-下载安装) · [核心特性](#-核心特性) · [界面预览](#️-界面预览) · [社区](#-社区) · [本地开发](#-本地开发) · [文档](#-文档)
 
 </div>
 
@@ -29,6 +29,16 @@
 - 📂 **SFTP**：双栏浏览、文件操作、上传下载、进度与取消
 - 🤖 **AI 辅助**：接入本机 Codex / Claude Code / Grok CLI 并绑定当前终端，提供结构化服务器诊断、命令审批与脱敏审计——**AI Provider 不接触 SSH 凭据，也不能自行切换目标**，统一经 Nocterm 工具网关访问终端
 - 🔒 **本地优先**：核心能力全部在本机运行，不依赖云服务；连接资料存本机 SQLite，密码进入系统凭据库（macOS Keychain / Windows Credential Manager）
+
+## 🖼️ 界面预览
+
+<p align="center">
+  <img src="docs/assets/screenshot-ai-assistant.png" width="100%" alt="Nocterm 终端与 AI 服务器诊断" />
+</p>
+<p align="center">
+  <img src="docs/assets/screenshot-sftp.png" width="49%" alt="Nocterm 双栏 SFTP 文件管理" />
+  <img src="docs/assets/screenshot-themes.png" width="49%" alt="Nocterm 终端主题与外观设置" />
+</p>
 
 ## 📦 下载安装
 
@@ -55,6 +65,10 @@ corepack pnpm check          # 前端质量门禁
 corepack pnpm cargo:check    # Rust 质量门禁
 ```
 
+## 💬 社区
+
+- [LINUX DO](https://linux.do) — 新的理想型技术社区
+
 ## 📚 文档
 
 安全与隐私设计、AI 工具网关边界、架构分层、测试与发布流程的完整说明：
@@ -65,6 +79,7 @@ corepack pnpm cargo:check    # Rust 质量门禁
 - [发布流程](docs/release-process.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全策略](SECURITY.md)（安全问题请私下报告，勿创建公开 Issue）
+- [Issues](https://github.com/slightlee/nocterm/issues) — 问题反馈与功能建议
 
 ## 📄 许可证
 
