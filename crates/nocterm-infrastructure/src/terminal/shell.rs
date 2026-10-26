@@ -51,11 +51,19 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     // 注入失败或未覆盖的 shell 静默降级到既有探针路径（#82）。
     #[cfg(not(windows))]
     {
-        let command =
+        // `new_default_prog` 解析出实际 shell 路径后，必须重建为显式程序构建器：
+        // portable-pty 禁止给默认程序构建器追加参数（bash --rcfile 会 panic）。
+        let resolved =
             apply_default_term(apply_terminal_identity(CommandBuilder::new_default_prog()));
-        let shell_path = command.get_shell();
+        let shell_path = resolved.get_shell();
         let kind = detect_shell_kind(&shell_path);
-        let mut command = command;
+        let mut command = apply_terminal_identity(CommandBuilder::new(&shell_path));
+        // 重建后 TERM 重新装回：Finder/Dock 启动的 GUI 进程常缺 TERM。
+        if let Some(term) = resolved.get_env("TERM") {
+            command.env("TERM", term);
+        } else {
+            command.env("TERM", DEFAULT_TERM);
+        }
         match kind {
             LocalShellKind::Posix if shell_path.ends_with("zsh") => {
                 apply_zsh_integration(&mut command);
