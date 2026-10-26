@@ -37,7 +37,7 @@ use tokio::{
     runtime::Runtime,
 };
 
-use super::{Auth, ClientHandler, build_auth, connect_authenticated_coded};
+use super::connection::{Auth, ClientHandler, build_auth, connect_authenticated_coded};
 
 /// 单个 SFTP 请求的等待上限，替换 russh-sftp 的 10 秒默认值。
 const SFTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
