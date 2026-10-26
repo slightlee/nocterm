@@ -76,7 +76,11 @@ corepack pnpm cargo:check
 
 分支名使用与 Conventional Commits 一致的类型前缀；有关联 Issue 时建议包含编号，例如 `feat/123-sftp-upload`、`fix/456-windows-keychain`、`docs/123-release-process` 或 `ci/123-release-validation`。分支合并后立即删除，不将已完成的任务分支演变为长期集成分支。
 
-Pull Request 标题必须符合第 6 节的 Conventional Commits 规范，并作为 Squash merge 后进入 `main` 的提交信息。不应为了关联 Issue 把编号塞入提交标题。关联语义按以下规则选择：
+Pull Request 标题必须符合第 6 节的 Conventional Commits 规范，并作为 Squash merge 后进入
+`main` 的提交信息。不应为了关联 Issue 把编号塞入提交标题。GitHub Squash 会把 Pull Request
+正文复制到合并提交正文；因此 PR 正文 Markdown 源码每行同样不得超过 100 个字符（页面视觉
+换行不算），长段落、列表和代码块必须手工换行，否则 `main` push CI 的 Commitlint 会在
+合并后失败。关联语义按以下规则选择：
 
 - 默认使用 `Refs #123`，表示变更与 Issue 相关，但合并时不自动关闭；
 - 只有 Pull Request 合并本身即可满足 Issue 全部验收标准时，才使用 `Closes #123` 或 `Fixes #123`；
@@ -124,7 +128,9 @@ Commitlint 的本地 `commit-msg` Hook 和远程 CI 共同校验 Commit 与 PR �
 - `chore`：其他工程维护；
 - `revert`：回滚提交。
 
-主题必须使用英文 ASCII 字符，保持简洁、明确且不超过 100 个字符。例如：
+主题必须使用英文 ASCII 字符，保持简洁、明确且不超过 100 个字符；Commit body 与
+footer 的每一行也不得超过 100 个字符。由于 Squash merge 会把 PR 正文写入 Commit body，
+自动化或人工创建 PR 时必须对 Markdown 源码主动换行。例如：
 
 ```text
 feat: add local session lifecycle
