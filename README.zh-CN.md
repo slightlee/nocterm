@@ -16,7 +16,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![Built with](https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20React%2019%20%C2%B7%20Rust-24C8DB)
 
-[下载安装](#-下载安装) · [核心特性](#-核心特性) · [本地开发](#-本地开发) · [文档](#-文档)
+[下载安装](#-下载安装) · [核心特性](#-核心特性) · [社区](#-社区) · [本地开发](#-本地开发) · [文档](#-文档)
 
 </div>
 
@@ -54,6 +54,12 @@ corepack pnpm tauri dev      # 启动桌面客户端
 corepack pnpm check          # 前端质量门禁
 corepack pnpm cargo:check    # Rust 质量门禁
 ```
+
+## 💬 社区
+
+- [LINUX DO](https://linux.do) — Nocterm 的推广与讨论阵地（中文开发者社区），相关反馈帖会发布在那里，欢迎参与交流
+- [GitHub Issues](https://github.com/slightlee/nocterm/issues) — 问题反馈与功能建议
+- [GitHub Discussions](https://github.com/slightlee/nocterm/discussions) — 使用答疑与一般讨论
 
 ## 📚 文档
 

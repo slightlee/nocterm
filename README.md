@@ -16,7 +16,7 @@ English | [简体中文](README.zh-CN.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![Built with](https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20React%2019%20%C2%B7%20Rust-24C8DB)
 
-[Download](#-download) · [Features](#-features) · [Development](#-development) · [Documentation](#-documentation)
+[Download](#-download) · [Features](#-features) · [Community](#-community) · [Development](#-development) · [Documentation](#-documentation)
 
 </div>
 
@@ -54,6 +54,12 @@ corepack pnpm tauri dev      # run the desktop client
 corepack pnpm check          # frontend quality gate
 corepack pnpm cargo:check    # Rust quality gate
 ```
+
+## 💬 Community
+
+- [LINUX DO](https://linux.do) — the Chinese-speaking developer community where Nocterm is discussed and promoted. Feedback threads are posted there; feel free to join the discussion
+- [GitHub Issues](https://github.com/slightlee/nocterm/issues) — bug reports and feature requests
+- [GitHub Discussions](https://github.com/slightlee/nocterm/discussions) — questions and general discussion
 
 ## 📚 Documentation
 
