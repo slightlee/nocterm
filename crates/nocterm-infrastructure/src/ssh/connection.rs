@@ -32,10 +32,10 @@ pub(super) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 主机密钥校验期间可能产生的领域级失败，供 russh 的 Handler 向上传播。
-// 随 `ClientHandler` 一并暴露到 crate 可见性：它是该 Handler 关联类型 `Error`，
+// 随 `ClientHandler` 一并暴露到 ssh 模块树可见性：它是该 Handler 关联类型 `Error`，
 // 否则会触发 E0446“private type in public interface”。
 #[derive(Debug)]
-pub(crate) enum HandlerError {
+pub(super) enum HandlerError {
     /// russh 协议层错误；保留源错误用于向用户展示握手失败原因。
     Ssh(russh::Error),
     /// 记录在案的主机密钥与本次不一致，疑似中间人攻击，必须拒绝。
@@ -53,9 +53,9 @@ impl From<russh::Error> for HandlerError {
 }
 
 /// russh 客户端回调：目前仅覆盖主机密钥校验，其余沿用默认实现。
-// 可见性与返回它的 `connect_authenticated*` 保持一致（pub(crate)），
-// 消除 private_interfaces 警告——该类型本就随建连句柄在 crate 内共享。
-pub(crate) struct ClientHandler {
+// 可见性与返回它的 `connect_authenticated*` 保持一致（pub(super)），
+// 消除 private_interfaces 警告——该类型本就随建连句柄在 ssh 模块树内共享。
+pub(super) struct ClientHandler {
     host: String,
     port: u16,
 }
@@ -104,7 +104,7 @@ impl client::Handler for ClientHandler {
 }
 
 /// 认证方式的运行期载荷，携带进入会话任务所需的所有权数据。
-pub(crate) enum Auth {
+pub(super) enum Auth {
     Password(String),
     PrivateKey(String),
     Agent,
@@ -115,7 +115,7 @@ pub(crate) enum Auth {
 ///
 /// 口令缺失在这里只是最后一道防线：命令层会先返回 `SSH_PASSWORD_REQUIRED` 让终端
 /// 就地提示输入，所以提示语不再要求用户"先去保存密码"。
-pub(crate) fn build_auth(
+pub(super) fn build_auth(
     profile: &ConnectionProfile,
     password: Option<&str>,
     private_key: Option<&str>,
@@ -135,7 +135,7 @@ pub(crate) fn build_auth(
 
 /// 建立 TCP 连接并完成认证，返回已认证的连接句柄。
 /// 终端在此基础上申请 PTY/Shell，SFTP 在此基础上请求 sftp 子系统。
-pub(crate) async fn connect_authenticated(
+pub(super) async fn connect_authenticated(
     host: &str,
     port: u16,
     username: &str,
@@ -148,9 +148,9 @@ pub(crate) async fn connect_authenticated(
 
 /// 建连失败的结构化描述：`code` 为前端稳定错误码，`message` 为面向用户的中文提示。
 /// SFTP 依赖 `code` 归一化到既有的 `__NOCTERM_SFTP_ERROR__` 契约，终端只取用 `message`。
-pub(crate) struct ConnectFailure {
-    pub code: &'static str,
-    pub message: String,
+pub(super) struct ConnectFailure {
+    pub(super) code: &'static str,
+    pub(super) message: String,
 }
 
 /// 与 `connect_authenticated` 相同，但保留可分类的错误码，供 SFTP 归一化到前端契约。
@@ -158,7 +158,7 @@ pub(crate) struct ConnectFailure {
 /// 建连被拆成"解析 → 拨号 → 握手 → 认证"四步并各自计时。原实现把全部四步交给
 /// `client::connect` 并只在最外层设一个 30 秒总超时，任何一步卡住都只报"连接远程主机超时"，
 /// 用户无从判断该改端口、开安全组还是换凭据。分阶段后每种失败都能指名道姓。
-pub(crate) async fn connect_authenticated_coded(
+pub(super) async fn connect_authenticated_coded(
     host: &str,
     port: u16,
     username: &str,
