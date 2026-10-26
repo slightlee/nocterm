@@ -26,10 +26,18 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     {
         for shell in windows_shell_candidates(std::env::var("COMSPEC").ok()).iter() {
             if windows_command_available(shell) {
-                return (
-                    apply_terminal_identity(CommandBuilder::new(shell)),
-                    detect_shell_kind(shell),
-                );
+                let kind = detect_shell_kind(shell);
+                let mut command = apply_terminal_identity(CommandBuilder::new(shell));
+                if matches!(kind, LocalShellKind::PowerShell) {
+                    // PowerShell 家族注入集成脚本：用户 Profile 先于 -EncodedCommand
+                    // 加载，脚本包装 prompt 以 OSC 633 上报命令完成与退出码；
+                    // 序列属于控制平面，不受终端折行影响（#82）。
+                    command.arg("-NoLogo");
+                    command.arg("-NoExit");
+                    command.arg("-EncodedCommand");
+                    command.arg(encoded_integration_command());
+                }
+                return (command, kind);
             }
         }
         (
@@ -39,13 +47,200 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     }
 
     // macOS 与其它 Unix 走 portable-pty 的默认程序解析（读 `SHELL`，回落到 passwd 项）。
+    // 各 shell 按自身机制注入集成脚本：zsh 临时 ZDOTDIR、bash --rcfile、fish conf.d。
+    // 注入失败或未覆盖的 shell 静默降级到既有探针路径（#82）。
     #[cfg(not(windows))]
     {
-        let command =
+        // `new_default_prog` 解析出实际 shell 路径后，必须重建为显式程序构建器：
+        // portable-pty 禁止给默认程序构建器追加参数（bash --rcfile 会 panic）。
+        let resolved =
             apply_default_term(apply_terminal_identity(CommandBuilder::new_default_prog()));
-        let kind = detect_shell_kind(&command.get_shell());
+        let shell_path = resolved.get_shell();
+        let kind = detect_shell_kind(&shell_path);
+        let mut command = apply_terminal_identity(CommandBuilder::new(&shell_path));
+        // 重建后 TERM 重新装回：Finder/Dock 启动的 GUI 进程常缺 TERM。
+        if let Some(term) = resolved.get_env("TERM") {
+            command.env("TERM", term);
+        } else {
+            command.env("TERM", DEFAULT_TERM);
+        }
+        match kind {
+            LocalShellKind::Posix if shell_path.ends_with("zsh") => {
+                apply_zsh_integration(&mut command);
+            }
+            LocalShellKind::Posix if shell_path.ends_with("bash") => {
+                apply_bash_integration(&mut command);
+            }
+            LocalShellKind::Fish => {
+                apply_fish_integration(&mut command);
+            }
+            _ => {}
+        }
         (command, kind)
     }
+}
+
+/// zsh 集成注入（#82）：构造临时 ZDOTDIR，其中的 `.zshrc` 先 source 用户原始
+/// 配置（`$ZDOTDIR/.zshrc` 或 `~/.zshrc`），再加载 Nocterm 的 precmd 钩子脚本。
+/// zsh 按 `$ZDOTDIR/.zshrc` 优先于 `~/.zshrc` 的规则加载包装，用户配置与环境
+/// 不被破坏。目录常驻 `std::env::temp_dir()`，脚本内容以 `include_str!` 编译期
+/// 固化；ZDOTDIR 原值保存进包装脚本，zsh 启动时恢复使用。
+#[cfg(not(windows))]
+fn apply_zsh_integration(command: &mut CommandBuilder) {
+    let dir = std::env::temp_dir().join("nocterm-zsh-integration");
+    // 并发/重复启动幂等：目录与文件内容固定，失败（多用户临时目录冲突等）时
+    // 静默放弃注入，zsh 以无集成方式启动，回退探针路径接管。
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let wrapper = build_zsh_wrapper(
+        command
+            .get_env("ZDOTDIR")
+            .map(|value| value.to_string_lossy().into_owned()),
+    );
+    if std::fs::write(dir.join(".zshrc"), wrapper).is_err() {
+        return;
+    }
+    command.env("ZDOTDIR", dir);
+}
+
+/// bash 集成注入（#82）：构造临时 `--rcfile` 包装脚本，先 source 用户原始
+/// `.bashrc`（若存在），再加载 Nocterm 的 PROMPT_COMMAND 钩子。文件常驻临时目录，
+/// 内容固定，幂等；写入失败静默降级到无集成启动。
+#[cfg(not(windows))]
+fn apply_bash_integration(command: &mut CommandBuilder) {
+    let path = std::env::temp_dir().join("nocterm-bash-integration");
+    if std::fs::create_dir_all(path.parent().unwrap_or(&std::env::temp_dir())).is_err() {
+        return;
+    }
+    let user_bashrc = command
+        .get_env("HOME")
+        .map(|home| format!("{}/.bashrc", home.to_string_lossy()))
+        .unwrap_or_else(|| "$HOME/.bashrc".to_string());
+    let integration = include_str!("integration_bash.sh");
+    let wrapper =
+        format!("if [ -f \"{user_bashrc}\" ]; then\n  source \"{user_bashrc}\"\nfi\n{integration}");
+    if std::fs::write(&path, wrapper).is_err() {
+        return;
+    }
+    command.arg("--rcfile");
+    command.arg(path);
+}
+
+/// fish 集成注入（#82）：fish 按 `XDG_CONFIG_HOME/fish/conf.d/*.fish` 顺序加载
+/// 启动脚本；构造临时 conf.d 目录放置 Nocterm 钩子，再以 `XDG_CONFIG_HOME`
+/// 指向临时配置根。用户原配置（若存在）先于本目录被 fish 加载。
+#[cfg(not(windows))]
+fn apply_fish_integration(command: &mut CommandBuilder) {
+    let root = std::env::temp_dir().join("nocterm-fish-integration");
+    let conf_d = root.join("fish").join("conf.d");
+    if std::fs::create_dir_all(&conf_d).is_err() {
+        return;
+    }
+    let integration = include_str!("integration_fish.fish");
+    if std::fs::write(conf_d.join("nocterm_integration.fish"), integration).is_err() {
+        return;
+    }
+    command.env("XDG_CONFIG_HOME", root);
+}
+
+/// 生成 ZDOTDIR 包装 `.zshrc`：先加载用户原始配置，再加载 Nocterm 集成钩子。
+#[cfg(not(windows))]
+fn build_zsh_wrapper(original_zdotdir: Option<String>) -> String {
+    // 用户原始 ZDOTDIR 需要在包装生效期间恢复：zsh 读包装 .zshrc 时 ZDOTDIR 仍
+    // 指向临时目录，source 用户配置前必须改回原值（未设置则回到 $HOME）。
+    let restore = match original_zdotdir {
+        Some(dir) => format!("NOCTERM_ORIG_ZDOTDIR={}", shell_single_quoted(&dir)),
+        None => "NOCTERM_ORIG_ZDOTDIR=".to_string(),
+    };
+    let integration = include_str!("integration_zsh.zsh");
+    format!(
+        "{restore}\n\
+         if [[ -n \"$NOCTERM_ORIG_ZDOTDIR\" ]] && [[ -f \"$NOCTERM_ORIG_ZDOTDIR/.zshrc\" ]]; then\n\
+         \x20 source \"$NOCTERM_ORIG_ZDOTDIR/.zshrc\"\n\
+         elif [[ -f \"$HOME/.zshrc\" ]]; then\n\
+         \x20 source \"$HOME/.zshrc\"\n\
+         fi\n\
+         ZDOTDIR=\"$NOCTERM_ORIG_ZDOTDIR\"\n\
+         unset NOCTERM_ORIG_ZDOTDIR\n\
+         {integration}"
+    )
+}
+
+/// POSIX 单引号转义：内容中的单引号按 `'\''` 规则闭合再开。
+#[cfg(not(windows))]
+fn shell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(all(test, not(windows)))]
+mod zsh_integration_tests {
+    use super::{build_zsh_wrapper, shell_single_quoted};
+
+    #[test]
+    fn wrapper_sources_user_config_before_integration_hooks() {
+        let wrapper = build_zsh_wrapper(Some("/custom/zdotdir".to_string()));
+        // 用户配置先于 Nocterm 钩子：保证原 prompt/插件完整加载后再包装。
+        let user_source = wrapper
+            .find("source \"$NOCTERM_ORIG_ZDOTDIR/.zshrc\"")
+            .expect("wrapper must source the original ZDOTDIR config");
+        let hooks = wrapper
+            .find("precmd()")
+            .expect("wrapper must install hooks");
+        assert!(user_source < hooks);
+        // 原始 ZDOTDIR 在 source 前被单引号转义保存。
+        assert!(wrapper.contains("NOCTERM_ORIG_ZDOTDIR='/custom/zdotdir'"));
+    }
+
+    #[test]
+    fn wrapper_falls_back_to_home_config_without_original_zdotdir() {
+        let wrapper = build_zsh_wrapper(None);
+        assert!(wrapper.contains("source \"$HOME/.zshrc\""));
+        assert!(!wrapper.contains("NOCTERM_ORIG_ZDOTDIR='."));
+    }
+
+    #[test]
+    fn single_quotes_escape_embedded_quotes() {
+        assert_eq!(shell_single_quoted("it's"), "'it'\\''s'");
+        assert_eq!(shell_single_quoted("plain"), "'plain'");
+    }
+}
+
+/// 集成脚本按 PowerShell 约定编码为 UTF-16LE + Base64（`-EncodedCommand` 只接受该形式）。
+#[cfg(windows)]
+fn encoded_integration_command() -> String {
+    let script = include_str!("integration_pwsh.ps1");
+    let mut utf16 = Vec::with_capacity(script.len() * 2);
+    for unit in script.encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    base64_encode(&utf16)
+}
+
+/// 标准字母表 Base64 编码（含填充）。仅为注入脚本而存在，不值得引入依赖。
+#[cfg(windows)]
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let byte = |index: usize| -> u32 { u32::from(chunk[index]) };
+        let group = (byte(0) << 16)
+            | (chunk.get(1).map_or(0, |_| byte(1)) << 8)
+            | chunk.get(2).map_or(0, |_| byte(2));
+        out.push(ALPHABET[(group >> 18) as usize & 0x3f] as char);
+        out.push(ALPHABET[(group >> 12) as usize & 0x3f] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(group >> 6) as usize & 0x3f] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[group as usize & 0x3f] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// PTY 内 Shell 的默认 TERM 值，与前端 xterm.js 的能力对齐。
@@ -124,6 +319,35 @@ pub(super) fn completion_command(kind: LocalShellKind, marker: &str) -> String {
             "$__nocterm_ok = $?; $__nocterm_code = if ($__nocterm_ok) {{ 0 }} elseif ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }}; Write-Output \"{marker}$__nocterm_code\""
         ),
         LocalShellKind::Cmd => format!("echo {marker}%ERRORLEVEL%"),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod integration_encoding_tests {
+    use super::{base64_encode, encoded_integration_command};
+
+    #[test]
+    fn base64_matches_standard_alphabet_with_padding() {
+        assert_eq!(base64_encode(b"Man"), "TWFu");
+        assert_eq!(base64_encode(b"Ma"), "TWE=");
+        assert_eq!(base64_encode(b"M"), "TQ==");
+        assert_eq!(base64_encode(&[0x41, 0x00]), "QQA=");
+    }
+
+    #[test]
+    fn encoded_integration_command_uses_base64_alphabet() {
+        // 解码验证由真实 Shell 注入路径覆盖；此处守住非空与字母表约束，
+        // 防止编码器悄悄混入其它字节。
+        let encoded = encoded_integration_command();
+        assert!(!encoded.is_empty());
+        assert!(
+            encoded
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric()
+                    || character == '+'
+                    || character == '/'
+                    || character == '=')
+        );
     }
 }
 

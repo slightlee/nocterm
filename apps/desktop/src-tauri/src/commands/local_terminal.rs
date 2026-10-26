@@ -8,7 +8,7 @@ use crate::{
         error::ErrorResponse,
         local_terminal::{LocalTerminalExit, LocalTerminalOpenResponse, LocalTerminalOutput},
     },
-    state::AppState,
+    state::{AppState, Osc633Scanner},
 };
 
 #[tauri::command]
@@ -35,11 +35,22 @@ pub fn local_terminal_open(
         let mut buffer = [0_u8; 8192];
         // 解码器跨读取保持状态，否则被 8 KiB 边界切开的汉字会永久变成 U+FFFD。
         let mut decoder = Utf8Stream::default();
+        // 633 扫描器同样跨分块保持状态：序列可能被 PTY 从任意字节处切开（#82）。
+        let mut osc_scanner = Osc633Scanner::new();
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(length) => {
-                    let data = decoder.push(&buffer[..length]);
+                    // 先剥离 shell integration 控制序列：它们不参与 UTF-8 解码、
+                    // 输出过滤与 UI 转发；事件交注册表驱动集成检测与完成等待。
+                    let (stripped, events) = osc_scanner.feed(&buffer[..length]);
+                    for event in &events {
+                        reader_registry.record_integration_event(&reader_terminal_id, event);
+                    }
+                    if stripped.is_empty() {
+                        continue;
+                    }
+                    let data = decoder.push(&stripped);
                     if data.is_empty() {
                         // 整块都是某个字符的前半截，等下一块补齐再发，避免前端收到空事件。
                         continue;
@@ -80,6 +91,12 @@ pub fn local_terminal_write(
     terminal_id: String,
     data: String,
 ) -> Result<(), ErrorResponse> {
+    let registry = state.local_terminals();
+    // AI 命令执行期间的输入门控（#82）：用户键盘写入被静默拦截，避免用户手敲
+    // 命令的完成信号冒充 AI 命令的退出码；AI 自身的执行写入不经过本命令。
+    if registry.input_gated(&terminal_id) {
+        return Ok(());
+    }
     state
         .local_terminal_service()
         .write(&terminal_id, &data)

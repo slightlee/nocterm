@@ -1,8 +1,10 @@
 mod local_terminal;
+mod osc633;
 pub mod session_password;
 
 pub use local_terminal::LocalTerminalRegistry;
 pub(crate) use local_terminal::{local_completion_status, sanitize_local_command_output};
+pub(crate) use osc633::Osc633Scanner;
 
 use crate::commands::{
     ai_process::AiProcessManager, ai_runtime::PersistentProviderRuntimeRegistry,

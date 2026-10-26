@@ -3,7 +3,10 @@
 use std::{
     collections::HashMap,
     sync::{Mutex, mpsc},
+    time::{Duration, Instant},
 };
+
+use super::osc633::Osc633Event;
 
 /// 完整随机标记用于完成校验；这个短保留前缀仅用于识别被 Shell 重绘拆散的 UI 回显。
 const LOCAL_COMPLETION_REDACTION_PREFIX: &str = "__NOCTERM_";
@@ -15,6 +18,32 @@ pub struct LocalTerminalRegistry {
     bindings: Mutex<HashMap<String, String>>,
     subscribers: Mutex<HashMap<String, Vec<mpsc::Sender<String>>>>,
     output_filters: Mutex<HashMap<String, TerminalOutputFilter>>,
+    integrations: Mutex<HashMap<String, TerminalIntegration>>,
+}
+
+/// 单个终端的 shell integration 状态（#82）。
+///
+/// - `active` 在读取线程观察到首个 633 序列时翻转，AI 执行流据此选择集成或探针路径；
+/// - `completions` 是 D 事件的单调计数，执行方在写入命令前取快照，
+///   仅接受快照之后的新完成信号——启动期首提示符的 D;0 因此天然被忽略；
+/// - `input_gated` 在 AI 命令执行期间拦截用户键盘写入，防止用户手敲命令的
+///   完成信号冒充 AI 命令的退出码。
+struct TerminalIntegration {
+    active: bool,
+    completions: u64,
+    last_exit_code: i64,
+    input_gated: bool,
+}
+
+impl TerminalIntegration {
+    fn new() -> Self {
+        Self {
+            active: false,
+            completions: 0,
+            last_exit_code: 0,
+            input_gated: false,
+        }
+    }
 }
 
 /// AI 在可见 PTY 中追加完成标记时，终端 UI 只隐藏内部命令及标记结果。
@@ -51,6 +80,9 @@ impl LocalTerminalRegistry {
         if let Ok(mut filters) = self.output_filters.lock() {
             filters.remove(terminal_id);
         }
+        if let Ok(mut integrations) = self.integrations.lock() {
+            integrations.remove(terminal_id);
+        }
     }
 
     pub fn unbind_terminal(&self, terminal_id: &str) {
@@ -62,6 +94,9 @@ impl LocalTerminalRegistry {
         }
         if let Ok(mut filters) = self.output_filters.lock() {
             filters.remove(terminal_id);
+        }
+        if let Ok(mut integrations) = self.integrations.lock() {
+            integrations.remove(terminal_id);
         }
     }
 
@@ -82,6 +117,115 @@ impl LocalTerminalRegistry {
         {
             listeners.retain(|sender| sender.send(data.to_string()).is_ok());
         }
+    }
+
+    /// 读取线程上报 633 事件：首个事件即证明集成激活；D 事件推进完成计数。
+    ///
+    /// D 事件意味着 Shell 已回到提示符：顺带解除输入门控。这同时覆盖"中断后
+    /// 迟到恢复"的场景——执行方等待窗口内未观察到恢复而保留门控时，由读取
+    /// 线程在恢复真正发生的那一刻放行用户输入与后续 AI 命令。
+    pub fn record_integration_event(&self, terminal_id: &str, event: &Osc633Event) {
+        if let Ok(mut integrations) = self.integrations.lock() {
+            let integration = integrations
+                .entry(terminal_id.to_string())
+                .or_insert_with(TerminalIntegration::new);
+            integration.active = true;
+            if let Osc633Event::CommandFinished(code) = event {
+                integration.completions += 1;
+                integration.last_exit_code = *code;
+                integration.input_gated = false;
+            }
+        }
+    }
+
+    /// 集成是否已激活（读取线程观察到过至少一个 633 序列）。
+    pub fn integration_active(&self, terminal_id: &str) -> bool {
+        self.integrations
+            .lock()
+            .ok()
+            .and_then(|integrations| {
+                integrations
+                    .get(terminal_id)
+                    .map(|integration| integration.active)
+            })
+            .unwrap_or(false)
+    }
+
+    /// 当前完成计数快照；执行方写入命令前获取，只接受快照之后的新完成信号。
+    pub fn completion_snapshot(&self, terminal_id: &str) -> u64 {
+        self.integrations
+            .lock()
+            .ok()
+            .and_then(|integrations| {
+                integrations
+                    .get(terminal_id)
+                    .map(|integration| integration.completions)
+            })
+            .unwrap_or(0)
+    }
+
+    /// 等待快照之后的新完成信号并返回其退出码；超时返回 None。
+    ///
+    /// 轮询而非条件变量：被等待的命令本身以秒计，几十毫秒的粒度足够，
+    /// 且与取消检查共用同一节拍，避免额外唤醒链和锁借用复杂度。
+    pub fn wait_for_completion(
+        &self,
+        terminal_id: &str,
+        snapshot: u64,
+        timeout: Duration,
+    ) -> Option<i64> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(integrations) = self.integrations.lock()
+                && let Some(integration) = integrations.get(terminal_id)
+                && integration.completions > snapshot
+            {
+                return Some(integration.last_exit_code);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// AI 命令执行期间置位：用户键盘写入被拦截（内部执行写入不走此门）。
+    /// 该标志同时兼作 AI 侧占用锁——并发执行请求经 `try_acquire_input_gate`
+    /// 原子争用，同一终端同时最多一条 AI 命令。
+    pub fn set_input_gate(&self, terminal_id: &str, gated: bool) {
+        if let Ok(mut integrations) = self.integrations.lock() {
+            integrations
+                .entry(terminal_id.to_string())
+                .or_insert_with(TerminalIntegration::new)
+                .input_gated = gated;
+        }
+    }
+
+    /// 原子争用输入门控：空闲则占用并返回 true；已被 AI 命令占用返回 false。
+    pub fn try_acquire_input_gate(&self, terminal_id: &str) -> bool {
+        if let Ok(mut integrations) = self.integrations.lock() {
+            let integration = integrations
+                .entry(terminal_id.to_string())
+                .or_insert_with(TerminalIntegration::new);
+            if integration.input_gated {
+                return false;
+            }
+            integration.input_gated = true;
+            return true;
+        }
+        false
+    }
+
+    pub fn input_gated(&self, terminal_id: &str) -> bool {
+        self.integrations
+            .lock()
+            .ok()
+            .and_then(|integrations| {
+                integrations
+                    .get(terminal_id)
+                    .map(|integration| integration.input_gated)
+            })
+            .unwrap_or(false)
     }
 
     pub fn begin_output_marker_filter(
@@ -263,7 +407,58 @@ pub(crate) fn sanitize_local_command_output(output: &str) -> String {
 mod tests {
     use std::time::Duration;
 
+    use super::Osc633Event;
     use super::{LocalTerminalRegistry, sanitize_local_command_output};
+
+    #[test]
+    fn integration_state_tracks_activation_completion_and_gate() {
+        let registry = LocalTerminalRegistry::default();
+        assert!(!registry.integration_active("local-1"));
+
+        // 首个事件即激活；启动期首提示符的 D;0 会计数但不影响后续快照语义。
+        registry.record_integration_event("local-1", &Osc633Event::PromptStarted);
+        assert!(registry.integration_active("local-1"));
+
+        let snapshot = registry.completion_snapshot("local-1");
+        registry.record_integration_event("local-1", &Osc633Event::CommandFinished(7));
+        assert_eq!(
+            registry.wait_for_completion("local-1", snapshot, Duration::from_secs(1)),
+            Some(7)
+        );
+        // 快照已被超过：即使再次等待也立即返回已知结果，而不是等待新信号。
+        assert_eq!(
+            registry.wait_for_completion("local-1", snapshot, Duration::from_millis(30)),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn completion_event_releases_the_input_gate() {
+        let registry = LocalTerminalRegistry::default();
+        assert!(registry.try_acquire_input_gate("local-1"));
+        assert!(registry.input_gated("local-1"));
+        // 执行方等待恢复超时保留门控后，迟到的 D 由读取线程放行。
+        registry.record_integration_event("local-1", &Osc633Event::CommandFinished(0));
+        assert!(!registry.input_gated("local-1"));
+    }
+
+    #[test]
+    fn input_gate_occupancy_rejects_concurrent_ai_commands() {
+        let registry = LocalTerminalRegistry::default();
+        assert!(registry.try_acquire_input_gate("local-1"));
+        assert!(!registry.try_acquire_input_gate("local-1"));
+        registry.set_input_gate("local-1", false);
+        assert!(registry.try_acquire_input_gate("local-1"));
+    }
+
+    #[test]
+    fn unbind_clears_integration_state() {
+        let registry = LocalTerminalRegistry::default();
+        registry.record_integration_event("local-1", &Osc633Event::PromptStarted);
+        registry.unbind_terminal("local-1");
+        assert!(!registry.integration_active("local-1"));
+        assert_eq!(registry.completion_snapshot("local-1"), 0);
+    }
 
     #[test]
     fn routes_output_to_subscribers() {
