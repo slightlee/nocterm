@@ -24,7 +24,9 @@ use crate::state::{LocalTerminalRegistry, local_completion_status};
 #[test]
 fn integrated_local_execution_reports_real_exit_code_and_hides_sequences() {
     let service = LocalTerminalService::new(Arc::new(LocalTerminalManager::default()));
-    let opened = service.open(80, 24).expect("open local terminal");
+    // 40 列即 #82 验收标准的"窄窗口"场景：集成路径的完成信号走控制平面，
+    // 与终端宽度无关；旧探针路径在 40 列 + 该 conhost 上会拆断文本标记。
+    let opened = service.open(40, 24).expect("open local terminal");
     let terminal_id = opened.id;
     let registry = Arc::new(LocalTerminalRegistry::default());
     registry.bind("local:test".into(), terminal_id.clone());
