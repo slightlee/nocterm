@@ -26,10 +26,18 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     {
         for shell in windows_shell_candidates(std::env::var("COMSPEC").ok()).iter() {
             if windows_command_available(shell) {
-                return (
-                    apply_terminal_identity(CommandBuilder::new(shell)),
-                    detect_shell_kind(shell),
-                );
+                let kind = detect_shell_kind(shell);
+                let mut command = apply_terminal_identity(CommandBuilder::new(shell));
+                if matches!(kind, LocalShellKind::PowerShell) {
+                    // PowerShell 家族注入集成脚本：用户 Profile 先于 -EncodedCommand
+                    // 加载，脚本包装 prompt 以 OSC 633 上报命令完成与退出码；
+                    // 序列属于控制平面，不受终端折行影响（#82）。
+                    command.arg("-NoLogo");
+                    command.arg("-NoExit");
+                    command.arg("-EncodedCommand");
+                    command.arg(encoded_integration_command());
+                }
+                return (command, kind);
             }
         }
         (
@@ -39,6 +47,7 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     }
 
     // macOS 与其它 Unix 走 portable-pty 的默认程序解析（读 `SHELL`，回落到 passwd 项）。
+    // zsh 集成（ZDOTDIR 包装）按 #82 Step 1b 单独落地，本阶段不注入。
     #[cfg(not(windows))]
     {
         let command =
@@ -46,6 +55,43 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
         let kind = detect_shell_kind(&command.get_shell());
         (command, kind)
     }
+}
+
+/// 集成脚本按 PowerShell 约定编码为 UTF-16LE + Base64（`-EncodedCommand` 只接受该形式）。
+#[cfg(windows)]
+fn encoded_integration_command() -> String {
+    let script = include_str!("integration_pwsh.ps1");
+    let mut utf16 = Vec::with_capacity(script.len() * 2);
+    for unit in script.encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    base64_encode(&utf16)
+}
+
+/// 标准字母表 Base64 编码（含填充）。仅为注入脚本而存在，不值得引入依赖。
+#[cfg(windows)]
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let byte = |index: usize| -> u32 { u32::from(chunk[index]) };
+        let group = (byte(0) << 16)
+            | (chunk.get(1).map_or(0, |_| byte(1)) << 8)
+            | chunk.get(2).map_or(0, |_| byte(2));
+        out.push(ALPHABET[(group >> 18) as usize & 0x3f] as char);
+        out.push(ALPHABET[(group >> 12) as usize & 0x3f] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(group >> 6) as usize & 0x3f] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[group as usize & 0x3f] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// PTY 内 Shell 的默认 TERM 值，与前端 xterm.js 的能力对齐。
@@ -124,6 +170,35 @@ pub(super) fn completion_command(kind: LocalShellKind, marker: &str) -> String {
             "$__nocterm_ok = $?; $__nocterm_code = if ($__nocterm_ok) {{ 0 }} elseif ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} else {{ 1 }}; Write-Output \"{marker}$__nocterm_code\""
         ),
         LocalShellKind::Cmd => format!("echo {marker}%ERRORLEVEL%"),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod integration_encoding_tests {
+    use super::{base64_encode, encoded_integration_command};
+
+    #[test]
+    fn base64_matches_standard_alphabet_with_padding() {
+        assert_eq!(base64_encode(b"Man"), "TWFu");
+        assert_eq!(base64_encode(b"Ma"), "TWE=");
+        assert_eq!(base64_encode(b"M"), "TQ==");
+        assert_eq!(base64_encode(&[0x41, 0x00]), "QQA=");
+    }
+
+    #[test]
+    fn encoded_integration_command_uses_base64_alphabet() {
+        // 解码验证由真实 Shell 注入路径覆盖；此处守住非空与字母表约束，
+        // 防止编码器悄悄混入其它字节。
+        let encoded = encoded_integration_command();
+        assert!(!encoded.is_empty());
+        assert!(
+            encoded
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric()
+                    || character == '+'
+                    || character == '/'
+                    || character == '=')
+        );
     }
 }
 

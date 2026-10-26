@@ -17,6 +17,88 @@ use super::{
 };
 use crate::state::{LocalTerminalRegistry, local_completion_status};
 
+/// 端到端验证集成路径（#82）：真实 pwsh 经 ConPTY 启动并注入集成脚本，AI 执行流
+/// 应检测到 633 序列激活、通过完成信号拿到真实退出码，且序列不泄漏到 UI 输出。
+/// 仅在 Windows 上编译（注入目前只覆盖 PowerShell 家族）。
+#[cfg(windows)]
+#[test]
+fn integrated_local_execution_reports_real_exit_code_and_hides_sequences() {
+    let service = LocalTerminalService::new(Arc::new(LocalTerminalManager::default()));
+    let opened = service.open(80, 24).expect("open local terminal");
+    let terminal_id = opened.id;
+    let registry = Arc::new(LocalTerminalRegistry::default());
+    registry.bind("local:test".into(), terminal_id.clone());
+    let reader_registry = Arc::clone(&registry);
+    let reader_terminal_id = terminal_id.clone();
+    let visible_output = Arc::new(Mutex::new(String::new()));
+    let reader_visible_output = Arc::clone(&visible_output);
+    let mut reader = opened.reader;
+    thread::spawn(move || {
+        let mut decoder = crate::commands::terminal_text::Utf8Stream::default();
+        let mut osc_scanner = crate::state::Osc633Scanner::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(length) => {
+                    let (stripped, events) = osc_scanner.feed(&buffer[..length]);
+                    for event in &events {
+                        reader_registry.record_integration_event(&reader_terminal_id, event);
+                    }
+                    let data = decoder.push(&stripped);
+                    if !data.is_empty() {
+                        let visible = reader_registry.visible_output(&reader_terminal_id, &data);
+                        reader_registry.publish(&reader_terminal_id, &data);
+                        reader_visible_output.lock().unwrap().push_str(&visible);
+                    }
+                }
+            }
+        }
+    });
+
+    // 等待 shell/Profile/集成脚本就绪并发出首个 633 序列；注入失败时快速失败并
+    // 给出诊断信息，而不是挂满 15 秒超时。
+    let activation_deadline = Instant::now() + Duration::from_secs(15);
+    while !registry.integration_active(&terminal_id) {
+        assert!(
+            Instant::now() < activation_deadline,
+            "shell integration 未在 15 秒内激活：检查注入参数与脚本"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let output = execute_local_sync(
+        &service,
+        &registry,
+        "local:test",
+        &terminal_id,
+        "Write-Output nocterm-integration-ok",
+        &AtomicBool::new(false),
+        Instant::now() + Duration::from_secs(15),
+    )
+    .expect("execute integrated local command");
+    assert_eq!(output.exit_code, 0);
+    assert!(output.output.contains("nocterm-integration-ok"));
+
+    let failed = execute_local_sync(
+        &service,
+        &registry,
+        "local:test",
+        &terminal_id,
+        "cmd /c exit 7",
+        &AtomicBool::new(false),
+        Instant::now() + Duration::from_secs(10),
+    )
+    .expect("collect failed local command status via integration");
+    assert_eq!(failed.exit_code, 7);
+
+    // 633 序列属于控制平面：不得进入 UI 可见输出。
+    let terminal_output = visible_output.lock().unwrap();
+    assert!(!terminal_output.contains("633;"));
+    drop(terminal_output);
+    service.close(&terminal_id).expect("close local terminal");
+}
+
 #[test]
 fn interrupted_local_execution_waits_for_a_chunked_completion_marker() {
     let (sender, receiver) = std::sync::mpsc::channel();

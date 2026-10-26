@@ -46,6 +46,17 @@ pub(crate) fn execute_local_sync(
     {
         return Err("目标本地终端不存在或已重新连接".to_string());
     }
+    // 集成激活的 shell 走 633 完成信号路径；其余（cmd、注入失败、序列被剥）回退文本探针（#82）。
+    if local_terminals.integration_active(terminal_id) {
+        return execute_local_via_integration(
+            local_terminal_service,
+            local_terminals,
+            terminal_id,
+            &command,
+            cancellation,
+            deadline,
+        );
+    }
     let marker = local_completion_marker()?;
     let completion_command = local_terminal_service
         .completion_command(terminal_id, &marker)
@@ -126,6 +137,98 @@ pub(crate) fn execute_local_sync(
     let output = sanitize_local_command_output(&output);
     settle_local_terminal_output(&receiver, cancellation, deadline);
     local_terminals.clear_output_marker_filter(terminal_id, &marker);
+    Ok(TerminalCommandResult {
+        output: output.trim().to_string(),
+        exit_code,
+    })
+}
+
+/// 集成路径执行（#82）：AI 写入裸命令，完成信号取自 shell 上报的 `633;D`。
+///
+/// 绑定方式为"计数快照 + 输入门控"：写入命令前记录完成计数，只接受快照之后的
+/// 新完成信号；执行期间用户键盘写入已被注册表拦截（`local_terminal_write` 门控），
+/// 因此快照后的第一个完成必然来自本次命令。启动期首提示符的 D;0 发生在快照
+/// 之前，天然被忽略。输出语义与探针路径一致：包含命令回显与真实输出。
+fn execute_local_via_integration(
+    local_terminal_service: &nocterm_application::terminal::LocalTerminalService,
+    local_terminals: &LocalTerminalRegistry,
+    terminal_id: &str,
+    command: &str,
+    cancellation: &AtomicBool,
+    deadline: Instant,
+) -> Result<TerminalCommandResult, String> {
+    let receiver = local_terminals.subscribe(terminal_id);
+    let snapshot = local_terminals.completion_snapshot(terminal_id);
+    // 门控原子争用：同一终端同时最多一条 AI 命令，重复请求立即拒绝（与探针
+    // 路径的 marker 过滤占用语义一致）。任一失败路径都必须解除门控后返回。
+    if !local_terminals.try_acquire_input_gate(terminal_id) {
+        return Err("当前本地终端已有 AI 命令正在执行，请等待完成后重试".to_string());
+    }
+    if let Err(error) = local_terminal_service.write(terminal_id, &format!("{command}\r")) {
+        local_terminals.set_input_gate(terminal_id, false);
+        return Err(error.message.to_string());
+    }
+    let completion = loop {
+        if cancellation.load(Ordering::Acquire) {
+            break None;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break None;
+        }
+        if let Some(code) = local_terminals.wait_for_completion(
+            terminal_id,
+            snapshot,
+            remaining.min(CANCELLATION_POLL_INTERVAL),
+        ) {
+            break Some(code);
+        }
+    };
+    let exit_code = match completion {
+        Some(code) => code,
+        None => {
+            // 超时或取消：发送 Ctrl+C 请求中断，并等待新一轮提示符（伴随 D）确认
+            // Shell 已恢复。已恢复则 D 到达时读取线程已自动解除门控；未恢复则
+            // 保留门控——新 AI 命令被拒绝，用户输入继续被拦，直到迟到的 D 放行。
+            let _ = local_terminal_service.write(terminal_id, "\u{3}");
+            let recovered = local_terminals.wait_for_completion(
+                terminal_id,
+                snapshot,
+                LOCAL_TERMINAL_INTERRUPT_SETTLE_LIMIT,
+            );
+            let stopped = cancellation.load(Ordering::Acquire);
+            if recovered.is_none() {
+                return Err(format!(
+                    "{}；本地终端仍在恢复，恢复完成前不会执行新的 AI 命令",
+                    if stopped {
+                        "AI 任务已停止，已发送中断请求"
+                    } else {
+                        "本地终端命令执行超时，已发送中断请求"
+                    }
+                ));
+            }
+            return Err(if stopped {
+                "AI 任务已停止，本地命令已请求中断"
+            } else {
+                "本地终端命令执行超时，已发送中断请求"
+            }
+            .to_string());
+        }
+    };
+    // 完成信号先于下一提示符文本；短暂排空订阅通道汇总命令输出（回显 + 结果）。
+    let mut output = String::new();
+    let drain_deadline = Instant::now() + Duration::from_millis(150);
+    loop {
+        let remaining = drain_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match receiver.recv_timeout(remaining) {
+            Ok(data) => output.push_str(&data),
+            Err(_) => break,
+        }
+    }
+    local_terminals.set_input_gate(terminal_id, false);
     Ok(TerminalCommandResult {
         output: output.trim().to_string(),
         exit_code,
