@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0-beta.1](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.7...v0.3.0-beta.1) (2026-10-27)
+
+
+### Features
+
+* detect AI command completion via OSC 633 shell integration ([#84](https://github.com/slightlee/nocterm/issues/84)) ([a2d84fa](https://github.com/slightlee/nocterm/commit/a2d84fa352abb15aa8b2547a3d7b2326e8380c60)), closes [#82](https://github.com/slightlee/nocterm/issues/82)
+
+
+### Performance Improvements
+
+* dispatch SFTP local file IO to the blocking pool ([#79](https://github.com/slightlee/nocterm/issues/79)) ([996ec3e](https://github.com/slightlee/nocterm/commit/996ec3e00c8c47552bea26482aa5d7e27a673eb7))
+
+
+### Miscellaneous Chores
+
+* declare v0.3.0 beta release ([#100](https://github.com/slightlee/nocterm/issues/100)) ([2614f31](https://github.com/slightlee/nocterm/commit/2614f3124b04d86fb2aee8a3d3b67723b3824144))
+
 ## [0.2.0-beta.7](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.6...v0.2.0-beta.7) (2026-10-24)
 
 
