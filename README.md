@@ -16,7 +16,7 @@ English | [简体中文](README.zh-CN.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![Built with](https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20React%2019%20%C2%B7%20Rust-24C8DB)
 
-[Download](#-download) · [Features](#-features) · [Development](#-development) · [Documentation](#-documentation)
+[Download](#-download) · [Features](#-features) · [Screenshots](#️-screenshots) · [Community](#-community) · [Development](#-development) · [Documentation](#-documentation)
 
 </div>
 
@@ -29,6 +29,16 @@ English | [简体中文](README.zh-CN.md)
 - 📂 **SFTP** — dual-pane browsing, file operations, uploads and downloads with progress and cancel
 - 🤖 **AI assistance** — connect your local Codex / Claude Code / Grok CLI to the active terminal: structured server diagnostics, command approval and redacted audit logs. **AI providers never touch SSH credentials and cannot switch targets on their own** — all access goes through the Nocterm tool gateway
 - 🔒 **Local-first** — everything runs on your machine, no cloud service required. Connections live in local SQLite; saved passwords go into the OS keychain (macOS Keychain / Windows Credential Manager)
+
+## 🖼️ Screenshots
+
+<p align="center">
+  <img src="docs/assets/screenshot-ai-assistant.png" width="100%" alt="Nocterm terminal with AI-assisted server diagnostics" />
+</p>
+<p align="center">
+  <img src="docs/assets/screenshot-sftp.png" width="49%" alt="Nocterm dual-pane SFTP file manager" />
+  <img src="docs/assets/screenshot-themes.png" width="49%" alt="Nocterm terminal themes and appearance settings" />
+</p>
 
 ## 📦 Download
 
@@ -55,6 +65,10 @@ corepack pnpm check          # frontend quality gate
 corepack pnpm cargo:check    # Rust quality gate
 ```
 
+## 💬 Community
+
+- [LINUX DO](https://linux.do) — a new kind of ideal tech community
+
 ## 📚 Documentation
 
 Full details on the security design, the AI tool-gateway boundary, architecture layering, testing and the release process:
@@ -65,6 +79,7 @@ Full details on the security design, the AI tool-gateway boundary, architecture 
 - [Release process](docs/release-process.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md) — please report vulnerabilities privately, do not open public issues
+- [Issues](https://github.com/slightlee/nocterm/issues) — bug reports and feature requests
 
 ## 📄 License
 
