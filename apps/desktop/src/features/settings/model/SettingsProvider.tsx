@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
+import { applyTerminalHighlightConfig } from '../../../shared/lib/highlight-config';
+import { parseHighlightOverrides } from '../../../shared/lib/highlight-roles';
 import {
   getAppTheme,
   getTerminalAppearance,
@@ -17,8 +19,6 @@ import {
   resolveTerminalTheme,
   type ResolvedTerminalTheme,
 } from './terminal-appearance';
-import { applyTerminalHighlightConfig } from '../../terminal/model/highlight-config';
-import { parseHighlightOverrides } from '../../terminal/model/highlight-roles';
 
 /**
  * 设置 Provider 是应用主题的唯一写入者：AppShell 和页面不再各自监听系统主题，

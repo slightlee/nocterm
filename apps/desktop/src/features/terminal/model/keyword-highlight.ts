@@ -14,12 +14,12 @@
  *   字节分块下着色结果与整段输入完全一致。
  */
 
-import { resolveHighlightRoles } from './highlight-roles';
+import { resolveHighlightRoles } from '../../../shared/lib/highlight-roles';
 import type {
   HighlightPreset,
   HighlightRoleId,
   HighlightSlotMap,
-} from '../../settings/types/settings-types';
+} from '../../../shared/types/highlight-types';
 
 /**
  * 角色颜色码集合：由预设 + 用户覆盖解析而来（见 highlight-roles.ts）。

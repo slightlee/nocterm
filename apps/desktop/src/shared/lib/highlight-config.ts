@@ -1,5 +1,5 @@
 import { encodeHighlightOverrides, parseHighlightOverrides } from './highlight-roles';
-import type { HighlightPreset, HighlightSlotMap } from '../../settings/types/settings-types';
+import type { HighlightPreset, HighlightSlotMap } from '../types/highlight-types';
 
 /**
  * 终端高亮配置在 DOM 上的传递通道：SettingsProvider 把配置写到

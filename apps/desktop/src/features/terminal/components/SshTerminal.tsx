@@ -24,7 +24,7 @@ import {
   reducePasswordPrompt,
 } from '../model/password-prompt';
 import { createKeywordHighlighter } from '../model/keyword-highlight';
-import { readTerminalHighlightConfig } from '../model/highlight-config';
+import { readTerminalHighlightConfig } from '../../../shared/lib/highlight-config';
 import { attachTerminalClipboard, createCopyKeyHandler } from '../model/terminal-clipboard';
 import {
   attachTerminalSelectionAction,

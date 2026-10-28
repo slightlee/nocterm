@@ -8,5 +8,6 @@ coverage/
 *.log
 apps/desktop/src-tauri/gen/
 .playwright-mcp/
+.zcode/
 .spec-workflow/
 .serena/

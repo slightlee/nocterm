@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { TerminalAppearance, HighlightPreset, HighlightRoleId } from '../types/settings-types';
 import {
   HIGHLIGHT_PRESETS,
   HIGHLIGHT_PRESET_LABELS,
@@ -9,7 +8,9 @@ import {
   getHighlightRole,
   parseHighlightOverrides,
   resolveHighlightRoles,
-} from '../../terminal/model/highlight-roles';
+} from '../../../shared/lib/highlight-roles';
+import type { HighlightPreset, HighlightRoleId } from '../../../shared/types/highlight-types';
+import type { TerminalAppearance } from '../types/settings-types';
 import {
   contrastRatio,
   evaluateSlotContrast,
