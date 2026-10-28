@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 use super::{
     ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
     ProviderToolTransport, combined_search_path, find_provider_executable_in, merge_no_proxy,
@@ -414,4 +416,116 @@ fn combined_search_path_keeps_the_process_path_first() {
     assert!(directories.contains(&home.root.join(".local/bin")));
 
     std::fs::remove_dir_all(&process_directory).expect("cleanup process path directory");
+}
+
+/// 解析 `--mcp-config` 参数中的 JSON 配置；缺失或不可解析均视为测试失败。
+fn mcp_config_argument(args: &[String]) -> Value {
+    args.windows(2)
+        .find(|pair| pair[0] == "--mcp-config")
+        .and_then(|pair| pair[1].parse::<Value>().ok())
+        .expect("--mcp-config json argument")
+}
+
+/// MCP 配置必须只暴露 Nocterm bridge；未绑定终端时保持空清单。
+/// 任何额外的 MCP 服务器都可能让回答读取错误机器的信息，破坏目标绑定。
+#[test]
+fn claude_mcp_config_only_exposes_the_nocterm_bridge() {
+    let identity = identity();
+    let ProviderLaunchPlan::Headless(bound) = provider_adapter("claude-code")
+        .unwrap()
+        .prepare_launch(launch(
+            "inspect",
+            Some(ProviderBridge {
+                executable: "/tmp/nocterm",
+                endpoint: "127.0.0.1:4567",
+            }),
+            &identity,
+        ))
+        .unwrap()
+    else {
+        panic!("Claude Code should use a headless launch");
+    };
+    let config = mcp_config_argument(&bound.args);
+    assert_eq!(
+        config
+            .pointer("/mcpServers/nocterm/command")
+            .and_then(Value::as_str),
+        Some("/tmp/nocterm")
+    );
+    assert_eq!(
+        config
+            .pointer("/mcpServers/nocterm/args")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(
+        config
+            .pointer("/mcpServers/nocterm/args/2")
+            .and_then(Value::as_str),
+        Some("127.0.0.1:4567")
+    );
+    assert_eq!(
+        config
+            .pointer("/mcpServers")
+            .and_then(Value::as_object)
+            .map(|servers| servers.len()),
+        Some(1)
+    );
+
+    let ProviderLaunchPlan::Headless(unbound) = provider_adapter("claude-code")
+        .unwrap()
+        .prepare_launch(launch("inspect", None, &identity))
+        .unwrap()
+    else {
+        panic!("Claude Code should use a headless launch");
+    };
+    let config = mcp_config_argument(&unbound.args);
+    assert_eq!(
+        config
+            .pointer("/mcpServers")
+            .and_then(Value::as_object)
+            .map(|servers| servers.len()),
+        Some(0)
+    );
+}
+
+/// 每次启动生成独立的随机运行时目录：并发会话不能读到彼此的项目指令与宿主 cwd。
+#[test]
+fn claude_runtime_directories_are_unique_and_removed_with_the_launch() {
+    let identity = identity();
+    let bridge = || ProviderBridge {
+        executable: "/tmp/nocterm",
+        endpoint: "127.0.0.1:4567",
+    };
+    let first = provider_adapter("claude-code")
+        .unwrap()
+        .prepare_launch(launch("one", Some(bridge()), &identity))
+        .unwrap();
+    let second = provider_adapter("claude-code")
+        .unwrap()
+        .prepare_launch(launch("two", Some(bridge()), &identity))
+        .unwrap();
+    let ProviderLaunchPlan::Headless(first) = first else {
+        panic!("Claude Code should use a headless launch");
+    };
+    let ProviderLaunchPlan::Headless(second) = second else {
+        panic!("Claude Code should use a headless launch");
+    };
+    let first_directory = first.current_directory.clone().expect("runtime directory");
+    let second_directory = second.current_directory.clone().expect("runtime directory");
+    assert_ne!(first_directory, second_directory);
+    for directory in [&first_directory, &second_directory] {
+        assert!(directory.is_dir());
+        assert!(
+            directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("nocterm-claude-runtime-"))
+        );
+    }
+    drop(first);
+    assert!(!first_directory.exists());
+    drop(second);
+    assert!(!second_directory.exists());
 }
