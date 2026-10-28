@@ -3,13 +3,13 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import type { HighlightPreset } from '../types/settings-types';
+import type { HighlightPreset } from '../../../shared/types/highlight-types';
+import { HIGHLIGHT_ROLES } from '../../../shared/lib/highlight-roles';
 import {
   resolveTerminalTheme,
   terminalColorSchemes,
   terminalSchemeGroups,
 } from './terminal-appearance';
-import { HIGHLIGHT_ROLES } from '../../terminal/model/highlight-roles';
 
 describe('resolveTerminalTheme', () => {
   it('offers the complete curated terminal palette set', () => {

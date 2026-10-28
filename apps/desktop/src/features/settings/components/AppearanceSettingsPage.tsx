@@ -1,15 +1,16 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { isWindowsUserAgent } from '../../../shared/lib/desktop-platform';
-import type { AppTheme, HighlightRoleId } from '../types/settings-types';
-import { useSettings } from '../model/use-settings';
-import { HighlightColorSettings } from './HighlightColorSettings';
-import { useTerminalPalette } from '../model/use-terminal-palette';
 import {
   encodeHighlightOverrides,
   parseHighlightOverrides,
   resolveHighlightRoles,
-} from '../../terminal/model/highlight-roles';
+} from '../../../shared/lib/highlight-roles';
+import type { HighlightRoleId } from '../../../shared/types/highlight-types';
+import type { AppTheme } from '../types/settings-types';
+import { useSettings } from '../model/use-settings';
+import { HighlightColorSettings } from './HighlightColorSettings';
+import { useTerminalPalette } from '../model/use-terminal-palette';
 import {
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,

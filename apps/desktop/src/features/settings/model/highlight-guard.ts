@@ -1,4 +1,4 @@
-import type { HighlightRoleId } from '../types/settings-types';
+import type { HighlightRoleId } from '../../../shared/types/highlight-types';
 
 /**
  * 对比度守卫：把"用户只能在安全色里选"落到实处。

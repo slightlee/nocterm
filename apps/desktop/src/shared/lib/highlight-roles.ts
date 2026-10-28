@@ -1,8 +1,4 @@
-import type {
-  HighlightPreset,
-  HighlightRoleId,
-  HighlightSlotMap,
-} from '../../settings/types/settings-types';
+import type { HighlightPreset, HighlightRoleId, HighlightSlotMap } from '../types/highlight-types';
 
 /**
  * 终端字体高亮的角色注册表：角色 → ANSI 色槽的单一来源。
