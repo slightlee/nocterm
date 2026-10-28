@@ -482,7 +482,9 @@ mod tests {
         ConnectionProfile, ConnectionRepository, ConnectionRepositoryError, NewConnectionGroup,
         NewConnectionProfile,
     };
-    use nocterm_domain::terminal::{LocalTerminalPort, OpenedTerminal, SshTerminalPort};
+    use nocterm_domain::terminal::{
+        LocalTerminalPort, OpenedTerminal, SshTerminalError, SshTerminalPort,
+    };
 
     use crate::state::{
         AiCommandPolicy, AiGatewayAccess, AiGatewayBinding, AiGatewayState, AiTarget,
@@ -626,8 +628,8 @@ mod tests {
             _rows: u16,
             _password: Option<&str>,
             _private_key: Option<&str>,
-        ) -> Result<OpenedTerminal, String> {
-            Err("测试桩不可用".to_string())
+        ) -> Result<OpenedTerminal, SshTerminalError> {
+            Err(SshTerminalError::new("unknown", "测试桩不可用"))
         }
 
         fn write(&self, _terminal_id: &str, _data: &str) -> Result<(), String> {

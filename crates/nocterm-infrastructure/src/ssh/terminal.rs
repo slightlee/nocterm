@@ -16,7 +16,10 @@ use std::{
 
 use nocterm_domain::{
     connection::ConnectionProfile,
-    terminal::{OpenedSshExecution, OpenedTerminal, SshExecutionCompletion, SshTerminalPort},
+    terminal::{
+        OpenedSshExecution, OpenedTerminal, SshExecutionCompletion, SshTerminalError,
+        SshTerminalPort,
+    },
 };
 use russh::{ChannelMsg, Disconnect, client, client::Handle};
 use tokio::{
@@ -27,7 +30,7 @@ use tokio::{
 
 use super::{
     SshError,
-    connection::{Auth, ClientHandler, build_auth, connect_authenticated},
+    connection::{Auth, ClientHandler, build_auth, connect_authenticated_coded},
 };
 
 /// 同步 `open()` 等待会话就绪的兜底上限，必须**大于**连接各阶段超时之和：
@@ -99,9 +102,9 @@ impl ExecutionRegistry {
         let mut handles = self
             .handles
             .lock()
-            .map_err(|_| SshError("SSH exec 取消状态锁已损坏".to_string()))?;
+            .map_err(|_| SshError::new("SSH exec 取消状态锁已损坏"))?;
         if handles.contains_key(&execution_id) {
-            return Err(SshError("SSH exec 执行标识冲突".to_string()));
+            return Err(SshError::new("SSH exec 执行标识冲突"));
         }
         handles.insert(
             execution_id,
@@ -215,7 +218,7 @@ impl SshTerminalManager {
         // 输出走同步通道桥接为 Read；指令走异步通道；就绪结果走同步通道以便阻塞等待。
         let (output_tx, output_rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<TerminalCommand>();
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), SshError>>();
 
         let task = self.runtime.spawn(run_session(
             host,
@@ -236,25 +239,28 @@ impl SshTerminalManager {
         // 同步调用方不至于永久阻塞。正常路径下永远不会走到这一支。
         match ready_rx.recv_timeout(CONNECT_READY_TIMEOUT) {
             Ok(Ok(())) => {}
-            Ok(Err(message)) => {
+            Ok(Err(error)) => {
                 task.abort();
-                return Err(SshError(message));
+                return Err(error);
             }
             Err(_) => {
                 task.abort();
-                return Err(SshError(format!(
-                    "连接 {}:{} 无响应：等待 {} 秒后仍未完成建连，请重试",
-                    profile.host,
-                    profile.port,
-                    CONNECT_READY_TIMEOUT.as_secs()
-                )));
+                return Err(SshError::coded(
+                    "timeout",
+                    format!(
+                        "连接 {}:{} 无响应：等待 {} 秒后仍未完成建连，请重试",
+                        profile.host,
+                        profile.port,
+                        CONNECT_READY_TIMEOUT.as_secs()
+                    ),
+                ));
             }
         }
 
         let mut terminals = self
             .terminals
             .lock()
-            .map_err(|_| SshError("SSH 终端状态锁已损坏".to_string()))?;
+            .map_err(|_| SshError::new("SSH 终端状态锁已损坏"))?;
         terminals.insert(
             terminal_id.clone(),
             TerminalHandle {
@@ -284,13 +290,13 @@ impl SshTerminalManager {
         cancellation: &AtomicBool,
     ) -> Result<Option<OpenedSshExecution>, SshError> {
         if cancellation.load(Ordering::Acquire) {
-            return Err(SshError("AI 任务已停止，远程命令未执行".to_string()));
+            return Err(SshError::new("AI 任务已停止，远程命令未执行"));
         }
         let (owner_terminal_id, command_tx) = {
             let mut terminals = self
                 .terminals
                 .lock()
-                .map_err(|_| SshError("SSH 终端状态锁已损坏".to_string()))?;
+                .map_err(|_| SshError::new("SSH 终端状态锁已损坏"))?;
             // 远端 EOF 与 UI 清理之间存在短窗口，先剔除已结束或已关闭的句柄。
             terminals.retain(|_, terminal| {
                 !terminal.task.is_finished() && !terminal.command_tx.is_closed()
@@ -326,26 +332,24 @@ impl SshTerminalManager {
             .is_err()
         {
             self.executions.cancel(&execution_id);
-            return Err(SshError("当前 SSH 连接已停止接收 AI 命令".to_string()));
+            return Err(SshError::new("当前 SSH 连接已停止接收 AI 命令"));
         }
         let deadline = std::time::Instant::now() + EXEC_READY_TIMEOUT;
         loop {
             if cancellation.load(Ordering::Acquire) {
                 self.executions.cancel(&execution_id);
-                return Err(SshError("AI 任务已停止，远程命令未执行".to_string()));
+                return Err(SshError::new("AI 任务已停止，远程命令未执行"));
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 self.executions.cancel(&execution_id);
-                return Err(SshError(
-                    "在当前 SSH 连接上打开 AI 执行通道超时".to_string(),
-                ));
+                return Err(SshError::new("在当前 SSH 连接上打开 AI 执行通道超时"));
             }
             match ready_rx.recv_timeout(remaining.min(EXEC_CANCEL_POLL_INTERVAL)) {
                 Ok(Ok(())) => {
                     if cancellation.load(Ordering::Acquire) {
                         self.executions.cancel(&execution_id);
-                        return Err(SshError("AI 任务已停止，远程命令未执行".to_string()));
+                        return Err(SshError::new("AI 任务已停止，远程命令未执行"));
                     }
                     return Ok(Some(OpenedSshExecution {
                         id: execution_id,
@@ -357,11 +361,11 @@ impl SshTerminalManager {
                         completion,
                     }));
                 }
-                Ok(Err(message)) => return Err(SshError(message)),
+                Ok(Err(message)) => return Err(SshError::new(message)),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     self.executions.cancel(&execution_id);
-                    return Err(SshError("SSH exec 通道在启动完成前意外关闭".to_string()));
+                    return Err(SshError::new("SSH exec 通道在启动完成前意外关闭"));
                 }
             }
         }
@@ -371,35 +375,35 @@ impl SshTerminalManager {
         let terminals = self
             .terminals
             .lock()
-            .map_err(|_| SshError("SSH 终端状态锁已损坏".to_string()))?;
+            .map_err(|_| SshError::new("SSH 终端状态锁已损坏"))?;
         let terminal = terminals
             .get(terminal_id)
-            .ok_or_else(|| SshError("SSH 终端不存在或已关闭".to_string()))?;
+            .ok_or_else(|| SshError::new("SSH 终端不存在或已关闭"))?;
         terminal
             .command_tx
             .send(TerminalCommand::Data(data.as_bytes().to_vec()))
-            .map_err(|_| SshError("SSH 终端已停止接收输入".to_string()))
+            .map_err(|_| SshError::new("SSH 终端已停止接收输入"))
     }
 
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), SshError> {
         let terminals = self
             .terminals
             .lock()
-            .map_err(|_| SshError("SSH 终端状态锁已损坏".to_string()))?;
+            .map_err(|_| SshError::new("SSH 终端状态锁已损坏"))?;
         let terminal = terminals
             .get(terminal_id)
-            .ok_or_else(|| SshError("SSH 终端不存在或已关闭".to_string()))?;
+            .ok_or_else(|| SshError::new("SSH 终端不存在或已关闭"))?;
         terminal
             .command_tx
             .send(TerminalCommand::Resize { cols, rows })
-            .map_err(|_| SshError("SSH 终端已停止响应".to_string()))
+            .map_err(|_| SshError::new("SSH 终端已停止响应"))
     }
 
     pub fn close(&self, terminal_id: &str) -> Result<(), SshError> {
         let handle = self
             .terminals
             .lock()
-            .map_err(|_| SshError("SSH 终端状态锁已损坏".to_string()))?
+            .map_err(|_| SshError::new("SSH 终端状态锁已损坏"))?
             .remove(terminal_id);
         if let Some(handle) = handle {
             // 先请求礼貌关闭，给会话任务一点时间发出 channel close 与 SSH disconnect：
@@ -424,7 +428,7 @@ impl SshTerminalManager {
         let terminal_ids = self
             .terminals
             .lock()
-            .map_err(|_| SshError("SSH 终端状态锁已损坏".to_string()))?
+            .map_err(|_| SshError::new("SSH 终端状态锁已损坏"))?
             .iter()
             .filter(|(_, terminal)| terminal.connection_id == connection_id)
             .map(|(terminal_id, _)| terminal_id.clone())
@@ -460,10 +464,10 @@ impl SshTerminalPort for SshTerminalManager {
         rows: u16,
         password: Option<&str>,
         private_key: Option<&str>,
-    ) -> Result<OpenedTerminal, String> {
+    ) -> Result<OpenedTerminal, SshTerminalError> {
         let (id, reader) =
             SshTerminalManager::open(self, profile, cols, rows, password, private_key)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| SshTerminalError::new(error.code, error.message))?;
         Ok(OpenedTerminal { id, reader })
     }
 
@@ -534,7 +538,7 @@ fn normalize_initial_path(raw: Option<&str>) -> Result<Option<String>, SshError>
         .as_deref()
         .is_some_and(|value| value.contains('\n') || value.contains('\r'))
     {
-        return Err(SshError("远程初始路径不能包含换行符".to_string()));
+        return Err(SshError::new("远程初始路径不能包含换行符"));
     }
     Ok(path)
 }
@@ -551,7 +555,7 @@ async fn run_session(
     initial_path: Option<String>,
     output_tx: std::sync::mpsc::Sender<Vec<u8>>,
     mut command_rx: mpsc::UnboundedReceiver<TerminalCommand>,
-    ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
+    ready_tx: std::sync::mpsc::Sender<Result<(), SshError>>,
     terminal_id: String,
     executions: Arc<ExecutionRegistry>,
 ) {
@@ -562,8 +566,8 @@ async fn run_session(
                 let _ = ready_tx.send(Ok(()));
                 session
             }
-            Err(message) => {
-                let _ = ready_tx.send(Err(message));
+            Err(error) => {
+                let _ = ready_tx.send(Err(error));
                 return;
             }
         };
@@ -714,6 +718,9 @@ async fn run_exec_channel(
 }
 
 /// 建立 TCP 连接、完成认证、开启带 PTY 的交互式 shell 通道。
+///
+/// 沿用 `connect_authenticated_coded` 的分阶段分类，让解析失败、拨号失败、
+/// 认证失败和主机密钥变更各自携带稳定错误码向上传播，不再压平成一句话。
 async fn connect_session(
     host: &str,
     port: u16,
@@ -721,13 +728,15 @@ async fn connect_session(
     auth: Auth,
     cols: u16,
     rows: u16,
-) -> Result<Session, String> {
-    let handle = connect_authenticated(host, port, username, auth).await?;
+) -> Result<Session, SshError> {
+    let handle = connect_authenticated_coded(host, port, username, auth)
+        .await
+        .map_err(|failure| SshError::coded(failure.code, failure.message))?;
 
     let channel = handle
         .channel_open_session()
         .await
-        .map_err(|error| format!("打开 SSH 会话通道失败：{error}"))?;
+        .map_err(|error| SshError::new(format!("打开 SSH 会话通道失败：{error}")))?;
     // want_reply=true：多一次往返，换来"服务端拒绝分配 PTY"能被立刻发现。
     // 若不等应答，被拒时会得到一个没有行编辑、没有作业控制的残缺终端，
     // 而界面上没有任何提示——OpenSSH 正是用 want_reply 才能报出
@@ -744,12 +753,15 @@ async fn connect_session(
         )
         .await
         .map_err(|error| {
-            format!("远程主机拒绝分配 PTY：{error}。请确认该账号允许交互式登录（未被限制为仅 SFTP/命令模式）")
+            SshError::coded(
+                "ptyDenied",
+                format!("远程主机拒绝分配 PTY：{error}。请确认该账号允许交互式登录（未被限制为仅 SFTP/命令模式）"),
+            )
         })?;
     channel
         .request_shell(true)
         .await
-        .map_err(|error| format!("启动远程 Shell 失败：{error}"))?;
+        .map_err(|error| SshError::new(format!("启动远程 Shell 失败：{error}")))?;
 
     let (read_half, write_half) = channel.split();
     Ok((handle, read_half, write_half))

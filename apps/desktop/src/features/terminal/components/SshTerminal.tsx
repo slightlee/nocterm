@@ -39,6 +39,7 @@ import {
   TERMINAL_FONT_FAMILY,
 } from '../model/terminal-appearance';
 import { type RemoteTerminalSession, useTerminalStore } from '../model/terminal-store';
+import { getSshTerminalErrorMessage } from '../model/terminal-errors';
 import { useTerminalNotice } from '../model/use-terminal-notice';
 import { TerminalSelectionAction } from './TerminalSelectionAction';
 import '@xterm/xterm/css/xterm.css';
@@ -343,7 +344,8 @@ export function SshTerminal({ connection, active = true, onAddSelectionToAi }: S
       flushPending(opened.terminalId);
       terminal.focus();
     })().catch((error: unknown) => {
-      const message = getErrorMessage(error);
+      // 建连失败按后端稳定错误码分类，message 已是带目标的中文提示，直接透出。
+      const message = getSshTerminalErrorMessage(error);
       terminal.write(`\r\n\x1b[31m连接失败：${message}\x1b[0m\r\n`);
       setSessionStatus(sessionId, 'error', message);
     });
@@ -384,12 +386,4 @@ export function SshTerminal({ connection, active = true, onAddSelectionToAi }: S
       ) : null}
     </div>
   );
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'object' && error !== null && 'message' in error) {
-    return String(error.message);
-  }
-  return String(error);
 }

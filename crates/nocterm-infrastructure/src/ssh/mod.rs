@@ -12,13 +12,36 @@ mod terminal;
 
 pub use terminal::SshTerminalManager;
 
-/// SSH 基础设施错误保留底层上下文，由 Application 边界转换为稳定错误码。
+/// SSH 基础设施错误：`code` 为前端稳定错误码（与领域 `SshTerminalError`
+/// 及 SFTP 建连分类共用词表），`message` 保留底层上下文供诊断；
+/// Application 边界据此转换为稳定错误码，不再压平成一句话。
 #[derive(Debug)]
-pub struct SshError(String);
+pub struct SshError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl SshError {
+    /// 常规错误：无既定分类（会话生命周期、锁损坏等），归为未知。
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            code: "unknown",
+            message: message.into(),
+        }
+    }
+
+    /// 已分类错误：建连阶段（解析/拨号/握手/认证）与凭据装配的精确提示。
+    pub fn coded(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
 
 impl std::fmt::Display for SshError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.message)
     }
 }
 

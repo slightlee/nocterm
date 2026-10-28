@@ -167,6 +167,8 @@ creating -> running -> closing -> closed
 
 输出事件按终端 ID 隔离；读取端保持跨分块 UTF-8 解码状态；标签关闭、窗口关闭和应用退出必须回收 PTY、进程、SSH task 和事件监听。
 
+SSH 终端建连失败按阶段保留结构化错误码，与 SFTP 建连共用同一套分类：infrastructure 的 `ConnectFailure`（authFailed / timeout / hostKeyFailed / connectionRefused / hostUnreachable / hostResolveFailed，另含 credentialMissing、ptyDenied）穿过领域 `SshTerminalPort` 后，由 Application 映射为 `SSH_*` 稳定 IPC 错误码（如 `SSH_AUTH_FAILED`、`SSH_CONNECT_TIMEOUT`，与 `SSH_PASSWORD_REQUIRED` 同族），经 `ErrorResponse.code` 到达前端。错误语义由后端单一来源维护：`message` 是带目标与排查方向的中文提示，前端透传展示、仅做缺失兜底，不解析文本。
+
 终端剪贴板通过 Terminal Feature API 调用 Tauri 原生文本剪贴板插件，主窗口只授予文本读写权限。有选区时右键复制，无选区时右键粘贴；剪贴板内容不进入日志、数据库或业务事件。
 
 ### 5.3 SFTP

@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
-use nocterm_domain::terminal::{LocalTerminalPort, SshTerminalPort};
+use nocterm_domain::terminal::{LocalTerminalPort, SshTerminalError, SshTerminalPort};
 use nocterm_domain::{
     connection::ConnectionProfile,
     terminal::{OpenedSshExecution, OpenedTerminal},
@@ -29,7 +29,7 @@ impl TerminalService {
     ) -> Result<OpenedTerminal, AppError> {
         self.backend
             .open(profile, cols, rows, password, private_key)
-            .map_err(terminal_error)
+            .map_err(ssh_open_error)
     }
 
     pub fn write(&self, terminal_id: &str, data: &str) -> Result<(), AppError> {
@@ -72,6 +72,29 @@ impl TerminalService {
 /// 不再叠加前缀——UI 自身已渲染"连接失败："，重复前缀只会让提示更难读。
 fn terminal_error(error: String) -> AppError {
     AppError::new("SSH_TERMINAL_FAILED", error, true)
+}
+
+/// 建连失败按阶段转换为稳定错误码：与 `SSH_PASSWORD_REQUIRED` 同属 IPC 错误契约，
+/// 前端据此给出差异化提示（认证失败、超时、主机密钥变更、端口拒绝等），
+/// 不再统一塌缩成 `SSH_TERMINAL_FAILED`。未分类错误保留原码兜底。
+fn ssh_open_error(error: SshTerminalError) -> AppError {
+    AppError::new(ssh_open_error_code(error.code), error.message, true)
+}
+
+/// 领域分类词表 → IPC 稳定错误码。词表与 SFTP 建连共用，IPC 码沿用
+/// `SSH_*` 前缀；未知分类必须回退到 `SSH_TERMINAL_FAILED` 而不是透传。
+fn ssh_open_error_code(code: &str) -> &'static str {
+    match code {
+        "authFailed" => "SSH_AUTH_FAILED",
+        "hostKeyFailed" => "SSH_HOST_KEY_FAILED",
+        "timeout" => "SSH_CONNECT_TIMEOUT",
+        "connectionRefused" => "SSH_CONNECTION_REFUSED",
+        "hostUnreachable" => "SSH_HOST_UNREACHABLE",
+        "hostResolveFailed" => "SSH_HOST_RESOLVE_FAILED",
+        "credentialMissing" => "SSH_CREDENTIAL_MISSING",
+        "ptyDenied" => "SSH_PTY_DENIED",
+        _ => "SSH_TERMINAL_FAILED",
+    }
 }
 
 /// 本地终端用例独立于 SSH 连接资料，确保本地 Shell 不经过连接仓储和凭据链路。
@@ -150,9 +173,9 @@ mod tests {
             _rows: u16,
             _password: Option<&str>,
             _private_key: Option<&str>,
-        ) -> Result<OpenedTerminal, String> {
+        ) -> Result<OpenedTerminal, SshTerminalError> {
             if self.fail_open {
-                return Err("backend unavailable".to_string());
+                return Err(SshTerminalError::new("unknown", "backend unavailable"));
             }
             Ok(OpenedTerminal {
                 id: "terminal-1".to_string(),
@@ -290,6 +313,39 @@ mod tests {
             .expect("read exec output");
         assert_eq!(opened.id, "exec-1");
         assert_eq!(output, "reused output");
+    }
+
+    /// 建连失败必须按阶段转换为稳定错误码而不是统一塌缩：
+    /// 前端依赖 `SSH_*` 词表区分认证失败、超时、主机密钥变更等场景。
+    #[test]
+    fn open_errors_map_stage_classification_to_stable_ipc_codes() {
+        let cases = [
+            ("authFailed", "SSH_AUTH_FAILED"),
+            ("hostKeyFailed", "SSH_HOST_KEY_FAILED"),
+            ("timeout", "SSH_CONNECT_TIMEOUT"),
+            ("connectionRefused", "SSH_CONNECTION_REFUSED"),
+            ("hostUnreachable", "SSH_HOST_UNREACHABLE"),
+            ("hostResolveFailed", "SSH_HOST_RESOLVE_FAILED"),
+            ("credentialMissing", "SSH_CREDENTIAL_MISSING"),
+            ("ptyDenied", "SSH_PTY_DENIED"),
+        ];
+        for (code, expected) in cases {
+            let error = ssh_open_error(SshTerminalError::new(code, format!("{code} 阶段失败")));
+            assert_eq!(error.code, expected);
+            assert!(error.retryable);
+            // 后端中文提示必须原样透出：UI 依赖它渲染带目标的差异化文案。
+            assert_eq!(error.message, format!("{code} 阶段失败"));
+        }
+    }
+
+    #[test]
+    fn unclassified_open_errors_fall_back_to_the_terminal_code() {
+        // 未识别的分类不得透传成新码：契约扩展必须显式登记在映射表中。
+        for code in ["unknown", "", "futureCode"] {
+            let error = ssh_open_error(SshTerminalError::new(code, "任意提示"));
+            assert_eq!(error.code, "SSH_TERMINAL_FAILED");
+            assert_eq!(error.message, "任意提示");
+        }
     }
 
     #[test]
