@@ -1,7 +1,9 @@
 import type { ITheme, Terminal } from '@xterm/xterm';
 
-import { readTerminalHighlightConfig } from './highlight-config';
-import type { TerminalHighlightConfig } from './highlight-config';
+import {
+  readTerminalHighlightConfig,
+  type TerminalHighlightConfig,
+} from '../../../shared/lib/highlight-config';
 
 export const TERMINAL_FONT_FAMILY = "'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace";
 const DEFAULT_FONT_SIZE = 13;
