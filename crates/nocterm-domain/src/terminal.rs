@@ -24,6 +24,31 @@ pub struct SshExecutionCompletion {
     pub exit_code: Option<u32>,
 }
 
+/// SSH 终端建连失败的结构化错误：`code` 为前端稳定错误码词表，`message`
+/// 为面向诊断的中文提示。与 SFTP 建连失败共用同一套分类词表（authFailed /
+/// timeout / hostKeyFailed / connectionRefused / hostUnreachable /
+/// hostResolveFailed），让认证失败、超时与主机密钥变更在前端可区分提示。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshTerminalError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl SshTerminalError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for SshTerminalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
 /// SSH 终端能力的领域边界，隐藏 PTY、子进程和平台差异。
 pub trait SshTerminalPort: Send + Sync {
     fn open(
@@ -33,7 +58,7 @@ pub trait SshTerminalPort: Send + Sync {
         rows: u16,
         password: Option<&str>,
         private_key: Option<&str>,
-    ) -> Result<OpenedTerminal, String>;
+    ) -> Result<OpenedTerminal, SshTerminalError>;
 
     fn write(&self, terminal_id: &str, data: &str) -> Result<(), String>;
 

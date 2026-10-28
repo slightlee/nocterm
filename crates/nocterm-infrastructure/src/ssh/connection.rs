@@ -124,36 +124,28 @@ pub(super) fn build_auth(
         AuthenticationMethod::Password => password
             .map(|secret| Auth::Password(secret.to_string()))
             .ok_or_else(|| {
-                SshError("缺少用于登录的密码，请在终端提示符处输入或为该连接保存密码".to_string())
+                SshError::coded(
+                    "credentialMissing",
+                    "缺少用于登录的密码，请在终端提示符处输入或为该连接保存密码",
+                )
             }),
         AuthenticationMethod::PrivateKey => private_key
             .map(|key| Auth::PrivateKey(key.to_string()))
-            .ok_or_else(|| SshError("缺少用于登录的 SSH 私钥".to_string())),
+            .ok_or_else(|| SshError::coded("credentialMissing", "缺少用于登录的 SSH 私钥")),
         AuthenticationMethod::SshAgent => Ok(Auth::Agent),
     }
 }
 
-/// 建立 TCP 连接并完成认证，返回已认证的连接句柄。
-/// 终端在此基础上申请 PTY/Shell，SFTP 在此基础上请求 sftp 子系统。
-pub(super) async fn connect_authenticated(
-    host: &str,
-    port: u16,
-    username: &str,
-    auth: Auth,
-) -> Result<Handle<ClientHandler>, String> {
-    connect_authenticated_coded(host, port, username, auth)
-        .await
-        .map_err(|failure| failure.message)
-}
-
 /// 建连失败的结构化描述：`code` 为前端稳定错误码，`message` 为面向用户的中文提示。
-/// SFTP 依赖 `code` 归一化到既有的 `__NOCTERM_SFTP_ERROR__` 契约，终端只取用 `message`。
+/// 终端与 SFTP 共用同一套分类：SFTP 归一化到 `__NOCTERM_SFTP_ERROR__` 契约，
+/// 终端转换为 `SSH_*` 稳定错误码，让前端能区分认证失败、超时与主机密钥变更。
 pub(super) struct ConnectFailure {
     pub(super) code: &'static str,
     pub(super) message: String,
 }
 
-/// 与 `connect_authenticated` 相同，但保留可分类的错误码，供 SFTP 归一化到前端契约。
+/// 建立 TCP 连接并完成认证，保留可分类的错误码：SFTP 归一化到前端契约，
+/// 终端转换为 `SSH_*` 稳定错误码。
 ///
 /// 建连被拆成"解析 → 拨号 → 握手 → 认证"四步并各自计时。原实现把全部四步交给
 /// `client::connect` 并只在最外层设一个 30 秒总超时，任何一步卡住都只报"连接远程主机超时"，
