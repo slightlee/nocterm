@@ -12,6 +12,8 @@ import styles from './SFTPView.module.css';
 function SFTPView() {
   const sessions = useSftpStore((s) => s.sessions);
   const activeId = useSftpStore((s) => s.activeId);
+  const initialLocalPath = useSftpStore((s) => s.localPath);
+  const rememberLocalPath = useSftpStore((s) => s.setLocalPath);
   const setCurrentPath = useSftpStore((s) => s.setCurrentPath);
   const setSessionStatus = useSftpStore((s) => s.setSessionStatus);
   const setSelectionSummary = useSftpStore((s) => s.setSelectionSummary);
@@ -40,6 +42,8 @@ function SFTPView() {
     activeConnectionId,
     activeConnectionAttempt,
     activeRemotePath,
+    initialLocalPath,
+    rememberLocalPath,
     setCurrentPath,
     setSessionStatus,
   });

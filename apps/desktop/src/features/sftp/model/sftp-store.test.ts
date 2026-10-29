@@ -20,6 +20,7 @@ afterEach(() => {
   useSftpStore.setState({
     sessions: [],
     activeId: null,
+    localPath: '~',
     runningTransfers: {},
     selectionSummary: { scope: null, count: 0, totalSize: null },
   });
@@ -83,6 +84,18 @@ describe('sftp session store', () => {
       status: 'connecting',
       lastError: null,
     });
+  });
+
+  it('preserves the shared local directory across file session lifecycle changes', () => {
+    const store = useSftpStore.getState();
+    store.setLocalPath('C:\\work\\releases');
+    store.openSession(profile());
+    store.openSession(profile({ id: 2, name: '测试服务器' }));
+    store.setActive('1');
+    store.openSession(profile());
+    store.closeSession('1');
+
+    expect(useSftpStore.getState().localPath).toBe('C:\\work\\releases');
   });
 
   it('tracks running transfers by connection until they finish', () => {

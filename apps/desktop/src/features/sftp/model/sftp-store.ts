@@ -19,6 +19,7 @@ export interface SftpSession {
 interface SftpState {
   sessions: SftpSession[];
   activeId: string | null;
+  localPath: string;
   runningTransfers: Record<string, string>;
   selectionSummary: {
     scope: 'local' | 'remote' | null;
@@ -26,6 +27,7 @@ interface SftpState {
     totalSize: number | null;
   };
   openSession: (connection: ConnectionProfile) => void;
+  setLocalPath: (path: string) => void;
   setCurrentPath: (connectionId: string, path: string) => void;
   setSessionStatus: (
     connectionId: string,
@@ -59,6 +61,7 @@ function toSftpSession(connection: ConnectionProfile): SftpSession {
 export const useSftpStore = create<SftpState>()((set, get) => ({
   sessions: [],
   activeId: null,
+  localPath: '~',
   runningTransfers: {},
   selectionSummary: {
     scope: null,
@@ -101,6 +104,9 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
       };
     });
   },
+
+  // 本地面板由所有文件会话共享；保留最后成功目录，避免路由重挂载后回到用户主目录。
+  setLocalPath: (localPath) => set({ localPath }),
 
   setCurrentPath: (connectionId, path) => {
     set((state) => ({

@@ -13,6 +13,8 @@ interface UseSftpDirectoryBrowserOptions {
   activeConnectionId?: string;
   activeConnectionAttempt: number;
   activeRemotePath: string;
+  initialLocalPath: string;
+  rememberLocalPath: (path: string) => void;
   setCurrentPath: (connectionId: string, path: string) => void;
   setSessionStatus: (
     connectionId: string,
@@ -25,12 +27,14 @@ export function useSftpDirectoryBrowser({
   activeConnectionId,
   activeConnectionAttempt,
   activeRemotePath,
+  initialLocalPath,
+  rememberLocalPath,
   setCurrentPath,
   setSessionStatus,
 }: UseSftpDirectoryBrowserOptions) {
   const [localListing, setLocalListing] = useState<LocalDirectoryListing | null>(null);
   const [remoteListing, setRemoteListing] = useState<RemoteDirectoryListing | null>(null);
-  const [localPath, setLocalPath] = useState<string | undefined>('~');
+  const [localPath, setLocalPath] = useState<string | undefined>(initialLocalPath);
   const [remotePath, setRemotePath] = useState<string | undefined>();
   const [localLoading, setLocalLoading] = useState(false);
   const [remoteLoading, setRemoteLoading] = useState(false);
@@ -46,44 +50,49 @@ export function useSftpDirectoryBrowser({
   // 远程目录请求可能乱序返回，用 ref 保存当前连接，避免旧连接结果覆盖新连接页面。
   activeConnectionIdRef.current = activeConnectionId ?? null;
 
-  const loadLocalDirectory = useCallback(async (path?: string, force = false) => {
-    const requestId = ++localRequestIdRef.current;
-    const requestedPath = path || '~';
-    setLocalPath(requestedPath);
-    if (!isLocalFileApiAvailable()) {
-      setLocalListing(null);
-      setLocalError('当前环境不支持读取本地目录，请在 Tauri 客户端中使用。');
-      return;
-    }
-
-    const cacheKey = requestedPath;
-    if (!force) {
-      const cached = localCacheRef.current.get(cacheKey);
-      if (cached) {
-        if (localRequestIdRef.current !== requestId) return;
-        setLocalListing(cached);
-        setLocalPath(cached.path);
-        setLocalError('');
+  const loadLocalDirectory = useCallback(
+    async (path?: string, force = false) => {
+      const requestId = ++localRequestIdRef.current;
+      const requestedPath = path || '~';
+      setLocalPath(requestedPath);
+      if (!isLocalFileApiAvailable()) {
+        setLocalListing(null);
+        setLocalError('当前环境不支持读取本地目录，请在 Tauri 客户端中使用。');
         return;
       }
-    }
 
-    setLocalLoading(true);
-    setLocalError('');
-    try {
-      const listing = await listLocalDir(requestedPath);
-      localCacheRef.current.set(cacheKey, listing);
-      localCacheRef.current.set(listing.path, listing);
-      if (localRequestIdRef.current !== requestId) return;
-      setLocalListing(listing);
-      setLocalPath(listing.path);
-    } catch (err) {
-      if (localRequestIdRef.current !== requestId) return;
-      setLocalError(getSftpErrorMessage(err));
-    } finally {
-      if (localRequestIdRef.current === requestId) setLocalLoading(false);
-    }
-  }, []);
+      const cacheKey = requestedPath;
+      if (!force) {
+        const cached = localCacheRef.current.get(cacheKey);
+        if (cached) {
+          if (localRequestIdRef.current !== requestId) return;
+          setLocalListing(cached);
+          setLocalPath(cached.path);
+          rememberLocalPath(cached.path);
+          setLocalError('');
+          return;
+        }
+      }
+
+      setLocalLoading(true);
+      setLocalError('');
+      try {
+        const listing = await listLocalDir(requestedPath);
+        localCacheRef.current.set(cacheKey, listing);
+        localCacheRef.current.set(listing.path, listing);
+        if (localRequestIdRef.current !== requestId) return;
+        setLocalListing(listing);
+        setLocalPath(listing.path);
+        rememberLocalPath(listing.path);
+      } catch (err) {
+        if (localRequestIdRef.current !== requestId) return;
+        setLocalError(getSftpErrorMessage(err));
+      } finally {
+        if (localRequestIdRef.current === requestId) setLocalLoading(false);
+      }
+    },
+    [rememberLocalPath]
+  );
 
   const loadRemoteDirectory = useCallback(
     async (path?: string, force = false) => {
