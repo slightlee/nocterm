@@ -47,6 +47,7 @@ mod tests {
         let service = AiAuditService::new(Arc::new(FailingRepository));
         let error = service
             .append(&AiToolAuditEvent {
+                execution_id: None,
                 provider: "codex".into(),
                 session_id: "ai-one".into(),
                 target: AiAuditTarget::Ssh { connection_id: 7 },

@@ -7,6 +7,8 @@ import {
   onAiOutput,
   onAiToolApproval,
   onAiToolApprovalClosed,
+  onAiToolExecution,
+  listAiToolExecutions,
   resolveAiToolApproval,
   startAiSession,
   stopAiSession,
@@ -26,8 +28,20 @@ import {
   type AiTaskOutcome,
 } from '../model/ai-runtime-task';
 import type { AiTerminalTarget } from '../model/ai-target';
+import {
+  executionEventToPresentation,
+  executionSnapshotToParts,
+  reduceAiExecutionEvent,
+  type AiExecutionSnapshot,
+} from '../model/ai-execution-output';
 import { aiRuntimeErrorMessage, reduceAiRuntimeOutput } from '../model/ai-runtime-output';
-import type { AiCommandPolicy, AiMessage, AiMessagePart, AiProviderId } from '../model/ai-types';
+import type {
+  AiCommandPolicy,
+  AiMessage,
+  AiMessagePart,
+  AiProviderId,
+  AiToolExecutionEvent,
+} from '../model/ai-types';
 
 // Provider 握手或网络请求异常时，不能让任何一个任务无限显示“输出中”。
 const AI_IDLE_TIMEOUT_MS = 90_000;
@@ -67,6 +81,8 @@ interface RuntimeTaskRef {
   timedOut: boolean;
   idleTimeoutId: number | null;
   approvalExpiryTimeoutId: number | null;
+  /** 本轮任务的权威执行卡快照；按 executionId 索引，只接受 sequence 更大的事件。 */
+  executionSnapshot: AiExecutionSnapshot;
 }
 
 const runtimeTaskSnapshots = (taskRefs: Map<string, RuntimeTaskRef>): AiRuntimeTasks =>
@@ -147,20 +163,33 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
   );
 
   // 停止只发送请求，最终回答和错误状态仍统一由对应 sessionId 的退出事件收敛。
+  // 例外：后端明确答复"会话不存在"时（start 未完成注册、进程表已被清理），
+  // exit 事件永远不会到达——必须就地按失败收敛，否则任务永远停在"输出中"。
   const requestSessionStop = useCallback(
     (sessionId: string) => {
       if (!taskRefs.current.has(sessionId)) return;
       void stopAiSession(sessionId).catch((error: unknown) => {
         const runtime = taskRefs.current.get(sessionId);
         if (!runtime) return;
-        runtime.timedOut = false;
+        const message = aiRuntimeErrorMessage(error, '停止 AI 会话失败。');
+        if (message.includes('AI 会话不存在')) {
+          runtime.timedOut = false;
+          const { task } = removeTask(sessionId) ?? runtime;
+          setConversationPresentation(task.conversationId, {
+            notice: 'AI 会话已不存在，任务已停止。可重试发起。',
+            canRetryQuestion: true,
+            retryAttachments: runtime.attachments,
+          });
+          recordTaskResult(task, 'failed');
+          return;
+        }
         updateTask(sessionId, (task) => ({
           ...task,
-          notice: aiRuntimeErrorMessage(error, '停止 AI 会话失败。'),
+          notice: message,
         }));
       });
     },
-    [updateTask]
+    [recordTaskResult, removeTask, setConversationPresentation, updateTask]
   );
 
   const restartIdleTimeout = useCallback(
@@ -193,10 +222,35 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
   );
 
   useEffect(() => {
-    // 四类事件监听仅注册一次，每个回调按事件携带的 sessionId 精确路由。
+    // 事件监听仅注册一次，每个回调按事件携带的 sessionId 精确路由。
     if (!isDesktopRuntime()) return;
     let disposed = false;
     const runtimeTasks = taskRefs.current;
+    const executionPromise = onAiToolExecution((event: AiToolExecutionEvent) => {
+      if (disposed) return;
+      const runtime = taskRefs.current.get(event.providerSessionId);
+      if (!runtime) return;
+      const reduced = reduceAiExecutionEvent(event, runtime.executionSnapshot);
+      if (!reduced.changed) return;
+      runtime.executionSnapshot = reduced;
+      // 同一 executionId 的卡就地更新（phase 推进覆盖旧状态），
+      // 只有新 execution 才追加卡片——否则每个阶段都会渲染成独立卡。
+      const presentation = executionEventToPresentation(event);
+      updateTask(event.providerSessionId, (task) => {
+        const index = task.runParts.findIndex(
+          (part) => part.type === 'execution' && part.execution.executionId === event.executionId
+        );
+        if (index >= 0) {
+          const parts = [...task.runParts];
+          parts[index] = { type: 'execution', execution: presentation };
+          return { ...task, runParts: parts };
+        }
+        return {
+          ...task,
+          runParts: [...task.runParts, { type: 'execution', execution: presentation }],
+        };
+      });
+    });
     const outputPromise = onAiOutput((event) => {
       if (disposed) return;
       const runtime = taskRefs.current.get(event.sessionId);
@@ -225,8 +279,26 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       const runtime = removeTask(event.sessionId);
       if (!runtime) return;
       const { task } = runtime;
-      if (task.streamText.trim()) {
-        addMessage(task.conversationId, 'assistant', task.streamText.trim(), task.runParts);
+      // tools-only 回合没有回答文本时仍需保留执行卡：把快照中尚未进入 runParts
+      // 的执行卡（漏事件兜底）与正文一起持久化；已有的就地更新过，不再重复追加。
+      const executionParts = executionSnapshotToParts(runtime.executionSnapshot).filter(
+        (part) =>
+          !task.runParts.some(
+            (existing) =>
+              existing.type === 'execution' &&
+              existing.execution.executionId ===
+                (part as { execution: { executionId: string } }).execution.executionId
+          )
+      );
+      const finalParts = [...task.runParts, ...executionParts];
+      const hasContent = Boolean(task.streamText.trim()) || finalParts.length > 0;
+      if (hasContent) {
+        addMessage(
+          task.conversationId,
+          'assistant',
+          task.streamText.trim(),
+          finalParts.length > 0 ? finalParts : undefined
+        );
       }
       let outcome: AiTaskOutcome;
       if (runtime.timedOut) {
@@ -306,7 +378,13 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       }));
       restartIdleTimeout(event.sessionId);
     });
-    const subscriptions = [outputPromise, exitPromise, approvalPromise, approvalClosedPromise];
+    const subscriptions = [
+      executionPromise,
+      outputPromise,
+      exitPromise,
+      approvalPromise,
+      approvalClosedPromise,
+    ];
     void Promise.all(subscriptions)
       .then(() => {
         if (!disposed) setEventListenersReady(true);
@@ -416,11 +494,21 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         timedOut: false,
         idleTimeoutId: null,
         approvalExpiryTimeoutId: null,
+        executionSnapshot: { executions: new Map() },
       });
       setTasks((current) => ({ ...current, [clientSessionId]: task }));
       restartIdleTimeout(clientSessionId);
 
       const prompt = `${target.context}${buildAiPrompt(question, attachments)}`;
+      // start IPC 的超时兜底：正常启动在秒级返回；长时间不返回说明后端挂起
+      // （进程注册永远不会出现，停止也会"会话不存在"）。到期就地按失败收敛，
+      // 并尝试清理后端可能残留的半初始化状态。
+      const AI_START_TIMEOUT_MS = 45_000;
+      const startTimeoutId = window.setTimeout(() => {
+        if (!taskRefs.current.has(clientSessionId)) return;
+        void stopAiSession(clientSessionId).catch(() => undefined);
+        failTaskStart(clientSessionId, '启动 AI Provider 超时，请检查 Provider 状态后重试。');
+      }, AI_START_TIMEOUT_MS);
       void startAiSession(
         clientSessionId,
         conversationId,
@@ -429,15 +517,40 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         prompt,
         undefined,
         target.connectionId,
-        target.targetSessionId,
+        // workspace 会话标识统一携带 local:/remote: 前缀；后端据此解析精确终端绑定。
+        target.targetSessionId ?? target.workspaceSessionId,
         commandPolicy
       )
-        .then((result) => {
+        .then(async (result) => {
+          window.clearTimeout(startTimeoutId);
           if (result.sessionId !== clientSessionId && taskRefs.current.has(clientSessionId)) {
             failTaskStart(clientSessionId, 'AI Provider 返回了不匹配的会话标识。');
+            return;
+          }
+          // 实时事件允许丢失；启动完成后以 ledger 快照补齐监听注册窗口内的状态。
+          try {
+            const events = await listAiToolExecutions(undefined, clientSessionId);
+            const runtime = taskRefs.current.get(clientSessionId);
+            if (!runtime) return;
+            let snapshot = runtime.executionSnapshot;
+            for (const event of events.sort((left, right) => left.sequence - right.sequence)) {
+              snapshot = reduceAiExecutionEvent(event, snapshot);
+            }
+            runtime.executionSnapshot = snapshot;
+            const executionParts = executionSnapshotToParts(snapshot);
+            updateTask(clientSessionId, (task) => ({
+              ...task,
+              runParts: [
+                ...task.runParts.filter((part) => part.type !== 'execution'),
+                ...executionParts,
+              ],
+            }));
+          } catch {
+            // 实时事件链路仍可继续；查询失败不能终止已启动的 Provider turn。
           }
         })
         .catch((error: unknown) => {
+          window.clearTimeout(startTimeoutId);
           if (!taskRefs.current.has(clientSessionId)) return;
           failTaskStart(clientSessionId, aiRuntimeErrorMessage(error, '启动 AI Provider 失败。'));
         });
@@ -448,6 +561,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       markTaskResultRead,
       restartIdleTimeout,
       setConversationPresentation,
+      updateTask,
     ]
   );
 

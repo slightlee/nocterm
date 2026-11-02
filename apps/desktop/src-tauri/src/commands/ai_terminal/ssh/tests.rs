@@ -1,14 +1,61 @@
 use std::{
     io::{self, Cursor, Read},
-    sync::{Arc, atomic::AtomicBool},
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
 use nocterm_application::terminal::TerminalService;
+use nocterm_domain::{
+    connection::ConnectionProfile,
+    terminal::{OpenedTerminal, SshTerminalError, SshTerminalPort},
+};
 use nocterm_infrastructure::ssh::SshTerminalManager;
 
-use super::{collect_ssh_output, require_successful_ssh_result};
-use crate::commands::ai_terminal::TerminalCommandResult;
+use super::{collect_ssh_output, execute_ssh_visible_sync};
+use crate::state::{Osc633Event, SshTerminalRegistry};
+
+struct VisibleSshPort {
+    registry: Arc<SshTerminalRegistry>,
+    writes: Mutex<Vec<String>>,
+}
+
+impl SshTerminalPort for VisibleSshPort {
+    fn open(
+        &self,
+        _profile: &ConnectionProfile,
+        _cols: u16,
+        _rows: u16,
+        _password: Option<&str>,
+        _private_key: Option<&str>,
+    ) -> Result<OpenedTerminal, SshTerminalError> {
+        Err(SshTerminalError::new("test", "not used"))
+    }
+
+    fn write(&self, _terminal_id: &str, data: &str) -> Result<(), String> {
+        self.writes.lock().unwrap().push(data.to_string());
+        self.registry.publish("ssh-visible", "visible output\r\n");
+        self.registry.record_integration_event(
+            "ssh-visible",
+            &Osc633Event::CommandFinished {
+                code: 0,
+                nonce: Some("nonce-visible".into()),
+            },
+        );
+        Ok(())
+    }
+
+    fn resize(&self, _terminal_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn close(&self, _terminal_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn close_connection(&self, _connection_id: i64) -> Result<(), String> {
+        Ok(())
+    }
+}
 
 struct FailingReader;
 
@@ -98,21 +145,39 @@ fn ssh_reader_failure_is_not_treated_as_a_successful_eof() {
 }
 
 #[test]
-fn inspection_output_requires_a_valid_success_status() {
-    assert_eq!(
-        require_successful_ssh_result(TerminalCommandResult {
-            output: "server-a".into(),
-            exit_code: 0,
-        })
-        .unwrap(),
-        "server-a"
+fn visible_execution_writes_to_the_bound_pty_and_keeps_the_final_output_chunk() {
+    let registry = Arc::new(SshTerminalRegistry::default());
+    registry
+        .bind("remote:7:test", "ssh-visible", 7)
+        .expect("bind SSH terminal");
+    registry.register_integration("ssh-visible", "nonce-visible");
+    registry.record_integration_event(
+        "ssh-visible",
+        &Osc633Event::PromptStarted {
+            nonce: Some("nonce-visible".into()),
+        },
     );
-    assert!(
-        require_successful_ssh_result(TerminalCommandResult {
-            output: "permission denied".into(),
-            exit_code: 1,
-        })
-        .unwrap_err()
-        .contains("退出码 1")
-    );
+    assert!(registry.try_reserve_visible_execution("ssh-visible", "exec-visible"));
+    let port = Arc::new(VisibleSshPort {
+        registry: Arc::clone(&registry),
+        writes: Mutex::new(Vec::new()),
+    });
+    let service = TerminalService::new(port.clone());
+
+    let result = execute_ssh_visible_sync(
+        &service,
+        &registry,
+        "ssh-visible".into(),
+        7,
+        "exec-visible",
+        "printf ok",
+        &AtomicBool::new(false),
+        Instant::now() + Duration::from_secs(1),
+    )
+    .expect("visible execution succeeds");
+
+    assert_eq!(port.writes.lock().unwrap().as_slice(), ["printf ok\n"]);
+    assert_eq!(result.output, "visible output");
+    assert_eq!(result.exit_code, 0);
+    assert!(!registry.input_gated("ssh-visible"));
 }

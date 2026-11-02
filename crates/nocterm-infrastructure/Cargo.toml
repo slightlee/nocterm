@@ -7,9 +7,13 @@ rust-version.workspace = true
 
 [dependencies]
 nocterm-domain = { path = "../nocterm-domain" }
+getrandom.workspace = true
 portable-pty.workspace = true
 keyring.workspace = true
 rusqlite.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+rand.workspace = true

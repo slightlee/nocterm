@@ -130,7 +130,8 @@ impl LocalTerminalRegistry {
                 .entry(terminal_id.to_string())
                 .or_insert_with(TerminalIntegration::new);
             integration.active = true;
-            if let Osc633Event::CommandFinished(code) = event {
+            if let Osc633Event::CommandFinished { code, .. } = event {
+                // 本地路径不使用 nonce 过滤；带 nonce 的事件同样推进完成计数。
                 integration.completions += 1;
                 integration.last_exit_code = *code;
                 integration.input_gated = false;
@@ -416,11 +417,17 @@ mod tests {
         assert!(!registry.integration_active("local-1"));
 
         // 首个事件即激活；启动期首提示符的 D;0 会计数但不影响后续快照语义。
-        registry.record_integration_event("local-1", &Osc633Event::PromptStarted);
+        registry.record_integration_event("local-1", &Osc633Event::PromptStarted { nonce: None });
         assert!(registry.integration_active("local-1"));
 
         let snapshot = registry.completion_snapshot("local-1");
-        registry.record_integration_event("local-1", &Osc633Event::CommandFinished(7));
+        registry.record_integration_event(
+            "local-1",
+            &Osc633Event::CommandFinished {
+                code: 7,
+                nonce: None,
+            },
+        );
         assert_eq!(
             registry.wait_for_completion("local-1", snapshot, Duration::from_secs(1)),
             Some(7)
@@ -438,7 +445,13 @@ mod tests {
         assert!(registry.try_acquire_input_gate("local-1"));
         assert!(registry.input_gated("local-1"));
         // 执行方等待恢复超时保留门控后，迟到的 D 由读取线程放行。
-        registry.record_integration_event("local-1", &Osc633Event::CommandFinished(0));
+        registry.record_integration_event(
+            "local-1",
+            &Osc633Event::CommandFinished {
+                code: 0,
+                nonce: None,
+            },
+        );
         assert!(!registry.input_gated("local-1"));
     }
 
@@ -454,7 +467,7 @@ mod tests {
     #[test]
     fn unbind_clears_integration_state() {
         let registry = LocalTerminalRegistry::default();
-        registry.record_integration_event("local-1", &Osc633Event::PromptStarted);
+        registry.record_integration_event("local-1", &Osc633Event::PromptStarted { nonce: None });
         registry.unbind_terminal("local-1");
         assert!(!registry.integration_active("local-1"));
         assert_eq!(registry.completion_snapshot("local-1"), 0);

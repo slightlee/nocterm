@@ -180,6 +180,8 @@ mod tests {
             Ok(OpenedTerminal {
                 id: "terminal-1".to_string(),
                 reader: Box::new(Cursor::new(Vec::new())),
+                shell_integration: None,
+                integration_fallback_reason: None,
             })
         }
 
@@ -228,6 +230,8 @@ mod tests {
             Ok(OpenedTerminal {
                 id: "local-1".to_string(),
                 reader: Box::new(Cursor::new(Vec::new())),
+                shell_integration: None,
+                integration_fallback_reason: None,
             })
         }
 

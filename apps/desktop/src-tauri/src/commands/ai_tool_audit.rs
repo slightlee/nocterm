@@ -38,14 +38,38 @@ pub(crate) fn append(
     duration_ms: Option<u64>,
     error_code: Option<&'static str>,
 ) -> Result<(), String> {
+    append_with_execution(
+        service,
+        binding,
+        tool,
+        approval,
+        outcome,
+        duration_ms,
+        error_code,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn append_with_execution(
+    service: &AiAuditService,
+    binding: &AiGatewayBinding,
+    tool: AiAuditTool,
+    approval: AiAuditApproval,
+    outcome: AiAuditOutcome,
+    duration_ms: Option<u64>,
+    error_code: Option<&'static str>,
+    execution_id: Option<&str>,
+) -> Result<(), String> {
     let target = match &binding.target {
-        AiTarget::Ssh { connection_id } => AiAuditTarget::Ssh {
+        AiTarget::Ssh { connection_id, .. } => AiAuditTarget::Ssh {
             connection_id: *connection_id,
         },
         AiTarget::Local { .. } => AiAuditTarget::Local,
     };
     service
         .append(&AiToolAuditEvent {
+            execution_id: execution_id.map(str::to_string),
             provider: binding.provider.clone(),
             session_id: binding.session_id.clone(),
             target,
@@ -58,7 +82,9 @@ pub(crate) fn append(
         .map_err(|error| error.message)
 }
 
-/// 安全相关操作只能通过该守卫进入；前置审计失败时执行闭包不会被调用。
+/// 守卫语义的测试验证：前置审计失败时执行闭包不被调用。
+/// 生产路径由 ledger 生命周期（TerminalExecution::run）接管同一时序。
+#[cfg(test)]
 pub(crate) fn execute_after_audit<T>(
     service: &AiAuditService,
     binding: &AiGatewayBinding,
@@ -121,8 +147,14 @@ mod tests {
     fn failed_pre_execution_audit_prevents_the_operation() {
         let service = AiAuditService::new(Arc::new(FailingRepository));
         let binding = AiGatewayBinding {
-            target: AiTarget::Ssh { connection_id: 7 },
+            target: AiTarget::Ssh {
+                connection_id: 7,
+                workspace_session_id: "remote:7:test".into(),
+                terminal_id: "ssh-test".into(),
+                terminal_generation: 1,
+            },
             provider: "codex".into(),
+            conversation_id: "conversation-one".into(),
             session_id: "ai-one".into(),
             command_policy: AiCommandPolicy::AutoSafe,
         };

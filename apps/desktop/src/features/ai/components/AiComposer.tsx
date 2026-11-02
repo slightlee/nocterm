@@ -38,6 +38,10 @@ interface AiComposerProps {
   onProviderChange: (provider: AiProviderId) => void;
   commandPolicy: AiCommandPolicy;
   onCommandPolicyChange: (policy: AiCommandPolicy) => void;
+  /** 当前 SSH 连接是否启用可见执行；默认开启。 */
+  sshVisibleEnabled: boolean;
+  showSshVisibleToggle: boolean;
+  onSshVisibleToggle: (enabled: boolean) => void;
   onStop: () => void;
 }
 
@@ -67,6 +71,9 @@ export function AiComposer({
   onProviderChange,
   commandPolicy,
   onCommandPolicyChange,
+  sshVisibleEnabled,
+  showSshVisibleToggle,
+  onSshVisibleToggle,
   onStop,
 }: AiComposerProps) {
   const [commandPolicyMenuOpen, setCommandPolicyMenuOpen] = useState(false);
@@ -142,6 +149,20 @@ export function AiComposer({
               open={commandPolicyMenuOpen}
               policy={commandPolicy}
             />
+            {showSshVisibleToggle ? (
+              <label
+                className={styles.sshVisibleToggle}
+                title="默认将 AI 命令写入当前 SSH 终端；关闭后使用隔离通道，条件不满足时也会安全回退"
+              >
+                <input
+                  checked={sshVisibleEnabled}
+                  disabled={composerDisabled || controlsDisabled}
+                  onChange={(event) => onSshVisibleToggle(event.target.checked)}
+                  type="checkbox"
+                />
+                终端可见
+              </label>
+            ) : null}
           </div>
           {running ? (
             <button

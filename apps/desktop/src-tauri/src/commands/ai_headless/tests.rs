@@ -84,8 +84,14 @@ fn terminal_bound_output_is_not_emitted_without_a_real_gateway_call() {
         .bind(
             token.into(),
             AiGatewayBinding {
-                target: AiTarget::Ssh { connection_id: 7 },
+                target: AiTarget::Ssh {
+                    connection_id: 7,
+                    workspace_session_id: "remote:7:test".into(),
+                    terminal_id: "ssh-test".into(),
+                    terminal_generation: 1,
+                },
                 provider: "claude-code".into(),
+                conversation_id: "conversation-test".into(),
                 session_id: "ai-test".into(),
                 command_policy: AiCommandPolicy::AutoSafe,
             },

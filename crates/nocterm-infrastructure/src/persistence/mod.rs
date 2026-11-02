@@ -1,5 +1,6 @@
 mod sqlite_ai_audit_repository;
 mod sqlite_ai_conversation_repository;
+mod sqlite_ai_execution_repository;
 mod sqlite_connection_repository;
 
 pub use sqlite_connection_repository::SqliteConnectionRepository;

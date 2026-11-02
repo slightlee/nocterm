@@ -5,7 +5,7 @@ mod local;
 mod ssh;
 
 pub(crate) use local::execute_local_sync;
-pub(crate) use ssh::{execute_ssh_inspection_sync, execute_ssh_sync};
+pub(crate) use ssh::{execute_ssh_sync, execute_ssh_visible_sync};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TerminalCommandResult {

@@ -61,7 +61,12 @@ mod tests {
 
     #[test]
     fn target_tools_include_structured_server_capabilities_and_one_escape_hatch() {
-        let ssh = tools_for_target(&AiTarget::Ssh { connection_id: 7 });
+        let ssh = tools_for_target(&AiTarget::Ssh {
+            connection_id: 7,
+            workspace_session_id: "remote:7:test".into(),
+            terminal_id: "ssh-test".into(),
+            terminal_generation: 1,
+        });
         assert_eq!(ssh["tools"][0]["name"], "session_context");
         assert!(
             ssh["tools"][0]["description"]

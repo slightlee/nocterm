@@ -100,6 +100,18 @@ pub struct McpRequestDispatcher {
     services: GatewayServices,
 }
 
+fn normalize_request_id(id: &Value) -> Result<String, &'static str> {
+    let normalized = match id {
+        Value::String(value) => format!("s:{value}"),
+        Value::Number(value) => format!("n:{value}"),
+        _ => return Err("tools/call requires a string or numeric JSON-RPC id"),
+    };
+    if normalized.len() > 256 {
+        return Err("tools/call JSON-RPC id is too long");
+    }
+    Ok(normalized)
+}
+
 impl McpRequestDispatcher {
     pub(crate) fn new(app: AppHandle, state: &AppState) -> Self {
         Self {
@@ -138,7 +150,19 @@ impl McpRequestDispatcher {
             }
             "notifications/initialized" => return None,
             "tools/list" => self.services.tools_for_target(&access.binding.target),
-            "tools/call" => self.services.call(&self.gateway, token, &access, request),
+            "tools/call" => match normalize_request_id(&id) {
+                Ok(request_id) => {
+                    self.services
+                        .call(&self.gateway, token, &access, request, &request_id)
+                }
+                Err(message) => {
+                    return Some(json!({
+                        "jsonrpc":"2.0",
+                        "id":id,
+                        "error":{"code":-32600,"message":message}
+                    }));
+                }
+            },
             _ if method.starts_with("notifications/") => return None,
             _ => {
                 return Some(json!({

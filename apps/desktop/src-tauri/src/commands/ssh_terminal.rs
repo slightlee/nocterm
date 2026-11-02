@@ -13,8 +13,11 @@ use crate::{
         error::ErrorResponse,
         ssh_terminal::{SshTerminalExit, SshTerminalOpenResponse, SshTerminalOutput},
     },
-    state::AppState,
+    state::{AppState, Osc633Scanner},
 };
+
+/// 用户输入被 AI 门控时返回的稳定错误码；前端据此提示"AI 命令执行中"。
+pub(crate) const SSH_TERMINAL_BUSY_CODE: &str = "SSH_TERMINAL_BUSY";
 
 /// 口令的来源，决定连接失败后是否需要丢弃缓存并让用户重新输入。
 #[derive(Debug, PartialEq, Eq)]
@@ -93,6 +96,7 @@ fn resolve_password(
 pub fn ssh_terminal_open(
     app: AppHandle,
     state: State<'_, AppState>,
+    workspace_session_id: String,
     connection_id: i64,
     cols: u16,
     rows: u16,
@@ -145,15 +149,47 @@ pub fn ssh_terminal_open(
         PasswordSource::Typed | PasswordSource::Session
     );
     let terminal_id = opened.id;
+    // 绑定控制面并取 generation：重连会得到更大的世代，旧授权自然失效。
+    let generation =
+        match state
+            .ssh_terminals()
+            .bind(&workspace_session_id, &terminal_id, connection_id)
+        {
+            Ok(generation) => generation,
+            Err(message) => {
+                let _ = terminal_service.close(&terminal_id);
+                return Err(ErrorResponse::from(AppError::new(
+                    "SSH_TERMINAL_FAILED",
+                    message,
+                    true,
+                )));
+            }
+        };
+    // bootstrap 成功后注册 nonce；只有匹配 nonce 的事件才能作为 Prompt Ready 证据。
+    if let Some(plan) = &opened.shell_integration {
+        state
+            .ssh_terminals()
+            .register_integration(&terminal_id, &plan.nonce);
+        // 注入命令（source + rm）的 shell 回显对用户是噪音：按逻辑行隐藏
+        // 一次，告知义务由终端诊断行（"shell integration 已注入"）承担。
+        let rc_path = nocterm_infrastructure::ssh::bootstrap::remote_rc_path(&plan.nonce);
+        state
+            .ssh_terminals()
+            .begin_source_echo_suppression(&terminal_id, &rc_path);
+    }
     let mut reader = opened.reader;
     let reader_terminal_id = terminal_id.clone();
     let reader_terminal_service = terminal_service.clone();
+    let reader_registry = state.ssh_terminals().clone();
 
     // 通道输出必须离开 IPC 线程，按会话标识隔离后通过事件回传前端。
     thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
         // 网络分片与字符边界无关，解码状态必须跨读取保持，否则汉字会在分片处变成 U+FFFD。
         let mut decoder = Utf8Stream::default();
+        // 633 扫描器同样跨分块保持状态：序列可能被 PTY 从任意字节处切开。
+        // 控制面扫描发生在 UTF-8 解码之前，与本地终端读取链路一致。
+        let mut osc_scanner = Osc633Scanner::new();
         let mut failed = false;
         loop {
             match reader.read(&mut buffer) {
@@ -163,23 +199,36 @@ pub fn ssh_terminal_open(
                     break;
                 }
                 Ok(length) => {
-                    let data = decoder.push(&buffer[..length]);
-                    if data.is_empty() {
-                        // 整块只有半个字符时先不发事件，等后续分片补齐。
-                        continue;
+                    // 先剥离 shell integration 控制序列：它们不参与解码、过滤与 UI 转发。
+                    let (stripped, events) = osc_scanner.feed(&buffer[..length]);
+                    if !stripped.is_empty() {
+                        let data = decoder.push(&stripped);
+                        if !data.is_empty() {
+                            // 同一网络块可能同时含最后一段输出和 CommandFinished；必须先
+                            // 发布数据再推进完成状态，否则执行线程会先返回并丢掉尾部输出。
+                            let visible_data =
+                                reader_registry.visible_output(&reader_terminal_id, &data);
+                            reader_registry.publish(&reader_terminal_id, &data);
+                            if !visible_data.is_empty() {
+                                let _ = app.emit(
+                                    "ssh-terminal-output",
+                                    SshTerminalOutput {
+                                        terminal_id: reader_terminal_id.clone(),
+                                        connection_id,
+                                        data: visible_data,
+                                    },
+                                );
+                            }
+                        }
                     }
-                    let _ = app.emit(
-                        "ssh-terminal-output",
-                        SshTerminalOutput {
-                            terminal_id: reader_terminal_id.clone(),
-                            connection_id,
-                            data,
-                        },
-                    );
+                    for event in &events {
+                        reader_registry.record_integration_event(&reader_terminal_id, event);
+                    }
                 }
             }
         }
         let _ = reader_terminal_service.close(&reader_terminal_id);
+        reader_registry.unbind(&workspace_session_id, &reader_terminal_id);
         // 主动关闭标签、远端退出与读中断都会走到这里，是归还租约唯一需要的挂钩点：
         // `close` 会中止会话任务并丢弃发送端，读取随即返回 EOF。
         if holds_password_lease {
@@ -196,7 +245,15 @@ pub fn ssh_terminal_open(
         );
     });
 
-    Ok(SshTerminalOpenResponse { terminal_id })
+    Ok(SshTerminalOpenResponse {
+        terminal_id,
+        terminal_generation: generation,
+        integration_shell: opened
+            .shell_integration
+            .as_ref()
+            .map(|plan| plan.shell.as_str().to_string()),
+        integration_fallback_reason: opened.integration_fallback_reason.map(str::to_string),
+    })
 }
 
 #[cfg(test)]
@@ -249,10 +306,20 @@ pub fn ssh_terminal_write(
     terminal_id: String,
     data: String,
 ) -> Result<(), ErrorResponse> {
+    // AI 命令执行期间的输入门控：与本地不同，这里返回稳定错误码而不是静默吞键，
+    // 让前端能明确提示"本次输入未发送"；不缓存、不延迟重放（方案 §10.6）。
+    if !state.ssh_terminals().begin_user_input(&terminal_id) {
+        return Err(ErrorResponse::from(AppError::new(
+            SSH_TERMINAL_BUSY_CODE,
+            "AI 正在执行终端命令，本次输入未发送，请稍后重试",
+            false,
+        )));
+    }
     state
         .terminal_service()
         .write(&terminal_id, &data)
-        .map_err(ErrorResponse::from)
+        .map_err(ErrorResponse::from)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -275,6 +342,8 @@ pub fn ssh_terminal_close(
     state: State<'_, AppState>,
     terminal_id: String,
 ) -> Result<(), ErrorResponse> {
+    // 主动关闭时同步清理控制面；读线程的 EOF 收尾是兜底（读中断时 close 不会被调用）。
+    state.ssh_terminals().unbind_terminal(&terminal_id);
     state
         .terminal_service()
         .close(&terminal_id)

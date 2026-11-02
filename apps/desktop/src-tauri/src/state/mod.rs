@@ -1,10 +1,14 @@
 mod local_terminal;
 mod osc633;
 pub mod session_password;
+mod ssh_terminal;
 
 pub use local_terminal::LocalTerminalRegistry;
 pub(crate) use local_terminal::{local_completion_status, sanitize_local_command_output};
+#[cfg(test)]
+pub(crate) use osc633::Osc633Event;
 pub(crate) use osc633::Osc633Scanner;
+pub use ssh_terminal::SshTerminalRegistry;
 
 use crate::commands::{
     ai_process::AiProcessManager, ai_runtime::PersistentProviderRuntimeRegistry,
@@ -13,6 +17,7 @@ use crate::commands::{
 use nocterm_application::{
     ai_audit::AiAuditService,
     ai_conversation::AiConversationService,
+    ai_execution::AiExecutionService,
     connection::ConnectionService,
     health::HealthService,
     settings::SettingsService,
@@ -38,6 +43,7 @@ pub struct AppState {
     settings_service: SettingsService,
     ai_audit_service: AiAuditService,
     ai_conversation_service: AiConversationService,
+    ai_execution_service: AiExecutionService,
     terminal_service: TerminalService,
     local_terminal_service: LocalTerminalService,
     /// 进程内 SFTP 会话管理器：与终端共用 russh 后端，承载远程文件浏览与传输。
@@ -49,6 +55,7 @@ pub struct AppState {
     ai_provider_runtimes: Arc<PersistentProviderRuntimeRegistry>,
     ai_gateway: Arc<AiGatewayState>,
     local_terminals: Arc<LocalTerminalRegistry>,
+    ssh_terminals: Arc<SshTerminalRegistry>,
 }
 
 /// MCP Bridge 的进程绑定表。token 只覆盖一次性任务或一个持续 Provider 会话，
@@ -60,6 +67,9 @@ pub struct AiGatewayState {
     tool_calls: Mutex<HashMap<String, VecDeque<Instant>>>,
     observed_tool_calls: Mutex<HashSet<String>>,
     endpoint: Mutex<Option<String>>,
+    /// 用户显式要求隔离执行的 SSH 连接。默认集合为空，因此 SSH 命令优先尝试
+    /// 当前可见 PTY；Prompt 或绑定校验失败时仍由路由层安全降级到独立 exec。
+    ssh_isolated_connections: Mutex<HashSet<i64>>,
 }
 
 const AI_TOOL_RATE_WINDOW: Duration = Duration::from_secs(60);
@@ -107,8 +117,13 @@ pub struct AiGatewayAccess {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AiTarget {
+    /// SSH 目标绑定任务发起时的精确终端：independent exec 沿用 connectionId，
+    /// 可见执行（Stage 4）必须重新校验 terminal + generation 仍然匹配。
     Ssh {
         connection_id: i64,
+        workspace_session_id: String,
+        terminal_id: String,
+        terminal_generation: u64,
     },
     Local {
         session_id: String,
@@ -121,6 +136,9 @@ pub enum AiTarget {
 pub struct AiGatewayBinding {
     pub target: AiTarget,
     pub provider: String,
+    /// 持久化对话标识由会话启动请求校验后绑定，工具参数不能覆盖。
+    pub conversation_id: String,
+    /// Provider 当前 turn 的瞬时任务标识，用于输出、审批和取消路由。
     pub session_id: String,
     pub command_policy: AiCommandPolicy,
 }
@@ -370,6 +388,25 @@ impl AiGatewayState {
     pub fn endpoint(&self) -> Option<String> {
         self.endpoint.lock().ok()?.clone()
     }
+
+    /// 按连接设置 SSH 可见执行；关闭只影响该连接，不能放松后续 PTY 安全校验。
+    pub fn set_ssh_visible_enabled(&self, connection_id: i64, enabled: bool) {
+        let Ok(mut connections) = self.ssh_isolated_connections.lock() else {
+            return;
+        };
+        if enabled {
+            connections.remove(&connection_id);
+        } else {
+            connections.insert(connection_id);
+        }
+    }
+
+    pub fn ssh_visible_enabled(&self, connection_id: i64) -> bool {
+        // 锁中毒时 fail closed，避免状态异常时意外写入用户正在操作的终端。
+        self.ssh_isolated_connections
+            .lock()
+            .is_ok_and(|connections| !connections.contains(&connection_id))
+    }
 }
 
 impl AppState {
@@ -379,6 +416,7 @@ impl AppState {
         settings_service: SettingsService,
         ai_audit_service: AiAuditService,
         ai_conversation_service: AiConversationService,
+        ai_execution_service: AiExecutionService,
     ) -> Self {
         Self {
             health_service,
@@ -386,6 +424,7 @@ impl AppState {
             settings_service,
             ai_audit_service,
             ai_conversation_service,
+            ai_execution_service,
             terminal_service: TerminalService::new(Arc::new(SshTerminalManager::default())),
             local_terminal_service: LocalTerminalService::new(Arc::new(
                 LocalTerminalManager::default(),
@@ -396,6 +435,7 @@ impl AppState {
             ai_provider_runtimes: Arc::new(PersistentProviderRuntimeRegistry::default()),
             ai_gateway: Arc::new(AiGatewayState::default()),
             local_terminals: Arc::new(LocalTerminalRegistry::default()),
+            ssh_terminals: Arc::new(SshTerminalRegistry::default()),
         }
     }
 
@@ -417,6 +457,10 @@ impl AppState {
 
     pub fn ai_conversation_service(&self) -> &AiConversationService {
         &self.ai_conversation_service
+    }
+
+    pub fn ai_execution_service(&self) -> &AiExecutionService {
+        &self.ai_execution_service
     }
 
     pub fn terminal_service(&self) -> &TerminalService {
@@ -453,6 +497,11 @@ impl AppState {
     pub fn local_terminals(&self) -> &Arc<LocalTerminalRegistry> {
         &self.local_terminals
     }
+
+    /// SSH 终端控制面：workspace 绑定、generation、门控与输出订阅。
+    pub fn ssh_terminals(&self) -> &Arc<SshTerminalRegistry> {
+        &self.ssh_terminals
+    }
 }
 
 #[cfg(test)]
@@ -463,8 +512,14 @@ mod tests {
 
     fn ssh_binding() -> AiGatewayBinding {
         AiGatewayBinding {
-            target: AiTarget::Ssh { connection_id: 1 },
+            target: AiTarget::Ssh {
+                connection_id: 1,
+                workspace_session_id: "remote:7:test".into(),
+                terminal_id: "ssh-test".into(),
+                terminal_generation: 1,
+            },
             provider: "codex".into(),
+            conversation_id: "conversation-one".into(),
             session_id: "ai-one".into(),
             command_policy: AiCommandPolicy::AutoSafe,
         }
@@ -475,6 +530,21 @@ mod tests {
         gateway
             .activate_session(token, session_id.into(), AiCommandPolicy::AutoSafe)
             .unwrap();
+    }
+
+    #[test]
+    fn ssh_visible_execution_defaults_on_and_isolated_choice_is_connection_scoped() {
+        let gateway = AiGatewayState::default();
+
+        assert!(gateway.ssh_visible_enabled(1));
+        assert!(gateway.ssh_visible_enabled(2));
+
+        gateway.set_ssh_visible_enabled(1, false);
+        assert!(!gateway.ssh_visible_enabled(1));
+        assert!(gateway.ssh_visible_enabled(2));
+
+        gateway.set_ssh_visible_enabled(1, true);
+        assert!(gateway.ssh_visible_enabled(1));
     }
 
     #[test]
@@ -601,7 +671,15 @@ mod tests {
         assert_eq!(access.binding.session_id, "ai-two");
         assert_eq!(access.binding.provider, "codex");
         assert_eq!(access.binding.command_policy, AiCommandPolicy::ConfirmEach);
-        assert_eq!(access.binding.target, AiTarget::Ssh { connection_id: 1 });
+        assert_eq!(
+            access.binding.target,
+            AiTarget::Ssh {
+                connection_id: 1,
+                workspace_session_id: "remote:7:test".into(),
+                terminal_id: "ssh-test".into(),
+                terminal_generation: 1,
+            }
+        );
     }
 
     #[test]

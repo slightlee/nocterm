@@ -6,25 +6,26 @@ mod catalog;
 
 use std::{sync::Arc, time::Instant};
 
-use nocterm_application::ai_audit::AiAuditService;
+use nocterm_application::{ai_audit::AiAuditService, ai_execution::AiExecutionService};
 use nocterm_domain::ai_audit::{AiAuditApproval, AiAuditOutcome, AiAuditTool};
 use serde_json::{Value, json};
 use tauri::AppHandle;
 
 use crate::{
     commands::{
+        ai_execution::{ExecutionStart, ExecutionTracker, TauriExecutionEmitter},
         ai_policy::{
             AI_TOOL_CALL_TIMEOUT, AiExecutionDecision, AiOperationClass, execution_decision,
             is_safe_readonly_command,
         },
         ai_terminal::TerminalCommandResult,
         ai_tool_audit::{append as append_audit, tool_from_name},
-        ai_tool_contract::command_result,
+        ai_tool_contract::{command_result, duplicate_execution_error, execution_error},
         ai_tools::is_server_tool,
     },
     state::{
         AiGatewayAccess, AiGatewayBinding, AiGatewayState, AiTarget, AppState,
-        LocalTerminalRegistry,
+        LocalTerminalRegistry, SshTerminalRegistry,
     },
 };
 
@@ -37,7 +38,12 @@ pub(crate) struct GatewayServices {
     pub(super) terminal: nocterm_application::terminal::TerminalService,
     pub(super) local_terminal: nocterm_application::terminal::LocalTerminalService,
     pub(super) local_registry: Arc<LocalTerminalRegistry>,
+    pub(super) ssh_registry: Arc<SshTerminalRegistry>,
     pub(super) audit: AiAuditService,
+    pub(super) execution: AiExecutionService,
+    /// 实时读取隔离执行偏好：GatewayServices 生命周期长于用户切换动作，
+    /// 快照 bool 会让开关永远停留在创建时刻的状态（真实环境验证发现）。
+    pub(super) gateway: Arc<AiGatewayState>,
 }
 
 /// 一次工具调用的不可变安全上下文，统一传递授权身份、审计类型和绝对截止时间。
@@ -46,7 +52,11 @@ pub(crate) struct ToolExecutionContext<'a> {
     pub token: &'a str,
     pub access: &'a AiGatewayAccess,
     pub audit_tool: AiAuditTool,
+    /// 规范化后的 Provider 请求身份；Stage 4 dispatch receipt 关联时消费。
+    #[allow(dead_code)]
+    pub provider_request_id: &'a str,
     pub deadline: Instant,
+    pub execution: ExecutionTracker,
 }
 
 impl GatewayServices {
@@ -57,7 +67,10 @@ impl GatewayServices {
             terminal: state.terminal_service().clone(),
             local_terminal: state.local_terminal_service().clone(),
             local_registry: Arc::clone(state.local_terminals()),
+            ssh_registry: Arc::clone(state.ssh_terminals()),
             audit: state.ai_audit_service().clone(),
+            execution: state.ai_execution_service().clone(),
+            gateway: Arc::clone(state.ai_gateway()),
         }
     }
 
@@ -71,6 +84,7 @@ impl GatewayServices {
         token: &str,
         access: &AiGatewayAccess,
         request: &Value,
+        provider_request_id: &str,
     ) -> Value {
         let binding = &access.binding;
         let deadline = Instant::now() + AI_TOOL_CALL_TIMEOUT;
@@ -104,24 +118,43 @@ impl GatewayServices {
         if name == "session_context" {
             return self.session_context(binding);
         }
-        let context = ToolExecutionContext {
+        let execution_start = ExecutionTracker::start(
+            self.execution.clone(),
+            Arc::new(TauriExecutionEmitter::new(self.app.clone())),
+            binding,
+            provider_request_id,
+            audit_tool,
+        );
+        let execution = match execution_start {
+            Ok(ExecutionStart::Created(tracker)) => tracker,
+            Ok(ExecutionStart::Existing(record)) => return duplicate_execution_error(&record),
+            Err(error) => return tool_error(&error),
+        };
+        let mut context = ToolExecutionContext {
             gateway,
             token,
             access,
             audit_tool,
+            provider_request_id,
             deadline,
+            execution,
         };
         if is_server_tool(name) {
-            return self.execute_server_tool(&context, name, request);
+            return self.execute_server_tool(&mut context, name, request);
         }
         if name == execution_tool_name(target) {
             let command = request
                 .pointer("/params/arguments/command")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            return match self.execute_terminal_command(&context, command) {
-                Ok(result) => command_result(&binding.target, result.output, result.exit_code),
-                Err(error) => tool_error(&error),
+            return match self.execute_terminal_command(&mut context, command) {
+                Ok(result) => command_result(
+                    &binding.target,
+                    result.output,
+                    result.exit_code,
+                    Some(context.execution.record()),
+                ),
+                Err(error) => execution_error(context.execution.record(), &error),
             };
         }
         self.audited_error(
@@ -136,7 +169,7 @@ impl GatewayServices {
     /// MCP 与 ACP 共用这一条类型化命令入口；协议层只负责各自的结果编码。
     pub(crate) fn execute_terminal_command(
         &self,
-        context: &ToolExecutionContext<'_>,
+        context: &mut ToolExecutionContext<'_>,
         command: &str,
     ) -> Result<TerminalCommandResult, String> {
         let operation = if is_safe_readonly_command(command) {
@@ -145,20 +178,37 @@ impl GatewayServices {
             AiOperationClass::Unrestricted
         };
         match execution_decision(context.access.binding.command_policy, operation) {
-            AiExecutionDecision::Deny => Err(self.audited_failure(
-                &context.access.binding,
-                context.audit_tool,
-                AiAuditApproval::NotRequested,
-                "AI_TOOL_EXECUTION_DISABLED",
-                "当前会话已设置为仅分析，未执行终端命令",
-            )),
-            AiExecutionDecision::Confirm => self.execute_after_approval(context, command),
-            AiExecutionDecision::Execute => self.execute_command_without_approval(
-                context.access,
-                context.audit_tool,
-                command,
-                context.deadline,
-            ),
+            AiExecutionDecision::Deny => {
+                context
+                    .execution
+                    .transition(nocterm_domain::ai_execution::AiExecutionTransition::DenyByPolicy)
+                    .map_err(|error| error.to_string())?;
+                Err(self.audited_failure(
+                    &context.access.binding,
+                    context.audit_tool,
+                    AiAuditApproval::NotRequested,
+                    "AI_TOOL_EXECUTION_DISABLED",
+                    "当前会话已设置为仅分析，未执行终端命令",
+                ))
+            }
+            AiExecutionDecision::Confirm => {
+                context
+                    .execution
+                    .transition(
+                        nocterm_domain::ai_execution::AiExecutionTransition::RequestApproval,
+                    )
+                    .map_err(|error| error.to_string())?;
+                self.execute_after_approval(context, command)
+            }
+            AiExecutionDecision::Execute => {
+                context
+                    .execution
+                    .transition(
+                        nocterm_domain::ai_execution::AiExecutionTransition::AuthorizeAutomatically,
+                    )
+                    .map_err(|error| error.to_string())?;
+                self.execute_command_without_approval(context, command)
+            }
         }
     }
 

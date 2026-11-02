@@ -6,9 +6,40 @@ use std::{
 use crate::connection::ConnectionProfile;
 
 /// 已打开的终端句柄及其只读输出流。
+///
+/// `shell_integration` 只对 SSH bootstrap 成功的终端有值；本地终端恒为 `None`。
+/// 集成失败的降级原因记录在 `integration_fallback_reason`，属于诊断事实而非错误：
+/// 调用方不得因此 fail `open()`，只用于控制面观测与 Stage 4 策略路由。
 pub struct OpenedTerminal {
     pub id: String,
     pub reader: Box<dyn Read + Send>,
+    pub shell_integration: Option<SshShellIntegrationPlan>,
+    pub integration_fallback_reason: Option<&'static str>,
+}
+
+/// SSH bootstrap 成功后注入的 shell integration 计划。
+///
+/// nonce 是完成信号的关联标识（非密码学认证）；shell 只包含第一期支持矩阵内
+/// 已通过真实测试的 kind。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshShellIntegrationPlan {
+    pub nonce: String,
+    pub shell: SshShellKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshShellKind {
+    Bash,
+    Zsh,
+}
+
+impl SshShellKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+        }
+    }
 }
 
 /// 独立 SSH exec 通道除输出外还必须返回协议级退出状态，供 Agent 区分成功与失败。

@@ -3018,9 +3018,11 @@ version = "0.1.0"
 name = "nocterm-infrastructure"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.4.3",
  "keyring",
  "nocterm-domain",
  "portable-pty",
+ "rand",
  "rusqlite",
  "russh",
  "russh-sftp",

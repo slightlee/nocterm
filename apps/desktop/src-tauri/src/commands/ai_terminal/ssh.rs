@@ -61,39 +61,6 @@ pub(crate) fn execute_ssh_sync(
     })
 }
 
-/// 结构化检查验证 SSH 协议返回的真实退出码，避免依赖 Shell 标记或把失败当成功。
-pub(crate) fn execute_ssh_inspection_sync(
-    connection_service: &nocterm_application::connection::ConnectionService,
-    terminal_service: &nocterm_application::terminal::TerminalService,
-    connection_id: i64,
-    command: &str,
-    cancellation: &AtomicBool,
-    deadline: Instant,
-) -> Result<String, String> {
-    let result = execute_ssh_sync(
-        connection_service,
-        terminal_service,
-        connection_id,
-        command,
-        cancellation,
-        deadline,
-    )?;
-    require_successful_ssh_result(result)
-}
-
-fn require_successful_ssh_result(result: TerminalCommandResult) -> Result<String, String> {
-    let exit_code = result.exit_code;
-    if exit_code == 0 {
-        return Ok(result.output);
-    }
-    let detail = if result.output.is_empty() {
-        String::new()
-    } else {
-        format!("：{}", result.output)
-    };
-    Err(format!("服务器检查失败（退出码 {exit_code}）{detail}"))
-}
-
 /// 远端关闭独立 exec channel 即表示输出结束，退出状态由协议通道单独确认。
 fn collect_ssh_output(
     terminal_service: &nocterm_application::terminal::TerminalService,
@@ -182,6 +149,97 @@ fn collect_ssh_output(
         output: output.trim().to_string(),
         exit_code,
     })
+}
+
+/// SSH 可见执行器（Stage 4）：把已授权命令写入用户当前可见 PTY，并以
+/// nonce 过滤后的 OSC 633;D 完成信号取回真实退出码。
+///
+/// 前置条件由路由确认（四元绑定、Prompt Ready、门控已占用）；本函数只负责：
+/// 订阅输出 → 写入裸命令 → 等待完成/取消/超时 → 交还输出与退出码。
+/// 取消/超时向 PTY 写入 Ctrl+C；观察到完成信号前输入门控保持占用，
+/// 未恢复时执行器不释放门控，迟到的 D 由读取线程自动放行。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_ssh_visible_sync(
+    terminal_service: &nocterm_application::terminal::TerminalService,
+    registry: &crate::state::SshTerminalRegistry,
+    terminal_id: String,
+    _connection_id: i64,
+    execution_id: &str,
+    command: &str,
+    cancellation: &AtomicBool,
+    deadline: Instant,
+) -> Result<TerminalCommandResult, String> {
+    // 订阅先于写入，避免漏掉命令回显（方案 §10.7 顺序约束）。
+    let subscriber = registry.subscribe(&terminal_id);
+    let snapshot = registry.completion_snapshot(&terminal_id);
+    if terminal_service
+        .write(&terminal_id, &format!("{command}\n"))
+        .is_err()
+    {
+        registry.release_input_gate(&terminal_id, execution_id);
+        return Err("写入可见终端失败".to_string());
+    }
+
+    const OUTPUT_LIMIT_BYTES: usize = 128 * 1024;
+    const INTERRUPT_SETTLE: Duration = Duration::from_secs(3);
+    let mut output = String::new();
+    let recover_after_interrupt =
+        |registry: &crate::state::SshTerminalRegistry,
+         terminal_service: &nocterm_application::terminal::TerminalService,
+         terminal_id: &str,
+         execution_id: &str| {
+            // Ctrl+C 只是中断请求；观察到完成信号才证明 Shell 已恢复。
+            let _ = terminal_service.write(terminal_id, "\u{3}");
+            let recovered = registry.wait_for_completion(
+                terminal_id,
+                registry.completion_snapshot(terminal_id),
+                INTERRUPT_SETTLE,
+            );
+            if recovered.is_some() {
+                registry.release_input_gate(terminal_id, execution_id);
+            }
+            // 未恢复时保持门控：迟到的 D 到达时由读取线程自动放行。
+        };
+
+    loop {
+        if cancellation.load(Ordering::Acquire) {
+            recover_after_interrupt(registry, terminal_service, &terminal_id, execution_id);
+            return Err("AI 任务已停止，已中断可见终端命令".to_string());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            recover_after_interrupt(registry, terminal_service, &terminal_id, execution_id);
+            return Err("可见终端命令执行超时，已发送中断请求".to_string());
+        }
+        if let Some(code) = registry.wait_for_completion(&terminal_id, snapshot, Duration::ZERO) {
+            while let Ok(data) = subscriber.try_recv() {
+                output.push_str(&data);
+                if output.len() > OUTPUT_LIMIT_BYTES {
+                    recover_after_interrupt(registry, terminal_service, &terminal_id, execution_id);
+                    return Err("可见终端命令输出超过 128 KiB，已发送中断请求".to_string());
+                }
+            }
+            registry.release_input_gate(&terminal_id, execution_id);
+            return Ok(TerminalCommandResult {
+                output: output.trim().to_string(),
+                exit_code: code,
+            });
+        }
+        match subscriber.recv_timeout(remaining.min(CANCELLATION_POLL_INTERVAL)) {
+            Ok(data) => {
+                output.push_str(&data);
+                if output.len() > OUTPUT_LIMIT_BYTES {
+                    recover_after_interrupt(registry, terminal_service, &terminal_id, execution_id);
+                    return Err("可见终端命令输出超过 128 KiB，已发送中断请求".to_string());
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // 读取线程退出（终端已关闭/断连）：无法证明命令状态。
+                return Err("可见终端输出通道已关闭".to_string());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

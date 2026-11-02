@@ -186,7 +186,7 @@ SFTP 使用 russh-sftp，不通过系统 `sftp`、远程 Shell 或 `tar` 模拟�
 
 设置 Feature 已实现跟随系统、浅色、深色主题，终端字体大小、终端配色和关于页。连接、分组、设置、AI 历史与 AI 审计保存在本机 SQLite。
 
-- Schema 使用显式版本和原地迁移，当前版本为 v8；
+- Schema 使用显式版本和原地迁移，当前版本为 v10；
 - Repository 拥有 SQL，Domain 和 Application 不拼接 SQL；
 - 数据库初始化统一设置 WAL、foreign keys 和 busy timeout；
 - 运行时终端、传输和 Provider 进程不持久化；
@@ -245,7 +245,7 @@ flowchart LR
     GATEWAY["Nocterm Tool Gateway"]
     POLICY["Target Binding<br/>Permission / Approval / Audit"]
     LOCAL["Current Local PTY"]
-    REMOTE["Current Authenticated SSH<br/>independent exec channel"]
+    REMOTE["Current Authenticated SSH<br/>visible PTY or independent exec"]
 
     PANEL --> REGISTRY
     REGISTRY --> CODEX_ADAPTER
@@ -310,14 +310,16 @@ flowchart TD
     APPROVAL -- 否 --> DENY
     APPROVAL -- 是 --> PENDING["写入 pending 审计"]
     PERMISSION -- 自动允许 --> PENDING
-    PENDING --> EXECUTE["Local PTY 或 SSH exec"]
+    PENDING --> EXECUTE["Local PTY 或 SSH 路由"]
     EXECUTE --> RESULT["写入结果审计"]
     RESULT --> RESPONSE["结构化结果返回 Provider"]
 ```
 
-本地命令写入当前可见 PTY，继承该 Shell 的目录和环境，并使用随机完成探针取得真实退出码。取消或超时时，Ctrl+C 只表示已经请求中断；只有读取到该轮完成探针才证明 Shell 已恢复。恢复前本地 PTY 保持占用并拒绝新的 AI 命令，避免命令写入仍忙碌的 Shell。SSH 命令复用当前已认证连接的独立 exec channel，不写入可见终端，也不继承可见 Shell 临时 `cd`、环境变量或虚拟环境。
+本地命令写入当前可见 PTY，继承该 Shell 的目录和环境，并使用随机完成探针取得真实退出码。取消或超时时，Ctrl+C 只表示已经请求中断；只有读取到该轮完成探针才证明 Shell 已恢复。恢复前本地 PTY 保持占用并拒绝新的 AI 命令，避免命令写入仍忙碌的 Shell。
 
-本地终端在支持的 Shell（PowerShell 家族、zsh、bash、fish）启动时注入 shell integration 钩子，每轮提示符渲染前以 `OSC 633;D;<退出码>` 上报命令完成；AI 命令优先走 633 完成信号路径——控制信息属于控制平面、不参与终端折行，窄窗口或特殊 conhost 行为不再影响完成检测。注入失败、未覆盖的 Shell（cmd 等）或序列被剥时，自动回退到随机完成探针。AI 执行期间用户键盘写入被门控，避免用户手敲命令的完成信号串线；同一终端同时最多一条 AI 命令，门控兼作占用锁。SSH 命令不受影响，继续使用独立 exec channel。
+SSH 默认采用可见优先：路由器在任务绑定的 workspace session、terminal ID、terminal generation 与 connection ID 全部仍有效，且 bootstrap shell integration 已进入 Prompt Ready 时，预占该终端并把命令写入可见 SSH PTY。用户可按连接关闭“终端可见”以强制使用独立 exec channel；Prompt 未就绪或检查后 Prompt 状态变化时也会安全回退独立 exec，并在权威 execution ledger 中记录稳定降级原因。独立 exec 不写入可见终端，也不继承可见 Shell 临时 `cd`、环境变量或虚拟环境。通用命令和系统信息、进程、端口、日志、Docker 等结构化工具共享该路由，不存在绕过可见策略的第二套执行编排。
+
+本地终端在支持的 Shell（PowerShell 家族、zsh、bash、fish）启动时注入 shell integration 钩子，每轮提示符渲染前以 `OSC 633;D;<退出码>` 上报命令完成；AI 命令优先走 633 完成信号路径——控制信息属于控制平面、不参与终端折行，窄窗口或特殊 conhost 行为不再影响完成检测。注入失败、未覆盖的 Shell（cmd 等）或序列被剥时，自动回退到随机完成探针。AI 执行期间用户键盘写入被门控，避免用户手敲命令的完成信号串线；同一终端同时最多一条 AI 命令，门控兼作占用锁。SSH 可见执行使用同一 OSC 完成语义；Prompt Ready 检查、AI gate 预占和用户输入失效在同一 registry 锁内协调，避免用户输入与 AI dispatch 同时进入 PTY。
 
 Provider 退出、turn 结束、停止、目标变化或会话重置时，token、审批和临时资源一起撤销。迟到事件必须匹配当前 generation，不能覆盖新会话。
 
@@ -367,20 +369,20 @@ Bridge 在请求可能已经发送后断线时返回“结果未知”，不得�
 
 ## 8. 关键技术决策
 
-| 决策          | 选择                                               | 原因与后果                                                           |
-| ------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
-| 应用形态      | 模块化单体                                         | 保持部署简单，通过 Feature 和 crate 约束边界，不制造无收益服务       |
-| Rust 分层     | Domain / Application / Infrastructure + Tauri Host | Domain 不依赖平台，Host 作为组合根                                   |
-| SSH / SFTP    | 进程内 russh / russh-sftp                          | 双平台行为一致、结构化错误和取消可控；Nocterm 承担协议兼容与生命周期 |
-| 凭据          | keyring 对接系统安全存储                           | 密码不进入 SQLite；私钥只保存路径                                    |
-| 主机密钥      | TOFU                                               | 首次记录、变化拒绝，不用关闭校验换取可用                             |
-| AI 引擎       | 复用本机 Provider CLI                              | 不重复实现模型、登录、Agent loop 和生态                              |
-| Provider 隔离 | 独立 Adapter                                       | 厂商协议独立演进，Domain 和工具核心不出现厂商分支                    |
-| AI 工具       | 统一 MCP Dispatcher 与 Tool Gateway                | 新增 Provider 不复制 SSH、PTY、审批和审计逻辑                        |
-| 自动执行      | 结构化工具 + 四级权限                              | 大型命令白名单无法可靠判断参数副作用                                 |
-| AI 远程执行   | 当前认证连接的独立 exec channel                    | 不暴露凭据，不与用户可见 PTY 串线                                    |
+| 决策          | 选择                                               | 原因与后果                                                             |
+| ------------- | -------------------------------------------------- | ---------------------------------------------------------------------- |
+| 应用形态      | 模块化单体                                         | 保持部署简单，通过 Feature 和 crate 约束边界，不制造无收益服务         |
+| Rust 分层     | Domain / Application / Infrastructure + Tauri Host | Domain 不依赖平台，Host 作为组合根                                     |
+| SSH / SFTP    | 进程内 russh / russh-sftp                          | 双平台行为一致、结构化错误和取消可控；Nocterm 承担协议兼容与生命周期   |
+| 凭据          | keyring 对接系统安全存储                           | 密码不进入 SQLite；私钥只保存路径                                      |
+| 主机密钥      | TOFU                                               | 首次记录、变化拒绝，不用关闭校验换取可用                               |
+| AI 引擎       | 复用本机 Provider CLI                              | 不重复实现模型、登录、Agent loop 和生态                                |
+| Provider 隔离 | 独立 Adapter                                       | 厂商协议独立演进，Domain 和工具核心不出现厂商分支                      |
+| AI 工具       | 统一 MCP Dispatcher 与 Tool Gateway                | 新增 Provider 不复制 SSH、PTY、审批和审计逻辑                          |
+| 自动执行      | 结构化工具 + 四级权限                              | 大型命令白名单无法可靠判断参数副作用                                   |
+| AI 远程执行   | 默认可见 PTY；按连接可关闭并强制独立 exec          | 独立路径保留隔离与兜底；可见路径精确绑定终端 generation 并受 gate 保护 |
 
-未采用的方案包括：系统 OpenSSH 作为业务后端、自研 Agent、只传 Prompt 和终端文本、只实现 MCP Server、让 Provider 自行 SSH、把远程 Agent 安装到服务器、将 AI 命令直接注入 SSH 可见 PTY，以及为旧 Provider 维护不安全的兼容执行通道。
+未采用的方案包括：系统 OpenSSH 作为业务后端、自研 Agent、只传 Prompt 和终端文本、只实现 MCP Server、让 Provider 自行 SSH、把远程 Agent 安装到服务器、无 Prompt Ready 与 gate 保护地注入 SSH 可见 PTY，以及为旧 Provider 维护不安全的兼容执行通道。
 
 同类产品和上游协议用于验证安全原则，不能覆盖源码和测试事实。主要参考包括：
 

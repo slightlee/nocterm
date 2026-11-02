@@ -150,6 +150,8 @@ struct InterruptTerminal {
 impl LocalTerminalPort for InterruptTerminal {
     fn open(&self, _cols: u16, _rows: u16) -> Result<OpenedTerminal, String> {
         Ok(OpenedTerminal {
+            shell_integration: None,
+            integration_fallback_reason: None,
             id: "local-test".to_string(),
             reader: Box::new(Cursor::new(Vec::new())),
         })
