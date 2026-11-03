@@ -1,8 +1,8 @@
 //! SSH bootstrap 全链路集成测试：进程内 russh 内存服务器 + 真实
-//! `SshTerminalManager` 连接，自主验证探针、临时 rc 上传与 source 注入，
+//! `SshTerminalManager` 连接，自主验证 POSIX/PowerShell 探针、临时 rc 上传与内存注入，
 //! 不依赖任何外部服务器或人工操作（真实环境验证发现的回归以此防复发）。
 //!
-//! 桩服务器模拟一个 bash 登录环境：
+//! 桩服务器分别模拟 bash 与 Windows OpenSSH PowerShell 登录环境：
 //! - exec 探针命令 → 返回版本串 `5.2.1|0.0||`
 //! - exec `umask 077 && cat > <path>` → 收集 stdin 为 rc 内容（断言用）
 //! - pty+shell → 记录客户端敲入，并在收到 `source` 后模拟 bash 发出
@@ -13,6 +13,8 @@
 //! 2. rc 内容**不含**用户 rc 重建（登录链由 request_shell 原样保留）
 //! 3. shell channel 上收到 ` source '<path>'; rm -f -- '<path>'` 注入
 //!    （此前该敲入代码在历次修改中丢失，集成从未生效）
+//! 4. PowerShell 先经历一次 POSIX 未命中，再通过专用探针识别；不上传文件，
+//!    shell channel 直接收到 Base64 内存注入命令。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -48,6 +50,13 @@ enum ExecKind {
 
 struct TestServer {
     shared: Arc<Mutex<SharedState>>,
+    shell: TestShell,
+}
+
+#[derive(Clone, Copy)]
+enum TestShell {
+    Bash,
+    PowerShell,
 }
 
 impl russh::server::Server for TestServer {
@@ -56,6 +65,7 @@ impl russh::server::Server for TestServer {
         TestHandler {
             shared: Arc::clone(&self.shared),
             uploads: Mutex::new(HashMap::new()),
+            shell: self.shell,
         }
     }
 }
@@ -64,6 +74,7 @@ struct TestHandler {
     shared: Arc<Mutex<SharedState>>,
     /// exec 通道 → 处置类型；数据通道据此分派。
     uploads: Mutex<HashMap<russh::ChannelId, ExecKind>>,
+    shell: TestShell,
 }
 
 impl Handler for TestHandler {
@@ -121,6 +132,17 @@ impl Handler for TestHandler {
         let kind = if command.contains("$BASH_VERSION") {
             let mut shared = self.shared.lock().unwrap();
             shared.probe_count += 1;
+            let output = match self.shell {
+                TestShell::Bash => b"5.2.1|0.0||\n".to_vec(),
+                TestShell::PowerShell => b"|||\n".to_vec(),
+            };
+            session.data(channel, output)?;
+            ExecKind::Probe
+        } else if command.contains("__NOCTERM_POWERSHELL__") {
+            self.shared.lock().unwrap().probe_count += 1;
+            if matches!(self.shell, TestShell::PowerShell) {
+                session.data(channel, b"__NOCTERM_POWERSHELL__|7.5.4\r\n".to_vec())?;
+            }
             ExecKind::Probe
         } else if let Some(path) = command.strip_prefix("umask 077 && cat > ") {
             ExecKind::Upload {
@@ -132,7 +154,6 @@ impl Handler for TestHandler {
         match &kind {
             // 探针：回版本串，EOF + 关闭。
             ExecKind::Probe => {
-                session.data(channel, b"5.2.1|0.0||\n".to_vec())?;
                 session.eof(channel)?;
                 session.close(channel)?;
             }
@@ -174,15 +195,18 @@ impl Handler for TestHandler {
             }
             // 可见 shell 通道的敲入：记录并模拟 bash 渲染提示符时的钩子输出。
             _ => {
-                let nonce = {
+                let nonce = extract_powershell_nonce(&text).or_else(|| {
                     let shared = self.shared.lock().unwrap();
                     shared
                         .uploaded_rcs
                         .values()
                         .find_map(|rc| extract_nonce_from_rc(rc))
-                };
+                });
                 self.shared.lock().unwrap().shell_inputs.push(text.clone());
-                if let Some(nonce) = nonce.filter(|_| text.contains("source")) {
+                let integration_loaded = text.contains("source")
+                    || (text.contains("FromBase64String")
+                        && matches!(self.shell, TestShell::PowerShell));
+                if let Some(nonce) = nonce.filter(|_| integration_loaded) {
                     session.data(
                         channel,
                         format!("\r\n\x1b]633;D;0;{nonce}\x07\x1b]633;A;{nonce}\x07").into_bytes(),
@@ -216,6 +240,11 @@ fn extract_nonce_from_rc(rc: &str) -> Option<String> {
     Some(value.to_string())
 }
 
+fn extract_powershell_nonce(command: &str) -> Option<String> {
+    let value = command.split("$env:NOCTERM_OSC_NONCE='").nth(1)?;
+    Some(value.split('\'').next()?.to_string())
+}
+
 fn test_profile(port: u16) -> ConnectionProfile {
     ConnectionProfile {
         id: 1,
@@ -240,14 +269,11 @@ fn test_profile(port: u16) -> ConnectionProfile {
     }
 }
 
-#[test]
-fn bootstrap_full_flow_over_in_memory_ssh_server() {
-    let shared = Arc::new(Mutex::new(SharedState::default()));
-
-    // 桩服务器：独立线程 + 独立 runtime（run_on_socket 借用 listener 与
-    // &mut self，线程内存活至测试进程退出）。
+fn start_server(
+    shell: TestShell,
+    shared: Arc<Mutex<SharedState>>,
+) -> (u16, std::thread::JoinHandle<()>) {
     let (port_tx, port_rx) = std::sync::mpsc::channel();
-    let server_shared = Arc::clone(&shared);
     let server_thread = std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("server runtime");
         runtime.block_on(async move {
@@ -263,20 +289,23 @@ fn bootstrap_full_flow_over_in_memory_ssh_server() {
                 .expect("bind in-memory server");
             let port = listener.local_addr().expect("local addr").port();
             port_tx.send(port).expect("send port");
-            let mut server = TestServer {
-                shared: server_shared,
-            };
+            let mut server = TestServer { shared, shell };
             server
                 .run_on_socket(config, &listener)
                 .await
                 .expect("server run");
         });
     });
-
-    // 桩就绪后，真实管理器连入（open 同步阻塞，内部自带 runtime 与建连兜底）。
     let port = port_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("server port");
+    (port, server_thread)
+}
+
+#[test]
+fn bootstrap_full_flow_over_in_memory_ssh_server() {
+    let shared = Arc::new(Mutex::new(SharedState::default()));
+    let (port, server_thread) = start_server(TestShell::Bash, Arc::clone(&shared));
     let manager = SshTerminalManager::default();
     let profile = test_profile(port);
     let opened = manager
@@ -328,5 +357,31 @@ fn bootstrap_full_flow_over_in_memory_ssh_server() {
         shared.shell_inputs
     );
     assert_eq!(plan.nonce, extract_nonce_from_rc(rc).expect("nonce in rc"));
+    drop(server_thread);
+}
+
+#[test]
+fn powershell_bootstrap_uses_second_probe_and_memory_injection() {
+    let shared = Arc::new(Mutex::new(SharedState::default()));
+    let (port, server_thread) = start_server(TestShell::PowerShell, Arc::clone(&shared));
+    let manager = SshTerminalManager::default();
+    let opened = manager
+        .open(&test_profile(port), 80, 24, Some("test"), None)
+        .expect("open must succeed");
+    let plan = opened
+        .integration
+        .shell_integration
+        .expect("PowerShell bootstrap must produce an integration plan");
+    assert_eq!(plan.shell, SshShellKind::PowerShell);
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let shared = shared.lock().unwrap();
+    assert_eq!(shared.probe_count, 2);
+    assert!(shared.uploaded_rcs.is_empty());
+    assert!(shared.shell_inputs.iter().any(|input| {
+        input.contains("$env:NOCTERM_OSC_NONCE='")
+            && input.contains("FromBase64String")
+            && input.contains(&plan.nonce)
+    }));
     drop(server_thread);
 }

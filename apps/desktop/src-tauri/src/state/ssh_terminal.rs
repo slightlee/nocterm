@@ -14,6 +14,16 @@ use std::{
 };
 
 use super::osc633::Osc633Event;
+use nocterm_domain::ssh_visible_protocol::{
+    MARKER_RECOVERY_GRACE, completion as marker_completion, wrapper_echo_range,
+    wrapper_echo_range_at_end,
+};
+
+/// bootstrap 注入回显抑制的时间上界：正常链路中首个可信 nonce-bound OSC 远早
+/// 于此到达；超时说明远端钩子未安装或链路异常，继续吞输出只会让终端假死。
+pub(crate) const INTEGRATION_ECHO_SUPPRESSION_WINDOW: Duration = Duration::from_secs(5);
+/// 抑制窗口内的缓冲上限；达到后转入降级直通，不再无界累积远端输出。
+const SUPPRESSION_BUFFER_LIMIT: usize = 128 * 1024;
 
 /// 当前 SSH 终端的 UI 会话与后端 PTY 映射，同时为后续可见执行预留订阅与门控。
 /// 订阅只驻留内存，发送失败的订阅会在下一次输出时自动移除。
@@ -25,18 +35,245 @@ pub struct SshTerminalRegistry {
     subscribers: Mutex<HashMap<String, Vec<mpsc::Sender<String>>>>,
     /// terminal_id -> integration 状态（OSC 633 观察与输入门控）。
     integrations: Mutex<HashMap<String, SshIntegration>>,
-    /// terminal_id -> source 注入命令的回显抑制器（一次性，隐藏后自动关闭）。
-    source_suppressions: Mutex<HashMap<String, SourceEchoSuppressor>>,
+    /// terminal_id -> integration 注入命令的回显抑制器（一次性，隐藏后自动关闭）。
+    integration_suppressions: Mutex<HashMap<String, IntegrationEchoSuppressor>>,
+    /// terminal_id -> 当前可见命令的 Marker 包装器过滤状态。
+    marker_suppressions: Mutex<HashMap<String, MarkerOutputSuppressor>>,
 }
 
-/// source 注入命令的回显抑制：注入命令（`source '<rc>'; rm -f -- '<rc>'`）
-/// 的 shell 回显对用户是噪音且暴露实现细节，按逻辑行跨分块隐藏；
-/// 隐藏一条后自动关闭，避免误伤用户后续输出。
-struct SourceEchoSuppressor {
-    /// 注入命令的特征片段（.rc 路径，命令回显行必含）。
-    path: String,
-    /// 跨分块的行缓冲。
+/// integration 注入命令的回显对用户是噪音且暴露实现细节，按逻辑行跨块隐藏。
+/// POSIX 以路径 + 清理命令双重匹配，PowerShell 使用内存注入的固定调用 token。
+///
+/// 抑制窗口是有界的：截止（[`INTEGRATION_ECHO_SUPPRESSION_WINDOW`]）或缓冲
+/// 超限后转入降级直通——只剔除可确证的内部行，绝不无限吞输出。否则远端
+/// 钩子一旦安装失败，终端会静默假死到重连为止。
+struct IntegrationEchoSuppressor {
+    token: String,
+    required_fragment: Option<String>,
+    /// 跨分块缓冲。POSIX 命令可在换行到达前凭两次随机路径完成判定；
+    /// PowerShell 长命令仍等完整逻辑行，避免截断其余回显。
     pending: String,
+    /// 窗口截止时刻，由调用方按注入时机给定；测试可传入过去时刻。
+    deadline: Instant,
+    /// 降级直通：不再缓冲未分类输出，仅按严格判定剔除完整内部行。
+    degraded: bool,
+}
+
+impl IntegrationEchoSuppressor {
+    /// POSIX 注入命令同时包含 source 路径和 rm 路径。随机路径出现两次且清理
+    /// 片段位于两者之间时即可确认命中，无需等待远端发送换行。
+    fn posix_echo_range(&self) -> Option<std::ops::Range<usize>> {
+        let required = self.required_fragment.as_ref()?;
+        let first_token = self.pending.find(&self.token)?;
+        let second_token = self.pending[first_token + self.token.len()..]
+            .find(&self.token)
+            .map(|offset| first_token + self.token.len() + offset)?;
+        self.pending[first_token + self.token.len()..second_token].find(required)?;
+
+        let source_at = self.pending[..first_token].rfind("source ")?;
+        // source_command 有意带一个前导空格以配合 HISTCONTROL=ignorespace；只移除
+        // 这个注入空格，保留提示符自身末尾的空格与样式控制序列。
+        let start = source_at
+            .checked_sub(1)
+            .filter(|index| self.pending.as_bytes()[*index] == b' ')
+            .unwrap_or(source_at);
+        let mut end = second_token + self.token.len();
+        // token 不含 shell 引号；末尾引号属于内部命令，也必须一起隐藏。
+        while self
+            .pending
+            .as_bytes()
+            .get(end)
+            .is_some_and(|byte| matches!(*byte, b'\'' | b'"' | b' ' | b'\t'))
+        {
+            end += 1;
+        }
+        Some(start..end)
+    }
+
+    /// Shell 行编辑器可能用 ANSI 重绘注入行。匹配前移除显示控制序列，避免
+    /// 精确 token 被样式片段打断后把 source/Base64 内部命令透传给 xterm。
+    fn line_is_internal(&self, line: &str) -> bool {
+        let normalized = terminal_text_for_match(line);
+        let matches_required = self
+            .required_fragment
+            .as_ref()
+            .is_none_or(|fragment| normalized.contains(fragment));
+        if normalized.contains(&self.token) && matches_required {
+            return true;
+        }
+
+        // 以下回退只在 bootstrap 抑制窗口（有界 5 秒）内兜底
+        // `integration_echo_token` 与注入命令形状意外漂移的情况；正常链路中
+        // token 主判定已覆盖，POSIX 连接不会出现 PowerShell 特征，反之亦然。
+        normalized.contains("NOCTERM_OSC_NONCE")
+            || normalized.contains("FromBase64String")
+            || normalized.contains("[scriptblock]::Create")
+            || normalized.contains("/tmp/nocterm-ssh-")
+            || (normalized.contains("source ") && normalized.contains("rm -f --"))
+    }
+
+    /// 降级直通使用的内部行判定：只匹配可确证的注入特征。窗口已经失败，此时
+    /// 宁可漏删（外观噪音）也不能误吞用户命令（可用性问题）。
+    fn line_is_conclusively_internal(&self, line: &str) -> bool {
+        let normalized = terminal_text_for_match(line);
+        if !normalized.contains(&self.token) {
+            return false;
+        }
+        match &self.required_fragment {
+            // POSIX token 是每会话随机的临时 rc 路径，单凭它即足以确证。
+            Some(_) => true,
+            // PowerShell token 是通用 API 名，必须叠加注入语法特征才可确证，
+            // 避免把用户自己包含同名 API 的命令一起吞掉。
+            None => {
+                normalized.contains("[scriptblock]::Create")
+                    || normalized.contains("NOCTERM_OSC_NONCE")
+            }
+        }
+    }
+
+    fn complete_internal_line_range(&self) -> Option<std::ops::Range<usize>> {
+        let mut line_start = 0;
+        while let Some(relative_end) = self.pending[line_start..].find('\n') {
+            let line_end = line_start + relative_end + 1;
+            if self.line_is_internal(&self.pending[line_start..line_end]) {
+                return Some(line_start..line_end);
+            }
+            line_start = line_end;
+        }
+        None
+    }
+
+    fn redacted_pending(&self) -> String {
+        self.pending
+            .split_inclusive('\n')
+            .filter(|line| !self.line_is_internal(line))
+            .collect()
+    }
+
+    /// 降级前的最后清理：交还缓冲中可安全显示的完整行（未终结行尾保留在
+    /// 缓冲，继续走降级直通）。
+    fn take_redacted_pending_conclusive(&mut self) -> String {
+        let mut visible = String::new();
+        while let Some(newline) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=newline).collect();
+            if !self.line_is_conclusively_internal(&line) {
+                visible.push_str(&line);
+            }
+        }
+        visible
+    }
+
+    /// 降级直通：按完整逻辑行剔除可确证内部行，其余原样放行。单个未终结行
+    /// 超过缓冲上限时整体放行——注入回显只有数 KB，超长行必然是用户数据。
+    fn degraded_pass(&mut self, data: &str) -> String {
+        self.pending.push_str(data);
+        let mut visible = String::new();
+        while let Some(newline) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=newline).collect();
+            if !self.line_is_conclusively_internal(&line) {
+                visible.push_str(&line);
+            }
+        }
+        if self.pending.len() > SUPPRESSION_BUFFER_LIMIT {
+            visible.push_str(&std::mem::take(&mut self.pending));
+        }
+        visible
+    }
+}
+
+/// 仅用于内部注入回显特征匹配：去除 CSI/OSC 等显示控制，并处理退格重绘。
+/// 返回值不发送到 UI，不能替代终端模拟器的完整解析。
+fn terminal_text_for_match(input: &str) -> String {
+    #[derive(Clone, Copy)]
+    enum State {
+        Text,
+        Escape,
+        Csi,
+        Osc,
+        OscEscape,
+    }
+
+    let mut state = State::Text;
+    let mut output = String::with_capacity(input.len());
+    for character in input.chars() {
+        state = match state {
+            State::Text => match character {
+                '\u{1b}' => State::Escape,
+                '\u{8}' => {
+                    output.pop();
+                    State::Text
+                }
+                value if value == '\n' || value == '\r' || value == '\t' || value >= ' ' => {
+                    output.push(value);
+                    State::Text
+                }
+                _ => State::Text,
+            },
+            State::Escape => match character {
+                '[' => State::Csi,
+                ']' => State::Osc,
+                _ => State::Text,
+            },
+            State::Csi => {
+                if ('@'..='~').contains(&character) {
+                    State::Text
+                } else {
+                    State::Csi
+                }
+            }
+            State::Osc => match character {
+                '\u{7}' => State::Text,
+                '\u{1b}' => State::OscEscape,
+                _ => State::Osc,
+            },
+            State::OscEscape => {
+                if character == '\\' {
+                    State::Text
+                } else {
+                    State::Osc
+                }
+            }
+        };
+    }
+    output
+}
+
+/// Marker 只作为已验证 OSC 控制面的完成恢复信号。包装器回显先整体隐藏并
+/// 合成用户命令回显，之后普通输出流式透传，只保留可能构成跨块 Marker 的尾巴。
+///
+/// 过滤窗口同样有界：截止或缓冲超限后转入降级直通——完成检测仍然生效
+/// （用于释放 owner gate），其余输出只剔除含 Marker 字面量的完整行。降级后
+/// 不再合成命令回显：此时无法区分回显丢失与无 echo 终端，保留输出实时性
+/// 比补一条位置可能错误的回显更重要。
+struct MarkerOutputSuppressor {
+    marker: String,
+    owner: String,
+    display_command: String,
+    pending: String,
+    wrapper_echo_hidden: bool,
+    /// 过滤窗口截止时刻：执行截止 + 中断确认窗口 + 余量，由执行用例给定。
+    deadline: Instant,
+    /// 降级直通：不再缓冲业务输出，仅剔除含 Marker 字面量的完整行。
+    degraded: bool,
+}
+
+impl MarkerOutputSuppressor {
+    /// 降级直通：剔除含 Marker 字面量的完整行（迟到的包装器回显或完成行），
+    /// 其余原样放行；未终结行尾保留在缓冲等待完成检测。单个未终结行超过
+    /// 缓冲上限时整体放行——注入协议只占数 KB，超长行必然是用户数据。
+    fn drain_visible_lines(&mut self) -> String {
+        let mut visible = String::new();
+        while let Some(newline) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=newline).collect();
+            if !line.contains(&self.marker) {
+                visible.push_str(&line);
+            }
+        }
+        if self.pending.len() > SUPPRESSION_BUFFER_LIMIT {
+            visible.push_str(&std::mem::take(&mut self.pending));
+        }
+        visible
+    }
 }
 
 /// workspace 会话绑定；generation 随每次 bind 单调递增，旧授权自然失效。
@@ -66,8 +303,23 @@ struct SshIntegration {
     /// bootstrap 注入的 nonce：只接受携带匹配 nonce 的 integration 事件
     /// 作为 Prompt Ready 证据；None 表示无 bootstrap（普通 shell 或用户自装）。
     expected_nonce: Option<String>,
+    /// bootstrap 不可用时供执行路由使用的稳定降级码；只保存产品契约，
+    /// 不把 probe/upload 等基础设施细节写入 execution ledger。
+    bootstrap_fallback_reason: Option<&'static str>,
+    /// 仅 bash/zsh 的受控函数包装器通过协议测试后开启；它不能代替 Prompt Ready。
+    marker_recovery_supported: bool,
+    /// 已观察到的 owner-bound Marker；grace 结束前不恢复 gate，OSC 仍有优先权。
+    marker_observed: Option<(String, Instant)>,
     /// 正面确认的 Prompt Ready：匹配 nonce 的 A/D 事件置位；用户键盘写入清除。
     prompt_ready: bool,
+}
+
+/// 单次 OSC 观察结果。nonce_bound 只对 bootstrap 注册的匹配 nonce 成立，
+/// command_finished 则保持原有 D 事件语义，供 Marker 中断恢复使用。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SshIntegrationObservation {
+    pub nonce_bound: bool,
+    pub command_finished: bool,
 }
 
 impl SshIntegration {
@@ -77,6 +329,9 @@ impl SshIntegration {
             last_exit_code: 0,
             gate_owner: None,
             expected_nonce: None,
+            bootstrap_fallback_reason: None,
+            marker_recovery_supported: false,
+            marker_observed: None,
             prompt_ready: false,
         }
     }
@@ -188,7 +443,10 @@ impl SshTerminalRegistry {
         if let Ok(mut integrations) = self.integrations.lock() {
             integrations.remove(terminal_id);
         }
-        if let Ok(mut suppressions) = self.source_suppressions.lock() {
+        if let Ok(mut suppressions) = self.integration_suppressions.lock() {
+            suppressions.remove(terminal_id);
+        }
+        if let Ok(mut suppressions) = self.marker_suppressions.lock() {
             suppressions.remove(terminal_id);
         }
     }
@@ -222,31 +480,46 @@ impl SshTerminalRegistry {
     ///
     /// nonce 过滤：注册 expected_nonce 后，缺失或不匹配 nonce 的事件都必须丢弃；
     /// 未 bootstrap 的普通 shell 仍可观测事件，但不能成为 Prompt Ready 证据。
-    pub fn record_integration_event(&self, terminal_id: &str, event: &Osc633Event) {
-        if let Ok(mut integrations) = self.integrations.lock() {
-            let integration = integrations
-                .entry(terminal_id.to_string())
-                .or_insert_with(SshIntegration::new);
-            // nonce 过滤在最前：伪造/串线的事件不得激活 integration、推进计数
-            // 或触碰门控——全部状态变化都发生在通过过滤之后。
-            if let Some(expected) = &integration.expected_nonce {
-                match event.event_nonce() {
-                    Some(nonce) if nonce == expected => {}
-                    _ => return,
-                }
+    pub(crate) fn record_integration_event(
+        &self,
+        terminal_id: &str,
+        event: &Osc633Event,
+    ) -> SshIntegrationObservation {
+        let Ok(mut integrations) = self.integrations.lock() else {
+            return SshIntegrationObservation::default();
+        };
+        let integration = integrations
+            .entry(terminal_id.to_string())
+            .or_insert_with(SshIntegration::new);
+        // nonce 过滤在最前：伪造/串线的事件不得激活 integration、推进计数
+        // 或触碰门控——全部状态变化都发生在通过过滤之后。
+        let nonce_bound = if let Some(expected) = &integration.expected_nonce {
+            match event.event_nonce() {
+                Some(nonce) if nonce == expected => true,
+                _ => return SshIntegrationObservation::default(),
             }
-            if let Osc633Event::CommandFinished { code, .. } = event {
-                integration.completions += 1;
-                integration.last_exit_code = *code;
-                // D 事件证明 Shell 已回到提示符：无论当时的占用者是谁都放行，
-                // 与本地"迟到恢复由读取线程放行"的语义一致。nonce 过滤由
-                // Prompt Ready 状态机负责，这里保持计数完整。
-                integration.gate_owner = None;
-                integration.prompt_ready = true;
-            }
-            if let Osc633Event::PromptStarted { .. } = event {
-                integration.prompt_ready = true;
-            }
+        } else {
+            false
+        };
+        if let Osc633Event::CommandFinished { code, .. } = event {
+            integration.completions += 1;
+            integration.last_exit_code = *code;
+            // D 事件证明 Shell 已回到提示符：无论当时的占用者是谁都放行。
+            // 返回 true 供读取链路清理可能被 Ctrl+C 截断的 Marker 过滤器。
+            integration.gate_owner = None;
+            integration.marker_observed = None;
+            integration.prompt_ready = true;
+            return SshIntegrationObservation {
+                nonce_bound,
+                command_finished: true,
+            };
+        }
+        if let Osc633Event::PromptStarted { .. } = event {
+            integration.prompt_ready = true;
+        }
+        SshIntegrationObservation {
+            nonce_bound,
+            command_finished: false,
         }
     }
 
@@ -258,7 +531,65 @@ impl SshTerminalRegistry {
                 .entry(terminal_id.to_string())
                 .or_insert_with(SshIntegration::new);
             integration.expected_nonce = Some(nonce.to_string());
+            integration.bootstrap_fallback_reason = None;
         }
+    }
+
+    /// 在已经注册 nonce-bound OSC 的终端上开启 Marker 完成恢复能力。
+    pub fn enable_marker_recovery(&self, terminal_id: &str) {
+        if let Ok(mut integrations) = self.integrations.lock()
+            && let Some(integration) = integrations.get_mut(terminal_id)
+            && integration.expected_nonce.is_some()
+        {
+            integration.marker_recovery_supported = true;
+        }
+    }
+
+    pub fn marker_recovery_supported(&self, terminal_id: &str) -> bool {
+        self.integrations
+            .lock()
+            .ok()
+            .and_then(|integrations| {
+                integrations
+                    .get(terminal_id)
+                    .map(|integration| integration.marker_recovery_supported)
+            })
+            .unwrap_or(false)
+    }
+
+    /// 注册 bootstrap 失败事实，并把内部阶段原因归一化为可持久化的稳定契约。
+    pub fn register_integration_unavailable(&self, terminal_id: &str, reason: &'static str) {
+        if let Ok(mut integrations) = self.integrations.lock() {
+            let integration = integrations
+                .entry(terminal_id.to_string())
+                .or_insert_with(SshIntegration::new);
+            integration.expected_nonce = None;
+            integration.prompt_ready = false;
+            integration.marker_recovery_supported = false;
+            integration.marker_observed = None;
+            integration.bootstrap_fallback_reason = Some(match reason {
+                "unsupported_shell" => "SSH_SHELL_UNSUPPORTED",
+                _ => "SSH_INTEGRATION_UNAVAILABLE",
+            });
+        }
+    }
+
+    /// 可见执行未就绪时返回稳定降级原因。调用方只在 `prompt_ready == false`
+    /// 时使用；bootstrap 成功但尚无可信提示符事件与控制面缺失必须区分。
+    pub fn visible_unavailable_reason(&self, terminal_id: &str) -> &'static str {
+        let Ok(integrations) = self.integrations.lock() else {
+            return "SSH_CONTROL_PLANE_UNAVAILABLE";
+        };
+        let Some(integration) = integrations.get(terminal_id) else {
+            return "SSH_CONTROL_PLANE_UNAVAILABLE";
+        };
+        integration.bootstrap_fallback_reason.unwrap_or_else(|| {
+            if integration.expected_nonce.is_some() {
+                "SSH_PROMPT_NOT_READY"
+            } else {
+                "SSH_CONTROL_PLANE_UNAVAILABLE"
+            }
+        })
     }
 
     /// Prompt Ready 正面证据是否成立：bootstrap 终端必须观察到匹配 nonce 的
@@ -315,6 +646,7 @@ impl SshTerminalRegistry {
         let integration = integrations
             .entry(terminal_id.to_string())
             .or_insert_with(SshIntegration::new);
+        finalize_expired_marker_recovery(integration);
         if integration.gate_owner.is_some()
             || !integration.prompt_ready
             || integration.expected_nonce.is_none()
@@ -322,6 +654,7 @@ impl SshTerminalRegistry {
             return false;
         }
         integration.gate_owner = Some(owner.to_string());
+        integration.marker_observed = None;
         integration.prompt_ready = false;
         true
     }
@@ -335,6 +668,7 @@ impl SshTerminalRegistry {
         let integration = integrations
             .entry(terminal_id.to_string())
             .or_insert_with(SshIntegration::new);
+        finalize_expired_marker_recovery(integration);
         if integration.gate_owner.is_some() {
             return false;
         }
@@ -353,63 +687,335 @@ impl SshTerminalRegistry {
         match &integration.gate_owner {
             Some(current) if current == owner => {
                 integration.gate_owner = None;
+                integration.marker_observed = None;
                 true
             }
             _ => false,
         }
     }
 
-    pub fn input_gated(&self, terminal_id: &str) -> bool {
-        self.integrations
-            .lock()
-            .ok()
-            .and_then(|integrations| {
-                integrations
-                    .get(terminal_id)
-                    .map(|state| state.gate_owner.is_some())
-            })
-            .unwrap_or(false)
+    /// Marker 只恢复已经被同一 execution 占用的终端；不能凭 Marker 激活一个
+    /// 无 gate、无 OSC bootstrap 的普通终端。
+    fn observe_marker_recovery(&self, terminal_id: &str, owner: &str) -> bool {
+        let Ok(mut integrations) = self.integrations.lock() else {
+            return false;
+        };
+        let Some(integration) = integrations.get_mut(terminal_id) else {
+            return false;
+        };
+        if !integration.marker_recovery_supported {
+            return false;
+        }
+        match &integration.gate_owner {
+            Some(current) if current == owner => {
+                integration.marker_observed = Some((owner.to_string(), Instant::now()));
+                true
+            }
+            _ => false,
+        }
     }
 
-    /// 开启 source 注入命令的回显抑制：连接建立时敲入的
-    /// ` source '<rc>'; rm -f -- '<rc>'` 回显按逻辑行隐藏（一次性）。
-    pub fn begin_source_echo_suppression(&self, terminal_id: &str, path: &str) {
-        if let Ok(mut suppressions) = self.source_suppressions.lock() {
+    /// grace 后由原 execution 释放 gate；错误 owner 与过早调用均拒绝。
+    ///
+    /// Marker 只证明包装命令结束，不能证明慢提示符已经完成渲染，因此这里绝不
+    /// 伪造 Prompt Ready。只有随后到达的 nonce-bound A/D 能重新允许 AI 可见执行。
+    pub fn finalize_marker_recovery(&self, terminal_id: &str, owner: &str) -> bool {
+        let Ok(mut integrations) = self.integrations.lock() else {
+            return false;
+        };
+        let Some(integration) = integrations.get_mut(terminal_id) else {
+            return false;
+        };
+        let observed_for_owner =
+            integration
+                .marker_observed
+                .as_ref()
+                .is_some_and(|(observed_owner, at)| {
+                    observed_owner == owner && at.elapsed() >= MARKER_RECOVERY_GRACE
+                });
+        if !observed_for_owner || integration.gate_owner.as_deref() != Some(owner) {
+            return false;
+        }
+        integration.gate_owner = None;
+        integration.marker_observed = None;
+        true
+    }
+
+    pub fn input_gated(&self, terminal_id: &str) -> bool {
+        let Ok(mut integrations) = self.integrations.lock() else {
+            return false;
+        };
+        let Some(integration) = integrations.get_mut(terminal_id) else {
+            return false;
+        };
+        finalize_expired_marker_recovery(integration);
+        integration.gate_owner.is_some()
+    }
+
+    /// 开启 integration 注入命令的回显抑制。required_fragment 用于 POSIX
+    /// source + rm 双重匹配；PowerShell 的固定调用 token 已足够唯一。
+    /// deadline 之前未分类输出 fail closed（防注入回显泄漏），之后降级直通。
+    pub fn begin_integration_echo_suppression(
+        &self,
+        terminal_id: &str,
+        token: &str,
+        required_fragment: Option<&str>,
+        deadline: Instant,
+    ) {
+        if let Ok(mut suppressions) = self.integration_suppressions.lock() {
             suppressions.insert(
                 terminal_id.to_string(),
-                SourceEchoSuppressor {
-                    path: path.to_string(),
+                IntegrationEchoSuppressor {
+                    token: token.to_string(),
+                    required_fragment: required_fragment.map(str::to_string),
                     pending: String::new(),
+                    deadline,
+                    degraded: false,
                 },
             );
         }
     }
 
-    /// 返回允许发送到 xterm 的文本，并隐藏一次 bootstrap source 命令回显。
-    pub fn visible_output(&self, terminal_id: &str, data: &str) -> String {
-        // source 注入回显抑制优先：注入命令行（含 rc 路径与 rm -f）按逻辑行
-        // 跨分块隐藏，隐藏后抑制器自动关闭，不误伤后续输出。
-        if let Ok(mut suppressions) = self.source_suppressions.lock()
-            && let Some(suppressor) = suppressions.get_mut(terminal_id)
+    /// 首个可信 nonce-bound OSC 证明 bootstrap 已执行完成。若 PTY 没有回显注入
+    /// 命令，则把此前缓冲的正常提示符交还 UI；若仍含内部 token，则丢弃该逻辑行。
+    pub fn finish_integration_echo_on_osc(&self, terminal_id: &str) -> String {
+        let Ok(mut suppressions) = self.integration_suppressions.lock() else {
+            return String::new();
+        };
+        let Some(suppressor) = suppressions.remove(terminal_id) else {
+            return String::new();
+        };
+        if suppressor.degraded {
+            // 降级模式的缓冲只剩未终结行尾，原样交还：降级绝不丢弃用户输出。
+            return suppressor.pending;
+        }
+        // 在可信 OSC 到达前，完整行也不提前放行。此处统一剥离经过 ANSI 重绘
+        // 或 token 截断的内部注入行；PTY 无 echo 时，普通提示符会原样交还。
+        suppressor.redacted_pending()
+    }
+
+    /// 注册本次包装器过滤。调用发生在写 PTY 之前，因此首个回显分块不会泄漏。
+    /// deadline 为过滤窗口：执行截止 + 中断确认窗口 + 余量，窗口过后降级
+    /// 直通，保证过滤器不会吞掉执行结束后的任何输出。
+    pub fn begin_marker_output_suppression(
+        &self,
+        terminal_id: &str,
+        marker: &str,
+        owner: &str,
+        display_command: &str,
+        deadline: Instant,
+    ) {
+        if let Ok(mut suppressions) = self.marker_suppressions.lock() {
+            suppressions.insert(
+                terminal_id.to_string(),
+                MarkerOutputSuppressor {
+                    marker: marker.to_string(),
+                    owner: owner.to_string(),
+                    display_command: display_command.to_string(),
+                    pending: String::new(),
+                    wrapper_echo_hidden: false,
+                    deadline,
+                    degraded: false,
+                },
+            );
+        }
+    }
+
+    pub fn clear_marker_output_suppression(&self, terminal_id: &str, owner: &str) {
+        if let Ok(mut suppressions) = self.marker_suppressions.lock()
+            && suppressions
+                .get(terminal_id)
+                .is_some_and(|state| state.owner == owner)
         {
-            suppressor.pending.push_str(data);
-            let mut visible = String::new();
-            while let Some(newline) = suppressor.pending.find('\n') {
-                let line: String = suppressor.pending.drain(..=newline).collect();
-                if line.contains(&suppressor.path) && line.contains("rm -f") {
-                    // 同一网络块可能还包含提示符或业务输出，不能随回显行一起丢弃。
-                    let trailing = std::mem::take(&mut suppressor.pending);
-                    suppressions.remove(terminal_id);
-                    drop(suppressions);
-                    visible.push_str(&self.visible_output(terminal_id, &trailing));
-                    return visible;
-                }
-                visible.push_str(&line);
-            }
-            // 逻辑行未完结：整段缓冲，等下一个分片判定。
+            suppressions.remove(terminal_id);
+        }
+    }
+
+    /// 可信 OSC A/D 已证明 Shell 重新进入提示符阶段时，Marker 可能因 Ctrl+C
+    /// 永远不会出现。此时移除残留过滤器并交还尚未发送到 UI 的安全尾部，避免
+    /// 后续输出被永久吞掉。
+    pub fn finish_marker_output_on_osc(&self, terminal_id: &str) -> String {
+        let Ok(mut suppressions) = self.marker_suppressions.lock() else {
+            return String::new();
+        };
+        let Some(suppressor) = suppressions.remove(terminal_id) else {
+            return String::new();
+        };
+        if suppressor.wrapper_echo_hidden || !suppressor.pending.contains(&suppressor.marker) {
+            // 流式缓冲只剩 Marker 前缀尾巴，降级缓冲只剩未终结行尾，均可直接交还。
+            return suppressor.pending;
+        }
+
+        // 极端分块下 D 可能先于包装器回显的终结到达。与 AI 结果过滤共用
+        // wrapper_echo_range_at_end：只丢弃 Marker 所在的包装器行，保留此前
+        // 已经到达的异步后台输出，并在原位置合成用户命令回显。
+        match wrapper_echo_range_at_end(&suppressor.pending, &suppressor.marker) {
+            Some(range) => format!(
+                "{}{}\r\n{}",
+                &suppressor.pending[..range.start],
+                suppressor.display_command,
+                &suppressor.pending[range.end..]
+            ),
+            // pending 已确认含 Marker 字面量，范围必然存在。
+            None => suppressor.pending,
+        }
+    }
+
+    /// 返回允许发送到 xterm 的文本，并隐藏 bootstrap 与 Marker 内部协议。
+    ///
+    /// 两级过滤各有界：integration 注入回显优先，其次 Marker 包装器过滤。
+    /// 辅助函数返回 None 表示该终端没有对应抑制器，交给下一级或直接透传。
+    pub fn visible_output(&self, terminal_id: &str, data: &str) -> String {
+        if let Some(visible) = self.drain_integration_echo(terminal_id, data) {
+            return visible;
+        }
+        if let Some(visible) = self.filter_marker_output(terminal_id, data) {
             return visible;
         }
         data.to_string()
+    }
+
+    /// integration 注入回显过滤。命中即一次性移除抑制器并递归处理剩余尾部；
+    /// 窗口内无法分类的输出保持隔离（fail closed），窗口截止或超限后降级直通。
+    fn drain_integration_echo(&self, terminal_id: &str, data: &str) -> Option<String> {
+        let mut suppressions = self.integration_suppressions.lock().ok()?;
+        let suppressor = suppressions.get_mut(terminal_id)?;
+
+        if suppressor.degraded {
+            return Some(suppressor.degraded_pass(data));
+        }
+
+        // 窗口截止或缓冲超限：bootstrap 钩子大概率未安装或链路异常。转入
+        // 降级直通，先按严格判定清理缓冲，避免终端在钩子缺失时静默假死。
+        if Instant::now() >= suppressor.deadline
+            || suppressor.pending.len().saturating_add(data.len()) > SUPPRESSION_BUFFER_LIMIT
+        {
+            suppressor.degraded = true;
+            let flushed = suppressor.take_redacted_pending_conclusive();
+            let visible = suppressor.degraded_pass(data);
+            return Some(format!("{flushed}{visible}"));
+        }
+
+        suppressor.pending.push_str(data);
+        if let Some(range) = suppressor.posix_echo_range() {
+            let mut visible = suppressor.pending[..range.start].to_string();
+            let mut trailing = &suppressor.pending[range.end..];
+            // 没有提示符前缀时整行都是内部注入，连同行结束符一起删除；
+            // 提示符同行时保留换行，让后续提示符仍从下一行开始。
+            if visible.is_empty() {
+                trailing = trailing
+                    .strip_prefix("\r\n")
+                    .or_else(|| trailing.strip_prefix(['\r', '\n']))
+                    .unwrap_or(trailing);
+            }
+            let trailing = trailing.to_string();
+            suppressions.remove(terminal_id);
+            drop(suppressions);
+            visible.push_str(&self.visible_output(terminal_id, &trailing));
+            return Some(visible);
+        }
+        if let Some(range) = suppressor.complete_internal_line_range() {
+            let mut visible = suppressor.pending[..range.start].to_string();
+            let trailing = suppressor.pending[range.end..].to_string();
+            suppressions.remove(terminal_id);
+            drop(suppressions);
+            visible.push_str(&self.visible_output(terminal_id, &trailing));
+            return Some(visible);
+        }
+        // 无法分类的输出在可信 nonce-bound OSC 或窗口截止前保持隔离，这样
+        // ANSI 重绘或 token 截断不会把 source/Base64 注入行提前泄漏到终端。
+        Some(String::new())
+    }
+
+    /// Marker 包装器输出过滤。完成检测优先于一切分类：无 PTY echo 时首个
+    /// 完整 Marker 就是完成信号，必须先于“包装器回显”识别。
+    fn filter_marker_output(&self, terminal_id: &str, data: &str) -> Option<String> {
+        let mut suppressions = self.marker_suppressions.lock().ok()?;
+        let suppressor = suppressions.get_mut(terminal_id)?;
+
+        // 窗口截止或缓冲超限：转入降级直通，先交还缓冲中可安全显示的内容。
+        // 执行已超时/被取消而 OSC 迟迟未到时，过滤器不能再吞任何输出。
+        let mut prefix = String::new();
+        if !suppressor.degraded
+            && (Instant::now() >= suppressor.deadline
+                || suppressor.pending.len().saturating_add(data.len()) > SUPPRESSION_BUFFER_LIMIT)
+        {
+            suppressor.degraded = true;
+            prefix = suppressor.drain_visible_lines();
+        }
+
+        suppressor.pending.push_str(data);
+        if let Some((marker_start, marker_end, _)) =
+            marker_completion(&suppressor.pending, &suppressor.marker)
+            && suppressor.pending[..marker_start]
+                .find(&suppressor.marker)
+                .is_none()
+        {
+            // prefix 是本调用降级时冲刷的缓冲内容，输出顺序先于当前 pending。
+            let mut visible = prefix;
+            if !suppressor.degraded && !suppressor.wrapper_echo_hidden {
+                // 无 echo：首个完整 Marker 就是完成信号，先合成命令回显。
+                visible.push_str(&format!("{}\r\n", suppressor.display_command));
+            }
+            // echo 模式回显已合成；降级模式输出已实时放行，不再补一条位置
+            // 可能错误的回显。
+            visible.push_str(&suppressor.pending[..marker_start]);
+            if !visible.ends_with('\r') && !visible.ends_with('\n') {
+                visible.push_str("\r\n");
+            }
+            let trailing = suppressor.pending[marker_end..].to_string();
+            let owner = suppressor.owner.clone();
+            suppressions.remove(terminal_id);
+            drop(suppressions);
+            self.observe_marker_recovery(terminal_id, &owner);
+            visible.push_str(&self.visible_output(terminal_id, &trailing));
+            return Some(visible);
+        }
+
+        if suppressor.degraded {
+            prefix.push_str(&suppressor.drain_visible_lines());
+            return Some(prefix);
+        }
+
+        if !suppressor.wrapper_echo_hidden {
+            let Some(range) = wrapper_echo_range(&suppressor.pending, &suppressor.marker) else {
+                // 逻辑行未完结：整段缓冲（窗口与缓冲上限双重有界），等下一个
+                // 分块判定；无 echo 终端也在此等待首个完成 Marker。
+                return Some(prefix);
+            };
+            let mut visible = suppressor.pending[..range.start].to_string();
+            let trailing = suppressor.pending[range.end..].to_string();
+            suppressor.wrapper_echo_hidden = true;
+            let display_command = suppressor.display_command.clone();
+            suppressor.pending.clear();
+            drop(suppressions);
+            visible.push_str(&display_command);
+            visible.push_str("\r\n");
+            visible.push_str(&self.visible_output(terminal_id, &trailing));
+            return Some(visible);
+        }
+
+        // Marker 可能跨任意网络块，只保留足以构成前缀的 UTF-8 安全尾巴。
+        let retain_bytes = suppressor.marker.len().saturating_sub(1);
+        let mut emit_end = suppressor.pending.len().saturating_sub(retain_bytes);
+        while emit_end > 0 && !suppressor.pending.is_char_boundary(emit_end) {
+            emit_end -= 1;
+        }
+        let emitted: String = suppressor.pending.drain(..emit_end).collect();
+        prefix.push_str(&emitted);
+        Some(prefix)
+    }
+}
+
+fn finalize_expired_marker_recovery(integration: &mut SshIntegration) {
+    let Some((owner, observed_at)) = &integration.marker_observed else {
+        return;
+    };
+    if observed_at.elapsed() >= MARKER_RECOVERY_GRACE
+        && integration.gate_owner.as_deref() == Some(owner)
+    {
+        integration.gate_owner = None;
+        integration.marker_observed = None;
     }
 }
 
@@ -421,6 +1027,12 @@ mod tests {
         registry
             .bind(workspace, terminal, 7)
             .expect("bind terminal")
+    }
+
+    /// 常规用例使用远未来截止时刻，专注于抑制窗口内的语义；降级直通语义由
+    /// 显式传入过去时刻的专属用例覆盖。
+    fn suppression_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(60)
     }
 
     #[test]
@@ -631,6 +1243,34 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_failure_maps_to_stable_visible_fallback_reasons() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+
+        assert_eq!(
+            registry.visible_unavailable_reason("ssh-1"),
+            "SSH_CONTROL_PLANE_UNAVAILABLE"
+        );
+        registry.register_integration_unavailable("ssh-1", "unsupported_shell");
+        assert_eq!(
+            registry.visible_unavailable_reason("ssh-1"),
+            "SSH_SHELL_UNSUPPORTED"
+        );
+        registry.register_integration_unavailable("ssh-1", "upload_remote_failed");
+        assert_eq!(
+            registry.visible_unavailable_reason("ssh-1"),
+            "SSH_INTEGRATION_UNAVAILABLE"
+        );
+
+        // 同一 terminal 后续成功注册时必须清除旧失败事实，等待可信 Prompt 事件。
+        registry.register_integration("ssh-1", "nonce-1");
+        assert_eq!(
+            registry.visible_unavailable_reason("ssh-1"),
+            "SSH_PROMPT_NOT_READY"
+        );
+    }
+
+    #[test]
     fn publish_fans_out_to_subscribers_and_drops_dead_ones() {
         let registry = SshTerminalRegistry::default();
         bind(&registry, "ws-1", "ssh-1");
@@ -665,7 +1305,12 @@ mod tests {
         let registry = SshTerminalRegistry::default();
         bind(&registry, "ws-1", "ssh-1");
         let path = "/tmp/nocterm-ssh-nonce.rc";
-        registry.begin_source_echo_suppression("ssh-1", path);
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            path,
+            Some("rm -f"),
+            suppression_deadline(),
+        );
 
         let visible = registry.visible_output(
             "ssh-1",
@@ -676,6 +1321,652 @@ mod tests {
         assert_eq!(
             registry.visible_output("ssh-1", "echo ok\r\n"),
             "echo ok\r\n"
+        );
+    }
+
+    #[test]
+    fn source_echo_suppression_hides_prompt_inline_command_without_newline() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        let path = "/tmp/nocterm-ssh-8a688ebbf852d2acb09e8f830fd5967c.rc";
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            path,
+            Some("rm -f"),
+            suppression_deadline(),
+        );
+
+        let first = registry.visible_output(
+            "ssh-1",
+            &format!("root@host:~#  source '{path}'; rm -f -- '/tmp/nocterm-ssh-"),
+        );
+        let second = registry.visible_output("ssh-1", "8a688ebbf852d2acb09e8f830fd5967c.rc'");
+
+        assert!(first.is_empty());
+        assert_eq!(second, "root@host:~# ");
+        assert_eq!(
+            registry.visible_output("ssh-1", "\rnext prompt# "),
+            "\rnext prompt# "
+        );
+    }
+
+    #[test]
+    fn source_echo_suppression_handles_carriage_return_terminated_echo() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        let path = "/tmp/nocterm-ssh-nonce.rc";
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            path,
+            Some("rm -f"),
+            suppression_deadline(),
+        );
+
+        let visible = registry.visible_output(
+            "ssh-1",
+            &format!("root@host:~#  source '{path}'; rm -f -- '{path}'\rroot@host:~# "),
+        );
+
+        assert_eq!(visible, "root@host:~# \rroot@host:~# ");
+    }
+
+    #[test]
+    fn trusted_prompt_finishes_bootstrap_suppression_when_pty_echo_is_disabled() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            "/tmp/nocterm-ssh-nonce-1.rc",
+            Some("rm -f"),
+            suppression_deadline(),
+        );
+
+        assert!(registry.visible_output("ssh-1", "root@host:~# ").is_empty());
+        let observation = registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+
+        assert!(observation.nonce_bound);
+        assert_eq!(
+            registry.finish_integration_echo_on_osc("ssh-1"),
+            "root@host:~# "
+        );
+        assert_eq!(
+            registry.visible_output("ssh-1", "echo ready\r\n"),
+            "echo ready\r\n"
+        );
+    }
+
+    #[test]
+    fn bootstrap_suppression_degrades_to_redacted_pass_through_after_overflow() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            "/tmp/nocterm-ssh-nonce-1.rc",
+            Some("rm -f"),
+            suppression_deadline(),
+        );
+
+        // 超限触发降级：单个无换行的超长行按“必然是用户数据”原样放行，
+        // 不再像旧实现那样从超限时刻起永久吞输出。
+        let oversized = "x".repeat(SUPPRESSION_BUFFER_LIMIT + 1);
+        assert_eq!(registry.visible_output("ssh-1", &oversized), oversized);
+        assert_eq!(
+            registry.visible_output("ssh-1", "user output\r\n"),
+            "user output\r\n"
+        );
+        let forged = registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("wrong".into()),
+            },
+        );
+        assert!(!forged.nonce_bound);
+        // 降级直通仍剔除可确证的注入行（携带本会话随机路径）。
+        let injected = registry.visible_output(
+            "ssh-1",
+            " source '/tmp/nocterm-ssh-nonce-1.rc'; rm -f -- '/tmp/nocterm-ssh-nonce-1.rc'\r\n",
+        );
+        assert!(injected.is_empty());
+
+        let trusted = registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(trusted.nonce_bound);
+        // 降级期间完整行已实时交还，缓冲只剩未终结行尾（此处为空）。
+        assert!(registry.finish_integration_echo_on_osc("ssh-1").is_empty());
+        assert_eq!(registry.visible_output("ssh-1", "visible"), "visible");
+    }
+
+    #[test]
+    fn posix_bootstrap_suppression_degrades_after_deadline_and_keeps_output_flowing() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        // 截止时刻在过去：模拟钩子安装失败后远端继续输出。
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            "/tmp/nocterm-ssh-nonce-1.rc",
+            Some("rm -f"),
+            Instant::now() - Duration::from_millis(1),
+        );
+
+        // 降级直通按完整逻辑行放行；未终结行在换行到达时交还。
+        assert!(registry.visible_output("ssh-1", "root@host:~# ").is_empty());
+        assert_eq!(
+            registry.visible_output("ssh-1", "\r\n"),
+            "root@host:~# \r\n"
+        );
+        // POSIX 注入行凭随机路径仍可确证并被剔除。
+        let injected = registry.visible_output(
+            "ssh-1",
+            " source '/tmp/nocterm-ssh-nonce-1.rc'; rm -f -- '/tmp/nocterm-ssh-nonce-1.rc'\r\n",
+        );
+        assert!(injected.is_empty());
+        assert_eq!(
+            registry.visible_output("ssh-1", "echo alive\r\n"),
+            "echo alive\r\n"
+        );
+    }
+
+    #[test]
+    fn powershell_degraded_pass_through_never_swallows_user_commands() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            "FromBase64String",
+            None,
+            Instant::now() - Duration::from_millis(1),
+        );
+
+        // PowerShell 的固定 token 是通用 API 名，单独出现不得吞掉用户命令。
+        assert_eq!(
+            registry.visible_output("ssh-1", "grep FromBase64String log.txt\r\n"),
+            "grep FromBase64String log.txt\r\n"
+        );
+        // 叠加注入语法特征（nonce 绑定或 scriptblock 解码）才判定为内部行。
+        let injected = registry.visible_output(
+            "ssh-1",
+            " $env:NOCTERM_OSC_NONCE='abc'; . ([scriptblock]::Create([Convert]::FromBase64String('QQ==')))\r\n",
+        );
+        assert!(injected.is_empty());
+        assert_eq!(
+            registry.visible_output("ssh-1", "Write-Output ok\r\n"),
+            "Write-Output ok\r\n"
+        );
+    }
+
+    #[test]
+    fn powershell_integration_echo_suppression_preserves_same_chunk_prompt() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            "FromBase64String",
+            None,
+            suppression_deadline(),
+        );
+
+        let visible = registry.visible_output(
+            "ssh-1",
+            " $env:NOCTERM_OSC_NONCE='abc'; . ([Convert]::FromBase64String('QQ=='))\r\nPS C:\\> ",
+        );
+
+        assert_eq!(visible, "PS C:\\> ");
+        assert_eq!(
+            registry.visible_output("ssh-1", "Write-Output ok\r\n"),
+            "Write-Output ok\r\n"
+        );
+    }
+
+    #[test]
+    fn integration_echo_suppression_handles_ansi_redraw_and_truncated_tokens() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            "FromBase64String",
+            None,
+            suppression_deadline(),
+        );
+
+        let ansi_redraw = registry.visible_output(
+            "ssh-1",
+            " $env:NOCTERM_OSC_NONCE='abc'; [Convert]::FromBase64\x1b[31mString('QQ==')\x1b[0m\r\nPS C:\\> ",
+        );
+        assert_eq!(ansi_redraw, "PS C:\\> ");
+        assert!(!ansi_redraw.contains("FromBase64"));
+
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            "/tmp/nocterm-ssh-expected.rc",
+            Some("rm -f"),
+            suppression_deadline(),
+        );
+        let truncated = registry.visible_output(
+            "ssh-1",
+            " source '/tmp/nocterm-ssh-truncated.rc'; rm -f -- '/tmp/nocterm-ssh-truncated.rc'\r\nuser@host:~$ ",
+        );
+        assert_eq!(truncated, "user@host:~$ ");
+        assert!(!truncated.contains("source"));
+    }
+
+    #[test]
+    fn marker_filter_hides_wrapper_and_same_chunk_marker_then_recovers_its_gate() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+
+        let marker = "__NOCTERM_SSH_AI_DONE_abc__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "printf ok",
+            suppression_deadline(),
+        );
+        let visible = registry.visible_output(
+            "ssh-1",
+            &format!(" wrapper printf '{marker}%s__'\r\ncommand output\r\n{marker}7__\r\nprompt$ "),
+        );
+
+        assert_eq!(visible, "printf ok\r\ncommand output\r\nprompt$ ");
+        assert!(!visible.contains(marker));
+        assert!(!visible.contains("wrapper"));
+        assert!(registry.input_gated("ssh-1"));
+        std::thread::sleep(MARKER_RECOVERY_GRACE);
+        assert!(!registry.input_gated("ssh-1"));
+        assert!(!registry.prompt_ready("ssh-1"));
+    }
+
+    #[test]
+    fn marker_filter_reassembles_split_marker_without_buffering_normal_output() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+
+        let marker = "__NOCTERM_SSH_AI_DONE_split__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "echo hello",
+            suppression_deadline(),
+        );
+        assert_eq!(
+            registry.visible_output("ssh-1", &format!(" wrapper {marker}%s__\r\n")),
+            "echo hello\r\n"
+        );
+        let first = registry.visible_output("ssh-1", "streamed output\r\n__NOCTERM_SSH_AI_");
+        let second = registry.visible_output("ssh-1", "DONE_split__0__\r\nprompt$ ");
+        assert_eq!(format!("{first}{second}"), "streamed output\r\nprompt$ ");
+        assert!(registry.input_gated("ssh-1"));
+        std::thread::sleep(MARKER_RECOVERY_GRACE);
+        assert!(!registry.input_gated("ssh-1"));
+    }
+
+    #[test]
+    fn marker_filter_recovers_when_the_remote_pty_does_not_echo_the_wrapper() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+        let marker = "__NOCTERM_SSH_AI_DONE_noecho__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "printf ok",
+            suppression_deadline(),
+        );
+
+        let visible = registry.visible_output(
+            "ssh-1",
+            &format!("first line\r\nsecond line\r\n{marker}9__\r\nprompt$ "),
+        );
+
+        assert_eq!(
+            visible,
+            "printf ok\r\nfirst line\r\nsecond line\r\nprompt$ "
+        );
+        assert!(!visible.contains(marker));
+        assert!(registry.input_gated("ssh-1"));
+        std::thread::sleep(MARKER_RECOVERY_GRACE + Duration::from_millis(20));
+        assert!(!registry.input_gated("ssh-1"));
+        assert!(!registry.prompt_ready("ssh-1"));
+    }
+
+    #[test]
+    fn marker_filter_preserves_output_before_wrapper_echo() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+
+        let marker = "__NOCTERM_SSH_AI_DONE_background__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "echo hello",
+            suppression_deadline(),
+        );
+        let visible = registry.visible_output(
+            "ssh-1",
+            &format!(
+                "background notice\r\n wrapper {marker}%s__\r\ncommand output\r\n{marker}0__\r\nprompt$ "
+            ),
+        );
+
+        assert_eq!(
+            visible,
+            "background notice\r\necho hello\r\ncommand output\r\nprompt$ "
+        );
+        assert!(!visible.contains("wrapper"));
+    }
+
+    #[test]
+    fn marker_filter_bounds_no_echo_output_until_trusted_prompt() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            "__NOCTERM_SSH_AI_DONE_missing__",
+            "exec-1",
+            "stream-forever",
+            suppression_deadline(),
+        );
+
+        // 超限触发降级：单个无换行的超长行原样放行（必然是用户数据），
+        // 不再像旧实现那样从超限时刻起永久吞输出。
+        let oversized = "x".repeat(SUPPRESSION_BUFFER_LIMIT + 1);
+        assert_eq!(registry.visible_output("ssh-1", &oversized), oversized);
+        assert_eq!(registry.visible_output("ssh-1", &oversized), oversized);
+        let suppressions = registry.marker_suppressions.lock().unwrap();
+        let suppression = suppressions.get("ssh-1").expect("bounded suppression");
+        assert!(suppression.degraded);
+        assert!(suppression.pending.is_empty());
+        drop(suppressions);
+
+        let observation = registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(observation.nonce_bound);
+        assert!(!observation.command_finished);
+        assert!(registry.finish_marker_output_on_osc("ssh-1").is_empty());
+        assert_eq!(
+            registry.visible_output("ssh-1", "next prompt$ "),
+            "next prompt$ "
+        );
+        assert!(registry.prompt_ready("ssh-1"));
+    }
+
+    #[test]
+    fn marker_filter_degrades_after_deadline_but_still_recovers_its_gate() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+
+        let marker = "__NOCTERM_SSH_AI_DONE_stuck__";
+        // 过滤窗口已过：模拟执行结束、Ctrl+C 被忽略且 OSC 永不到达的假死终端。
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "stream-forever",
+            Instant::now() - Duration::from_millis(1),
+        );
+
+        // 缓冲的业务输出随降级按完整行交还，后续输出实时透传；含 Marker
+        // 的行被剔除。
+        assert_eq!(
+            registry.visible_output("ssh-1", "buffered output\r\n"),
+            "buffered output\r\n"
+        );
+        let late_wrapper = registry.visible_output("ssh-1", &format!(" wrapper {marker}%s__\r\n"));
+        assert!(late_wrapper.is_empty());
+        assert_eq!(
+            registry.visible_output("ssh-1", "still streaming\r\n"),
+            "still streaming\r\n"
+        );
+
+        // 完成检测在降级下仍然生效：Marker 完成即释放 owner gate。
+        let completed = registry.visible_output("ssh-1", &format!("{marker}7__\r\n"));
+        assert!(completed.trim().is_empty());
+        assert!(registry.input_gated("ssh-1"));
+        std::thread::sleep(MARKER_RECOVERY_GRACE);
+        assert!(!registry.input_gated("ssh-1"));
+        assert!(!registry.prompt_ready("ssh-1"));
+    }
+
+    #[test]
+    fn marker_degrade_flush_is_not_lost_when_completion_arrives_in_the_same_call() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+
+        let marker = "__NOCTERM_SSH_AI_DONE_flush__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "echo hi",
+            suppression_deadline(),
+        );
+        // 窗口内无 echo：业务输出缓冲等待完成 Marker。
+        assert!(
+            registry
+                .visible_output("ssh-1", "line one\r\nline two\r\n")
+                .is_empty()
+        );
+        // 本块同时触发缓冲超限与完成检测：降级冲刷的行必须在完成处理前输出。
+        let visible = registry.visible_output(
+            "ssh-1",
+            &format!(
+                "{}{marker}7__\r\n",
+                "x".repeat(SUPPRESSION_BUFFER_LIMIT - 10)
+            ),
+        );
+        assert!(visible.starts_with("line one\r\nline two\r\n"));
+        assert!(!visible.contains(marker));
+        assert!(registry.input_gated("ssh-1"));
+        std::thread::sleep(MARKER_RECOVERY_GRACE);
+        assert!(!registry.input_gated("ssh-1"));
+    }
+
+    #[test]
+    fn trusted_prompt_event_after_marker_restores_prompt_readiness() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+        let marker = "__NOCTERM_SSH_AI_DONE_ready__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "true",
+            suppression_deadline(),
+        );
+        registry.visible_output("ssh-1", &format!("{marker}0__\r\n"));
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+
+        std::thread::sleep(MARKER_RECOVERY_GRACE + Duration::from_millis(20));
+        assert!(!registry.input_gated("ssh-1"));
+        assert!(registry.prompt_ready("ssh-1"));
+    }
+
+    #[test]
+    fn trusted_osc_completion_clears_interrupted_marker_filter_and_flushes_tail() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+
+        let marker = "__NOCTERM_SSH_AI_DONE_interrupted__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "sleep 10",
+            suppression_deadline(),
+        );
+        assert_eq!(
+            registry.visible_output("ssh-1", &format!(" wrapper {marker}%s__\r\n")),
+            "sleep 10\r\n"
+        );
+        let streamed =
+            registry.visible_output("ssh-1", "partial output before interrupt\r\nprompt$ ");
+        assert!(
+            registry
+                .record_integration_event(
+                    "ssh-1",
+                    &Osc633Event::CommandFinished {
+                        code: 130,
+                        nonce: Some("nonce-1".into()),
+                    },
+                )
+                .command_finished
+        );
+        let tail = registry.finish_marker_output_on_osc("ssh-1");
+
+        assert_eq!(
+            format!("{streamed}{tail}"),
+            "partial output before interrupt\r\nprompt$ "
+        );
+        assert_eq!(
+            registry.visible_output("ssh-1", "next output\r\n"),
+            "next output\r\n"
+        );
+        assert!(!registry.input_gated("ssh-1"));
+    }
+
+    #[test]
+    fn invalid_nonce_cannot_clear_interrupted_marker_filter() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+
+        let marker = "__NOCTERM_SSH_AI_DONE_interrupted__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "sleep 10",
+            suppression_deadline(),
+        );
+        assert!(
+            !registry
+                .record_integration_event(
+                    "ssh-1",
+                    &Osc633Event::CommandFinished {
+                        code: 0,
+                        nonce: Some("wrong-nonce".into()),
+                    },
+                )
+                .command_finished
+        );
+
+        assert!(registry.input_gated("ssh-1"));
+        assert!(
+            registry
+                .visible_output("ssh-1", "still filtered")
+                .is_empty()
         );
     }
 }

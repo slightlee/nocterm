@@ -131,7 +131,7 @@ export function resolveAiToolApproval(approvalId: string, sessionId: string, app
   return invoke<void>('ai_tool_approval_resolve', { approvalId, sessionId, approved });
 }
 
-/** 当前 SSH 连接是否启用终端可见执行；默认开启，可按连接切换为隔离执行。 */
+/** 当前 SSH 连接是否已在本次运行中显式启用终端可见执行。 */
 export function getAiSshVisibleEnabled(connectionId: number): Promise<boolean> {
   return invoke<boolean>('ai_ssh_visible_get', { connectionId });
 }

@@ -83,7 +83,7 @@ export interface AiPanelController {
   composerAttachments: AiComposerAttachments;
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
   commandPolicy: AiCommandPolicy;
-  /** 当前 SSH 连接是否启用可见执行；SSH 默认开启，非 SSH 目标恒为 false。 */
+  /** 当前 SSH 连接是否显式启用可见执行；非 SSH 目标恒为 false。 */
   sshVisibleEnabled: boolean;
   toggleSshVisibleEnabled: (enabled: boolean) => void;
   composerState: { draft: string; provider: AiProviderId; commandPolicy: AiCommandPolicy };
@@ -221,14 +221,14 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
   );
   const activeRemoteConnectionId =
     activeSession?.kind === 'remote' ? activeSession.connectionId : null;
-  const [sshVisibleEnabled, setSshVisibleEnabled] = useState(activeRemoteConnectionId !== null);
+  const [sshVisibleEnabled, setSshVisibleEnabled] = useState(false);
   const sshVisibleRequestRef = useRef(0);
   const activeRemoteConnectionIdRef = useRef(activeRemoteConnectionId);
   activeRemoteConnectionIdRef.current = activeRemoteConnectionId;
   useEffect(() => {
     const requestId = ++sshVisibleRequestRef.current;
-    // 后端以可见优先为默认；精确连接状态返回前保持同一语义，实际路由仍以后端为准。
-    setSshVisibleEnabled(activeRemoteConnectionId !== null);
+    // 可见执行需要按连接显式开启；读取权威状态前保持关闭，避免 UI 短暂误导。
+    setSshVisibleEnabled(false);
     if (!isDesktopRuntime() || activeRemoteConnectionId === null) {
       return;
     }

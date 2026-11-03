@@ -5,4 +5,5 @@ pub mod connection;
 pub mod credential;
 pub mod platform;
 pub mod settings;
+pub mod ssh_visible_protocol;
 pub mod terminal;

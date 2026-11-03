@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   executionEventToPresentation,
+  executionFallbackLabel,
   executionModeLabel,
   executionPhaseLabel,
   isExecutionHighRisk,
@@ -89,8 +90,20 @@ describe('executionPhaseLabel', () => {
 describe('executionModeLabel', () => {
   it('distinguishes visible terminal and independent exec modes', () => {
     expect(executionModeLabel('local_visible_osc')).toBe('当前终端 · Shell Integration');
+    expect(executionModeLabel('ssh_visible_marker')).toBe(
+      '当前终端 · Shell Integration + Marker 恢复'
+    );
     expect(executionModeLabel('ssh_independent_exec')).toBe('隔离执行 · SSH exec channel');
     expect(executionModeLabel('unselected')).toBe('执行模式待定');
+  });
+});
+
+describe('executionFallbackLabel', () => {
+  it('distinguishes unsupported shells from integration and prompt failures', () => {
+    expect(executionFallbackLabel('SSH_SHELL_UNSUPPORTED')).toContain('Shell 不支持');
+    expect(executionFallbackLabel('SSH_INTEGRATION_UNAVAILABLE')).toContain('初始化失败');
+    expect(executionFallbackLabel('SSH_CONTROL_PLANE_UNAVAILABLE')).toContain('控制面不可用');
+    expect(executionFallbackLabel('SSH_PROMPT_NOT_READY')).toContain('提示符未就绪');
   });
 });
 

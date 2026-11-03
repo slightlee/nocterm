@@ -116,7 +116,7 @@ Codex、Claude Code、Grok 分别在本地终端和 SSH 目标执行适用场景
 | 连续追问     | 完成检查后问 `刚才的结论依据是什么？`                                | 使用已有证据，不重复执行相同工具                   |
 | 目标隔离     | 在 SSH A 查询后切换到 SSH B                                          | 面板恢复 B 的独立会话；每轮只访问发送时目标        |
 | 本地上下文   | 在本地终端 `cd` 后询问当前目录                                       | 结果来自当前可见 PTY，而非 Provider cwd            |
-| SSH 默认可见 | 保持默认“终端可见”开启，在 SSH 目标执行通用命令和结构化检查          | 命令和输出进入发起终端，执行卡记录可见模式与退出码 |
+| SSH 显式可见 | 为当前连接开启“终端可见”，执行通用命令和结构化检查                   | 命令和输出进入发起终端，执行卡记录可见模式与退出码 |
 | SSH 显式隔离 | 关闭“终端可见”，执行通用命令及系统信息、进程、端口等结构化检查       | 当前终端不出现命令；执行卡标明未启用并走独立 exec  |
 | 选区分析     | 选择一段包含 ANSI 颜色的多行错误，点击选区旁“添加到 AI”              | 面板展开并显示可移除选区，不自动发送或附带其他历史 |
 | 双上下文     | 先添加文本文件，再从终端添加一段选区                                 | 文件与选区同时保留，可分别移除并共同发送           |
@@ -155,10 +155,13 @@ Codex、Claude Code、Grok 分别在本地终端和 SSH 目标执行适用场景
 17. 终端输出超过 128 KiB 时明确失败，不能用截断内容声称成功；
 18. Provider 单条消息超过 1 MiB、单轮累计超过 4 MiB、非法 UTF-8 或读取失败时终止当前任务，内存不持续增长；
 19. Bridge 在结果可能已经执行后断线时返回结果未知，不自动重放。
-20. SSH“终端可见”按 connection ID 隔离：在 A 关闭后切换到 B，B 仍保持默认开启；重新切回 A 时状态恢复，且不能把命令写入同一连接的其他终端 generation；
+20. SSH“终端可见”默认关闭并按 connection ID 隔离：只开启 A 后切换到 B，B 仍保持关闭；重新切回 A 时本次运行内状态恢复，且不能把命令写入同一连接的其他终端 generation；
 21. SSH“终端可见”开启时，在 Prompt 未就绪、用户刚输入导致 Prompt 失效或 AI gate 已占用时执行命令，必须安全回退独立 exec，并分别显示稳定降级原因；不得丢命令、重复执行或静默改用本机；
-22. SSH 可见命令执行期间尝试键盘输入和粘贴，确认输入被门控；停止、超时、正常完成和终端断开后 gate 均释放。命令最后一块输出与同块 OSC 完成信号同时到达时，执行卡和终端都保留完整尾部输出及真实退出码；
+22. SSH 可见命令执行期间尝试键盘输入和粘贴，确认输入被门控；停止、超时、正常完成和终端断开后 gate 均释放。命令最后一块输出与同块 OSC 完成信号同时到达时，执行卡和终端都保留完整尾部输出及真实退出码；可信完成信号与取消或输出超限并发时不得再向已恢复的提示符写入 Ctrl+C。Marker 包装器被中断且未输出 Marker 时，可信 nonce 的 OSC D 必须清理过滤器并恢复后续终端输出，无效 nonce 不得清理过滤器或释放 gate；模拟无 PTY echo、无 OSC D 且远端忽略 Ctrl+C 的持续输出，确认 Marker 抑制缓冲不超过 128 KiB、执行截止加余量后过滤窗口关闭并降级为只剔除含 Marker 行的直通，用户输出不得被无限吞掉，后续可信 A/D 或终端解绑仍可清理状态；
 23. 重启应用后在 Provider 监听建立前产生的 execution 事件能由持久化 ledger 快照补齐，执行卡按 sequence 合并且不重复。
+24. 在专用 bash/zsh 测试环境中使本次命令的 OSC D 完成信号不可用但保留已建立的 Prompt Ready，确认 owner-bound Marker 在优先窗口后返回真实退出码并释放 gate，但不恢复 Prompt Ready；若后续仍未收到可信 nonce-bound A/D，下一次 AI 命令必须以 `prompt_not_ready` 降级 independent exec。分别在 PTY echo 开启和 `stty -echo` 下验证终端只显示原命令和完整业务输出，不显示函数包装器或 Marker，且无回显时不能丢失第一行；包装器回显前到达的后台异步输出必须保留。未建立 OSC Prompt Ready、fish 或 unsupported shell 不得因此获得 Marker 可见执行能力；
+25. Windows OpenSSH 默认 Shell 分别配置为 PowerShell 7 和 Windows PowerShell 5.1：确认双探针识别 PowerShell，注入行与 Base64 不显示，远端不创建 Nocterm 临时脚本，Prompt Ready 只接受匹配 nonce 的 D/A；验证成功、native 非零退出码、native 失败后紧接 cmdlet 失败（不得复用陈旧的 `$LASTEXITCODE`）、`Set-Location`、Ctrl+C、窄窗口和回退独立 exec。默认 Shell 为 cmd.exe 时必须显示不支持原因并使用独立 exec，不得尝试 PowerShell Marker 包装；
+26. 在 bootstrap 注入前关闭远端 PTY echo，确认首个可信 nonce-bound A/D 后提示符和后续输出恢复显示；模拟注入回显被 ANSI 重绘或无法匹配 token，确认窗口内内部 source/Base64 不泄漏、缓冲不超过 128 KiB，错误 nonce 不得提前结束抑制；模拟远端钩子安装失败（截断注入或 5 秒窗口超时），确认抑制降级为只剔除可确证内部行的直通，用户命令（包括单独包含 `FromBase64String` 的 PowerShell 命令）不被吞掉，终端不出现假死；
 
 ### 8.4 Provider 专项
 

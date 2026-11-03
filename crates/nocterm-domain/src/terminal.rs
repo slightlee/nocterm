@@ -19,8 +19,8 @@ pub struct OpenedTerminal {
 
 /// SSH bootstrap 成功后注入的 shell integration 计划。
 ///
-/// nonce 是完成信号的关联标识（非密码学认证）；shell 只包含第一期支持矩阵内
-/// 已通过真实测试的 kind。
+/// nonce 是完成信号的关联标识（非密码学认证）；shell 只包含已具备 bootstrap
+/// 与协议测试的 kind。真实服务器验收状态由测试矩阵记录，不能由枚举成员推断。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshShellIntegrationPlan {
     pub nonce: String,
@@ -31,6 +31,8 @@ pub struct SshShellIntegrationPlan {
 pub enum SshShellKind {
     Bash,
     Zsh,
+    Fish,
+    PowerShell,
 }
 
 impl SshShellKind {
@@ -38,6 +40,8 @@ impl SshShellKind {
         match self {
             Self::Bash => "bash",
             Self::Zsh => "zsh",
+            Self::Fish => "fish",
+            Self::PowerShell => "powershell",
         }
     }
 }

@@ -38,7 +38,7 @@ interface AiComposerProps {
   onProviderChange: (provider: AiProviderId) => void;
   commandPolicy: AiCommandPolicy;
   onCommandPolicyChange: (policy: AiCommandPolicy) => void;
-  /** 当前 SSH 连接是否启用可见执行；默认开启。 */
+  /** 当前 SSH 连接是否已显式启用可见执行。 */
   sshVisibleEnabled: boolean;
   showSshVisibleToggle: boolean;
   onSshVisibleToggle: (enabled: boolean) => void;
@@ -152,7 +152,7 @@ export function AiComposer({
             {showSshVisibleToggle ? (
               <label
                 className={styles.sshVisibleToggle}
-                title="默认将 AI 命令写入当前 SSH 终端；关闭后使用隔离通道，条件不满足时也会安全回退"
+                title="开启后优先将 AI 命令写入当前 SSH 终端；条件不满足时安全回退隔离通道"
               >
                 <input
                   checked={sshVisibleEnabled}

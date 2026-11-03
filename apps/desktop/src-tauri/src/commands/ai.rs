@@ -81,18 +81,25 @@ pub fn ai_conversation_reset(
     Ok(())
 }
 
-/// 当前连接是否启用 SSH 可见执行；默认开启，可按连接显式切换为隔离执行。
+/// 当前连接是否已在本次运行中显式启用 SSH 可见执行。
 #[tauri::command]
 pub fn ai_ssh_visible_get(state: State<'_, AppState>, connection_id: i64) -> bool {
     state.ai_gateway().ssh_visible_enabled(connection_id)
 }
 
-/// 按连接设置 SSH 可见执行；关闭时强制使用独立 exec，重启后恢复可见优先。
+/// 按连接设置 SSH 可见执行；设置仅驻留内存，重启后恢复安全的隔离执行。
 #[tauri::command]
-pub fn ai_ssh_visible_set(state: State<'_, AppState>, connection_id: i64, enabled: bool) {
+pub fn ai_ssh_visible_set(
+    state: State<'_, AppState>,
+    connection_id: i64,
+    enabled: bool,
+) -> Result<(), String> {
+    if connection_id <= 0 {
+        return Err("SSH 连接标识无效".to_string());
+    }
     state
         .ai_gateway()
-        .set_ssh_visible_enabled(connection_id, enabled);
+        .set_ssh_visible_enabled(connection_id, enabled)
 }
 
 #[tauri::command]

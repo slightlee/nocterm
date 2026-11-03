@@ -102,8 +102,9 @@ export function executionModeLabel(mode: AiExecutionPresentation['executionMode'
     case 'ssh_visible_osc':
       return '当前终端 · Shell Integration';
     case 'local_visible_marker':
-    case 'ssh_visible_marker':
       return '当前终端 · Marker 探针';
+    case 'ssh_visible_marker':
+      return '当前终端 · Shell Integration + Marker 恢复';
     case 'ssh_independent_exec':
       return '隔离执行 · SSH exec channel';
     case 'unselected':
@@ -121,6 +122,12 @@ export function executionFallbackLabel(reason: string | null): string | null {
       return '当前连接未启用终端可见执行';
     case 'SSH_PROMPT_NOT_READY':
       return '终端提示符未就绪，已安全回退';
+    case 'SSH_SHELL_UNSUPPORTED':
+      return '当前远程 Shell 不支持终端可见执行，已隔离执行';
+    case 'SSH_INTEGRATION_UNAVAILABLE':
+      return 'Shell Integration 初始化失败，已隔离执行';
+    case 'SSH_CONTROL_PLANE_UNAVAILABLE':
+      return '终端控制面不可用，已隔离执行';
     case 'SSH_PROMPT_CHANGED':
       return '检测到用户输入，已安全回退';
     default:

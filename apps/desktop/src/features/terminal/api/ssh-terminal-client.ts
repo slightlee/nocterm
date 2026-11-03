@@ -5,7 +5,7 @@ interface OpenTerminalResponse {
   terminalId: string;
   /** workspace 会话内的重连世代；后续 AI 可见执行用它校验目标一致性。 */
   terminalGeneration: number;
-  /** bootstrap 成功时注入的 shell（bash/zsh）；null 表示未注入。 */
+  /** bootstrap 成功时注入的 shell（bash/zsh/fish/PowerShell）；null 表示未注入。 */
   integrationShell: string | null;
   /** bootstrap 失败的降级原因；成功或未尝试时为 null。 */
   integrationFallbackReason: string | null;

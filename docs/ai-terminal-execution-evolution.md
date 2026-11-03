@@ -2,7 +2,7 @@
 
 > 状态：架构评审草案，不代表当前已经实现的产品行为
 >
-> 文档版本：0.5
+> 文档版本：0.6
 >
 > 评审基线：`main@1dfdaf5`
 >
@@ -19,7 +19,7 @@
 1. **路线 2 的轻量形态**：结构化 AI 命令执行卡和权威执行生命周期；
 2. **路线 3**：本地与 SSH 终端的 shell integration、提示符就绪和可信完成检测；
 3. SSH AI 命令在受支持环境中写入当前可见 PTY，命令与输出对用户实时可见；
-4. integration 不可用时使用 Marker 探针，仍不可用时保留独立 SSH exec channel 兜底；
+4. nonce-bound OSC 已证明 Prompt Ready 时允许 Marker 辅助完成恢复；integration 不可用时保留独立 SSH exec channel 兜底；
 5. 审批、执行、可观测、审计和失败恢复都以同一个后端执行状态机为事实来源。
 
 本文不是实施任务清单，也不表示已经批准修改默认行为。各阶段必须单独建立 Issue、分支和 Pull Request，
@@ -41,7 +41,7 @@
 - 批准阶段 1B：基于后端权威投影建设路线 2 轻量执行卡；
 - 阶段 2 需要在 dispatch receipt、gate owner 和 SSH terminal generation 契约评审通过后实施；
 - 阶段 3 只批准为具有停止条件的 SSH shell integration 技术预研；
-- 阶段 4 已完成精确终端绑定和安全降级；当前产品决策为默认可见优先，用户可按连接显式隔离；
+- 阶段 4 的代码已完成精确终端绑定和安全降级，真实环境退出标准尚未完成；当前保持默认隔离，用户可按连接显式开启；
 - 暂不批准完整 Warp 式 Block Terminal；
 - 独立 SSH exec channel 必须长期保留为隔离执行能力和最终兜底。
 
@@ -134,7 +134,7 @@ Nocterm 的实现必须基于自身 Rust/Tauri 架构独立完成。
    跨越外部副作用边界后不承诺 exactly-once，不能确认结果时进入 `ResultUnknown`；
 5. AI 面板展示结构化执行卡，不依赖 Provider 文本推断真实执行状态；
 6. SSH 可见执行必须精确绑定到任务发起时的具体终端及其 generation；
-7. 支持环境优先使用 nonce-bound OSC 633，之后使用 Marker 探针；
+7. 支持环境使用 nonce-bound OSC 633 建立 readiness，bash/zsh 可用 owner-bound Marker 辅助完成恢复；
 8. 不支持或不可信环境使用现有独立 SSH exec；
 9. 可见执行时命令和输出进入当前 xterm，控制协议不污染可见输出；
 10. 降级、取消、超时、断连和未知结果都具有稳定、可解释的状态；
@@ -191,7 +191,7 @@ Nocterm 的实现必须基于自身 Rust/Tauri 架构独立完成。
 | `local_visible_osc`    |       是 |                  是 | nonce-bound OSC 633            |
 | `local_visible_marker` |       是 |                  是 | 随机 Marker + Shell 退出码探针 |
 | `ssh_visible_osc`      |       是 |                  是 | nonce-bound OSC 633            |
-| `ssh_visible_marker`   |       是 |        受包装器约束 | 随机 Marker + Shell 退出码探针 |
+| `ssh_visible_marker`   |       是 |        受包装器约束 | OSC 优先 + Marker 完成恢复     |
 | `ssh_independent_exec` |       否 |                  否 | SSH 协议 EOF + `exit-status`   |
 
 Marker 包装器是否使用子 shell、是否继承 alias/function、`cd` 是否持久化必须由最终协议明确，
@@ -495,11 +495,11 @@ flowchart TD
     TARGET --> RESERVE["取得终端门控与输出订阅"]
     RESERVE --> OSC{"nonce OSC Integration<br/>且 Prompt Ready？"}
 
-    OSC -->|是| VOSC["可见 PTY + 裸命令"]
-    OSC -->|否| MARKER{"Shell 已知、Prompt Ready<br/>且 Marker 可安全过滤？"}
+    OSC -->|是| MARKER{"bash/zsh Marker<br/>恢复能力可用？"}
+    OSC -->|否| FALLBACK{"允许独立 exec 降级？"}
 
-    MARKER -->|是| VMARK["可见 PTY + Marker 包装器"]
-    MARKER -->|否| FALLBACK{"允许独立 exec 降级？"}
+    MARKER -->|是| VMARK["可见 PTY + OSC 优先<br/>Marker 完成恢复"]
+    MARKER -->|否| VOSC["可见 PTY + OSC 完成"]
 
     FALLBACK -->|是| EXEC["SSH Independent Exec"]
     FALLBACK -->|否| FAIL["返回需要用户决定的稳定错误"]
@@ -513,8 +513,8 @@ flowchart TD
 
 只有在**命令尚未 dispatch**时允许切换策略：
 
-- integration 不可用可以降级到 Marker；
-- Marker 不满足安全前置条件可以降级到独立 exec；
+- integration 或 Prompt Ready 不可用时直接降级独立 exec，Marker 不得创建 readiness；
+- 已验证 OSC 控制面的 bash/zsh 可以附加 Marker 包装器，OSC 完成信号仍具有优先权；
 - 已向可见 PTY 写入任何命令字节后，不得再执行独立 exec 作为重试；
 - `ResultUnknown` 不得自动降级或重试；
 - 降级到独立 exec 后，Provider 结果和执行卡必须标记不继承可见终端状态；
@@ -632,7 +632,7 @@ type AiMessagePart =
 
 ```text
 当前终端 · Shell Integration
-当前终端 · Marker 探针
+当前终端 · Shell Integration + Marker 恢复
 隔离执行 · SSH exec channel
 ```
 
@@ -751,11 +751,9 @@ nonce **不是密码学认证**。远程服务器和运行中的 shell 能看到
 
 Prompt Ready 必须是显式状态，不使用“输出静默若干毫秒”替代。
 
-优先证据：
-
-1. nonce-bound OSC Prompt 事件；
-2. 已知 shell 下、受控 Marker readiness probe；
-3. 其他经测试的结构化 shell 信号。
+当前唯一已实现并允许 dispatch 的正面证据是 nonce-bound OSC Prompt 事件。
+Marker 只用于已取得该证据后的完成恢复，不参与 readiness 判定；其他结构化 Shell
+信号必须经过独立设计与真实测试后才能加入。
 
 以下情况不得写入可见 PTY：
 
@@ -808,12 +806,12 @@ Prompt Ready 必须是显式状态，不使用“输出静默若干毫秒”替�
 
 OSC 控制序列必须在 UTF-8 解码和 xterm 事件之前剥离，但 completion 事件需要进入控制面。
 
-### 10.8 Marker 探针执行
+### 10.8 Marker 完成恢复
 
 Marker 只在以下前置条件全部满足时使用：
 
 - 已识别 shell 类型；
-- Prompt Ready；
+- Prompt Ready 已由匹配 nonce 的 OSC 正面确认；
 - 包装器已通过当前 shell 的真实测试；
 - Marker 过滤可以跨分块、折行和 UTF-8 边界工作；
 - 不处于无法判断的 tmux/screen 或受限终端环境。
@@ -821,8 +819,8 @@ Marker 只在以下前置条件全部满足时使用：
 包装器设计要求：
 
 - 使用高熵随机 Marker；
-- 输出 START 和 END + 退出码；
-- 语法错误也能产生 END；
+- 输出一次性 END + 退出码；
+- 在当前 Shell 顶层使用 `eval`，普通语法错误也能产生 END，随机 cleanup 函数只清理内部状态并恢复原退出码；
 - 取消时 child 接收 Ctrl+C，wrapper 仍有机会报告恢复；
 - 禁用常见分页器，防止命令等待交互；
 - 明确是否使用子 shell；
@@ -830,6 +828,16 @@ Marker 只在以下前置条件全部满足时使用：
 - 内部包装器和 Marker 不进入 xterm 可见输出；
 - 必要时发送干净的合成命令回显；
 - 不依靠解析任意 Shell 文本来判断命令是否危险。
+
+当前实现只对 bash/zsh 开启该能力：Marker 按 execution 生成 128 位随机值，
+包装器回显与协议片段由跨块过滤器隐藏，终端显示合成的原命令，并保留包装器前后的
+业务或异步输出。执行器观察到 Marker 后保留 250ms OSC 优先窗口；窗口内收到
+nonce-bound D 时仍以 OSC 退出码完成，否则仅由相同 owner 返回结果并释放 gate，
+不恢复 Prompt Ready。下一次可见执行仍须等待可信 nonce-bound A/D，否则降级
+independent exec。无 echo 且 Marker/OSC 均缺失时过滤器最多缓冲 128 KiB；过滤
+窗口在执行截止加中断确认余量后结束，超限或超时都转入降级直通——完成检测仍然
+生效并据此释放 gate，其余输出只剔除含 Marker 的完整行，绝不无限吞输出。Marker
+不能激活未 bootstrap 的终端，也不能让 unsupported shell 绕过 independent exec。
 
 ### 10.9 独立 exec 兜底
 
@@ -864,16 +872,16 @@ terminal_control_plane_unavailable
 
 建议第一期只承诺：
 
-| 远程环境                        | Integration |       Marker |                Exec fallback |
-| ------------------------------- | ----------: | -----------: | ---------------------------: |
-| Linux OpenSSH + bash            |    预研目标 |     支持目标 |                     必须支持 |
-| Linux/macOS OpenSSH + zsh       |    预研目标 |     支持目标 |                     必须支持 |
-| fish                            |    暂不承诺 |     后续验证 |                     必须支持 |
-| Windows OpenSSH + PowerShell    |    暂不承诺 |     后续验证 |                     必须支持 |
-| cmd.exe                         |      不承诺 |     后续验证 |                     必须支持 |
-| ForceCommand / restricted shell |      不支持 | 原则上不支持 |           必须支持或明确失败 |
-| tmux / screen 内部 shell        |      不承诺 |       仅实验 |                     必须支持 |
-| 网络设备 CLI                    |      不适用 |       不适用 | 使用现有结构化或专用执行路径 |
+| 远程环境                        |  Integration |       Marker |                Exec fallback |
+| ------------------------------- | -----------: | -----------: | ---------------------------: |
+| Linux OpenSSH + bash            | 已实现待验收 |         支持 |                     必须支持 |
+| Linux/macOS OpenSSH + zsh       | 已实现待验收 |         支持 |                     必须支持 |
+| fish                            | 已实现待验收 |       不启用 |                     必须支持 |
+| Windows OpenSSH + PowerShell    | 已实现待验收 |       不启用 |                     必须支持 |
+| cmd.exe                         |       不支持 |       不启用 |                     必须支持 |
+| ForceCommand / restricted shell |       不支持 | 原则上不支持 |           必须支持或明确失败 |
+| tmux / screen 内部 shell        |       不承诺 |       仅实验 |                     必须支持 |
+| 网络设备 CLI                    |       不适用 |       不适用 | 使用现有结构化或专用执行路径 |
 
 ### 11.2 当前 integration 加固前置
 
@@ -998,7 +1006,7 @@ UI 不解析 stderr 或中文文本决定行为，所有分支依赖稳定 code 
 - 各执行模式使用次数；
 - integration 激活成功率；
 - Prompt Ready 等待时间与超时率；
-- Marker fallback 率；
+- Marker 完成恢复率；
 - 独立 exec fallback 率及原因；
 - 各模式成功、失败、取消、超时和 ResultUnknown 数量；
 - gate 持有时间；
@@ -1124,15 +1132,15 @@ sshMarkerFallback
 - 不支持环境正常回退；
 - integration 失败不影响普通 SSH 连接。
 
-### 阶段 4：SSH 可见执行灰度（已完成，默认值决策见阶段 5）
+### 阶段 4：SSH 可见执行灰度（代码完成，真实环境验收未完成）
 
-初始目标：按连接显式 opt-in，默认关闭；该灰度默认值已由阶段 5 的产品决策替代。
+当前目标：按连接显式 opt-in，默认关闭；真实环境退出标准通过后再评审默认值。
 
 策略顺序：
 
 ```text
 nonce-bound OSC
-    -> verified Marker
+    -> bash/zsh owner-bound Marker completion recovery
     -> independent exec
 ```
 
@@ -1146,9 +1154,9 @@ nonce-bound OSC
 
 ### 阶段 5：扩大矩阵与默认值评审
 
-当前产品已决定使用可见优先、隔离兜底；以下兼容矩阵仍需持续验证：
+当前产品保持隔离执行默认值；以下兼容矩阵通过后再评审可见优先：
 
-- 是否增加 fish、PowerShell、Windows OpenSSH；
+- 持续验证 fish、PowerShell 与 Windows OpenSSH 的真实环境兼容性；
 - 是否支持 tmux/screen；
 - 可见优先在各受支持 Shell 上的成功率；
 - 是否建设全局 operation center；
@@ -1244,7 +1252,7 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 - 路线 2 卡片可通过功能开关关闭，后端执行状态和审计仍保留；
 - SSH integration bootstrap 可独立关闭，连接恢复普通 `request_shell`；
 - SSH 可见执行可独立关闭，策略立即回到独立 exec；
-- Marker fallback 可独立关闭；
+- 关闭 SSH 可见执行会同时关闭 Marker 完成恢复；
 - 数据库 migration 必须向前兼容旧版本读取不到新表的场景；
 - 不通过删除用户数据库实现回滚；
 - 已存在 `ResultUnknown` 记录不能因关闭功能而自动清除或重试。
@@ -1356,12 +1364,14 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 
 ## 22. 评审记录
 
-| 日期       | 版本 | 评审角色                   | 结论                           | 主要调整                                                                                  |
-| ---------- | ---- | -------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------- |
-| 2026-10-29 | 0.1  | 初始架构草案               | 待评审                         | 建立路线 2 + 路线 3 组合、状态机、安全不变量和分阶段方案                                  |
-| 2026-10-30 | 0.3  | 阶段 0+3 实现评审（spike） | 代码已交付，真实环境验证待执行 | 交付 Stage 0 加固 + Stage 3 bootstrap spike；kill criteria 入档；Stage 4 前置条件部分就绪 |
-| 2026-11-01 | 0.4  | 阶段 4 opt-in 实现评审     | 自动化验证通过，真实环境待验收 | 交付按连接开关、精确 PTY 路由、统一工具执行路径、权威 ledger 与安全降级；Marker 仍未实现  |
-| 2026-11-02 | 0.5  | 默认行为产品决策           | 可见优先，隔离兜底             | SSH 默认尝试精确可见 PTY；用户关闭开关或安全前置不满足时使用独立 exec                     |
+| 日期       | 版本 | 评审角色                   | 结论                           | 主要调整                                                                                       |
+| ---------- | ---- | -------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| 2026-10-29 | 0.1  | 初始架构草案               | 待评审                         | 建立路线 2 + 路线 3 组合、状态机、安全不变量和分阶段方案                                       |
+| 2026-10-30 | 0.3  | 阶段 0+3 实现评审（spike） | 代码已交付，真实环境验证待执行 | 交付 Stage 0 加固 + Stage 3 bootstrap spike；kill criteria 入档；Stage 4 前置条件部分就绪      |
+| 2026-11-01 | 0.4  | 阶段 4 opt-in 实现评审     | 自动化验证通过，真实环境待验收 | 交付按连接开关、精确 PTY 路由、统一工具执行路径、权威 ledger 与安全降级；Marker 仍未实现       |
+| 2026-11-02 | 0.6  | Marker 安全边界复审        | 自动化验证通过，真实环境待验收 | Marker 限定为 OSC readiness 后的 bash/zsh 完成恢复；禁止用 Marker 激活普通或 unsupported shell |
+| 2026-11-02 | 0.7  | PowerShell SSH 扩展评审    | 自动化与本机 Shell 验证通过    | Windows OpenSSH PowerShell 使用双探针和内存注入；不创建远端临时文件，不启用 POSIX Marker       |
+| 2026-11-02 | 0.5  | 默认行为复审               | 显式开启，隔离默认             | 真实 SSH 矩阵未完成前不自动启用；用户开启后仍执行全部绑定、Prompt 与 gate 校验                 |
 
 后续每轮评审至少记录：
 
@@ -1383,11 +1393,10 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
   环境变量驱动的 `;nonce` 尾巴输出（关联标识，非密码学认证）；
 - **OSC 633 nonce 解析**：`633;A;<nonce>` 与 `633;D;<code>;<nonce>` 合法，
   空字段归一化为无 nonce，三字段以上畸形序列丢弃；旧格式完全兼容；
-- **SSH bootstrap**：登录 shell 探针（独立无 PTY channel，5s 超时）→ 随机
-  `/tmp/nocterm-ssh-<hex>.rc`（`umask 077` 创建、内容经 stdin 免转义、末尾
-  自删除）→ PTY channel 包装 exec（`bash --rcfile` / `env ZDOTDIR`）→ 300ms
-  失败监视窗（`ChannelMsg::Failure/Close/Eof` 即 ForceCommand/受限 shell 的
-  真实拒绝信号，预读数据块不丢失）；
+- **SSH bootstrap**：独立无 PTY channel 先执行 POSIX 探针，未命中时执行带固定
+  前缀的 PowerShell 探针；bash/zsh/fish 使用随机 `/tmp/nocterm-ssh-<hex>.rc`
+  （`umask 077` 创建、内容经 stdin 免转义），在既有登录 Shell 中 source 后立即
+  删除；PowerShell 在既有登录 Shell 中 Base64 解码并内存执行，不创建远端文件；
 - **fail-open 回退**：探针/上传/exec 任一失败 → 关闭尝试半区 → 重开 channel
   走普通 `request_shell` → `integration_fallback_reason` 入档；
   `open()` 绝不因 bootstrap 失败而失败；
@@ -1411,10 +1420,12 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 
 ### 23.3 遗留与后续
 
-- 真实 bash/zsh 服务器端到端测试未执行（需维护者环境）；
-- fish/PowerShell/Windows OpenSSH bootstrap 不在第一期矩阵；
+- 真实 bash/zsh/fish 服务器端到端测试未执行（需维护者环境）；
+- fish 已接入与 bash/zsh 相同的 nonce-bound OSC bootstrap，但仍待真实服务器验收；
+- PowerShell/Windows OpenSSH bootstrap 已实现；本机 PowerShell 7.5.4 与 Windows
+  PowerShell 5.1 已验证 nonce-bound D/A 序列，真实 Windows OpenSSH 服务端待验收；
 - `docs/testing.md` 已补充 SSH integration 与可见执行验收条目，真实结果仍待维护者记录；
-- Stage 4 的 opt-in、OSC 可见路由和 independent exec 降级已实现；verified Marker fallback 仍未实现，不得把它作为当前能力宣传。
+- Stage 4 的 opt-in、OSC 可见路由、bash/zsh Marker 完成恢复和 independent exec 降级已实现；Marker readiness 不存在独立路径，不得宣传为 unsupported shell 的可见执行能力。
 
 ## 24. 阶段 4 opt-in 实现记录（2026-11-01）
 
@@ -1425,23 +1436,26 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 - Prompt Ready 检查与 AI gate 预占原子完成；用户输入在同一锁内使 Prompt Ready 失效，竞态失败时回退 independent exec；
 - 通用命令与系统信息、进程、端口、日志、Docker 等结构化工具统一经过 approval/execution 编排，均遵循相同可见策略；
 - execution ledger 记录实际 mode、稳定 fallback reason、sequence 和生命周期；Provider 契约依据实际记录声明是否继承可见 Shell 状态；
+- bootstrap 不支持、初始化失败、控制面缺失与 Prompt 未就绪使用不同稳定 fallback reason，内部 probe/upload 错误不进入 ledger；
 - 取消和超时从 dispatching/dispatched 映射到明确终态；前端启动后通过 ledger 快照补齐监听窗口内丢失的事件；
 - SSH reader 先发布普通输出再提交同一数据块中的 OSC 完成事件，可见执行完成时再次排空队列，避免尾部输出丢失。
+- bash/zsh 可见命令使用 owner-bound 高熵 Marker 包装，OSC D 在 250ms 窗口内优先；Marker 跨块过滤且只能返回原 execution 的结果、释放其 gate，不能恢复 Prompt Ready，后续无可信 A/D 时下一次执行降级 independent exec；过滤器最多缓冲 128 KiB，窗口（执行截止 + 余量）过后降级直通，并保留包装器前的异步输出。
+- bootstrap 回显抑制最多缓冲 128 KiB，窗口 5 秒；首个可信 nonce-bound OSC 会结束抑制并在无回显时交还正常提示符。窗口内无法精确匹配 token 时保持 fail closed；超限或超时降级为只剔除可确证内部行的直通（PowerShell 固定 token 必须叠加注入语法特征，避免吞掉用户命令），避免钩子未安装时终端假死或内存无限增长。
 
 ### 24.2 当时边界
 
 - 默认路径仍是 independent exec，可见执行不是全局默认；
-- 当前可见路由要求可信的 nonce-bound OSC Prompt Ready，未实现 verified Marker fallback；
-- bash、zsh、自定义提示符、ForceCommand/受限 shell 以及 macOS/Windows 客户端的真实端到端矩阵尚未执行；
+- 当前可见路由仍要求可信的 nonce-bound OSC Prompt Ready；Marker 仅恢复完成信号，不能为 unsupported shell 建立 readiness；
+- bash、zsh、fish、Windows OpenSSH PowerShell、自定义提示符、ForceCommand/受限
+  shell 以及 macOS/Windows 客户端的真实端到端矩阵尚未执行；
 - 自动化测试证明路由、gate、持久化和尾部输出契约，不等价于真实 SSH 服务器验收。
 
-## 25. 默认可见优先决策（2026-11-02）
+## 25. 默认行为复审（2026-11-02）
 
-用户目标明确要求 AI 面板操作同步呈现在所连接终端。阶段 4 已具备精确终端绑定、
-Prompt Ready、输入门控和 dispatch 前降级，因此产品默认值调整为：
+用户目标要求 AI 面板操作可以同步呈现在所连接终端，但阶段 4 的真实环境退出标准
+尚未全部通过。精确绑定、Prompt Ready 和输入门控已经具备，因此当前决策为：
 
-- SSH 连接默认开启“终端可见”，优先向任务发起时绑定的精确 PTY 写入；
-- 用户关闭开关后，仅该 connection ID 强制使用独立 exec；
-- 应用重启后恢复可见优先，不持久化运行时偏好；
+- SSH 连接默认关闭“终端可见”，由用户按 connection ID 显式开启；
+- 应用重启后恢复隔离执行，不持久化尚未完成兼容验收的运行时偏好；
 - Prompt、generation、目标绑定或 gate 任一校验不满足时，继续安全降级独立 exec；
-- 默认值变化不改变阶段 4 的安全不变量，也不代表真实 Shell 兼容矩阵已经全部验收。
+- 真实 macOS/Windows 客户端和 Shell 矩阵通过后，再单独评审是否默认开启。

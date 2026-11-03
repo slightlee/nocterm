@@ -20,28 +20,40 @@
 //! 安全约束（演进方案 §10.3）：
 //! - 不修改用户持久 rc 文件；临时路径每次随机生成；
 //! - 远端以 `umask 077` 创建临时文件（0600 权限）；
-//! - rc 内容末尾自删除（source 持有的 fd 在 unlink 后仍可读完整内容）；
+//! - source 返回后由注入命令立即删除临时 rc，上传失败另走兜底清理；
 //! - 不把凭据、token、命令或完整环境写入临时脚本。
 
 use crate::terminal::shell_single_quoted;
 use nocterm_domain::terminal::{SshShellIntegrationPlan, SshShellKind};
 
-/// 登录 shell 探针命令：一次性输出四个版本变量的分隔串。
-/// 在用户登录 shell 下执行，版本变量非空即命中对应 shell。
+/// POSIX 登录 shell 探针：一次性输出 bash/zsh/fish 版本变量的分隔串。
 pub(super) const SHELL_PROBE_COMMAND: &str = "printf '%s|%s|%s|%s\\n' \"$BASH_VERSION\" \"$ZSH_VERSION\" \"$FISH_VERSION\" \"$POWERSHELL_VERSION\"";
+/// Windows OpenSSH 使用系统配置的默认 Shell 解释 exec 请求；POSIX 探针未命中时
+/// 再执行 PowerShell 语法，避免把错误输出误判成受支持 Shell。
+pub(super) const POWERSHELL_PROBE_COMMAND: &str = "$v=$PSVersionTable.PSVersion; if($null -ne $v){Write-Output ('__NOCTERM_POWERSHELL__|' + $v.ToString())}";
 
-/// 从探针输出解析受支持的 shell。首期矩阵只承诺 bash/zsh（§11.1）。
+/// 从探针输出解析受支持的 shell。PowerShell 使用带固定前缀的独立探针，
+/// 不能仅凭错误文本或环境变量猜测远端平台。
 pub(super) fn parse_shell_probe(output: &str) -> Option<SshShellKind> {
+    if output.lines().any(|line| {
+        line.trim()
+            .strip_prefix("__NOCTERM_POWERSHELL__|")
+            .is_some_and(|version| !version.trim().is_empty())
+    }) {
+        return Some(SshShellKind::PowerShell);
+    }
     let first_line = output.lines().next()?.trim();
     let mut fields = first_line.split('|');
     let bash = fields.next()?.trim();
     let zsh = fields.next()?.trim();
-    let _fish = fields.next()?.trim();
-    let _powershell = fields.next()?.trim();
+    let fish = fields.next()?.trim();
+    let _legacy_placeholder = fields.next()?.trim();
     if !bash.is_empty() {
         Some(SshShellKind::Bash)
     } else if !zsh.is_empty() {
         Some(SshShellKind::Zsh)
+    } else if !fish.is_empty() {
+        Some(SshShellKind::Fish)
     } else {
         None
     }
@@ -62,15 +74,32 @@ pub(super) fn rc_upload_command(path: &str) -> String {
 /// 不 source 用户 rc：login shell 已加载完整用户配置，这里只装钩子。
 /// 自删除由 `source_command` 的注入命令负责（见其文档）——integration 脚本
 /// 幂等守卫的 `return` 会跳过 rc 尾部的任何语句，删除不能放在 rc 内容里。
+/// PowerShell 不经过临时 rc（见 `integration_command` 的内存注入，nonce 绑定
+/// 在注入命令前缀完成），此处的 PowerShell 分支仅为匹配穷尽保留。
 pub(super) fn build_rc_content(plan: &SshShellIntegrationPlan, _path: &str) -> String {
     let integration = match plan.shell {
         SshShellKind::Bash => include_str!("../terminal/integration_bash.sh"),
         SshShellKind::Zsh => include_str!("../terminal/integration_zsh.zsh"),
+        SshShellKind::Fish => include_str!("../terminal/integration_fish.fish"),
+        // run_bootstrap 在上传前已对 PowerShell 提前返回，生产路径不可达。
+        SshShellKind::PowerShell => include_str!("../terminal/integration_pwsh.ps1"),
     };
-    format!(
-        "export NOCTERM_OSC_NONCE={}\n{integration}\n",
-        shell_single_quoted(&plan.nonce),
-    )
+    let nonce_assignment = match plan.shell {
+        SshShellKind::Bash | SshShellKind::Zsh => format!(
+            "export NOCTERM_OSC_NONCE={}",
+            shell_single_quoted(&plan.nonce)
+        ),
+        // nonce 由本机生成且只含十六进制字符；仍统一单引号，避免未来格式
+        // 扩展时把内容解释为 fish 命令替换或变量展开。
+        SshShellKind::Fish => format!(
+            "set -gx NOCTERM_OSC_NONCE {}",
+            shell_single_quoted(&plan.nonce)
+        ),
+        SshShellKind::PowerShell => {
+            format!("$env:NOCTERM_OSC_NONCE = '{}'", plan.nonce)
+        }
+    };
+    format!("{nonce_assignment}\n{integration}\n")
 }
 
 /// 注入命令：登录 shell 就绪后向 PTY 敲入，加载临时 rc 并立即删除。
@@ -85,19 +114,73 @@ pub(super) fn source_command(path: &str) -> String {
     format!(" source {quoted}; rm -f -- {quoted}\n")
 }
 
+/// 返回交互式 Shell 中实际注入的命令。PowerShell 直接在内存中解码脚本，
+/// 避免依赖 Windows 远端临时目录、ACL 与 POSIX 文件命令。
+pub(super) fn integration_command(plan: &SshShellIntegrationPlan) -> String {
+    match plan.shell {
+        SshShellKind::PowerShell => {
+            let encoded =
+                base64_encode(include_str!("../terminal/integration_pwsh.ps1").as_bytes());
+            format!(
+                " $env:NOCTERM_OSC_NONCE='{}'; . ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{}'))))\r\n",
+                plan.nonce, encoded
+            )
+        }
+        SshShellKind::Bash | SshShellKind::Zsh | SshShellKind::Fish => {
+            source_command(&remote_rc_path(&plan.nonce))
+        }
+    }
+}
+
+/// 注入回显过滤使用的唯一片段。只在 bootstrap 写入到首个换行期间生效，
+/// 不作为完成或 readiness 证据。
+pub fn integration_echo_token(plan: &SshShellIntegrationPlan) -> String {
+    match plan.shell {
+        SshShellKind::PowerShell => "FromBase64String".to_string(),
+        SshShellKind::Bash | SshShellKind::Zsh | SshShellKind::Fish => remote_rc_path(&plan.nonce),
+    }
+}
+
+/// 初始目录切换必须由远端 Shell 自己解释，不能用 POSIX 引号拼接 Windows 路径。
+pub(super) fn initial_directory_command(path: &str, shell: Option<SshShellKind>) -> String {
+    match shell {
+        Some(SshShellKind::PowerShell) => {
+            format!(
+                "Set-Location -LiteralPath '{}'\r\n",
+                path.replace('\'', "''")
+            )
+        }
+        _ => format!("cd {}\n", shell_single_quoted(path)),
+    }
+}
+
 /// 阶段 1：在独立无 PTY channel 上执行登录 shell 探针。
 ///
 /// 失败（超时、通道拒绝、输出不可读）统一返回 Err，由调用方降级。
 pub(super) async fn exec_probe(
     handle: &russh::client::Handle<super::connection::ClientHandler>,
 ) -> Result<String, &'static str> {
-    eprintln!("[nocterm-ssh-bootstrap] 阶段 1：探测登录 shell …");
+    let posix_result = exec_probe_command(handle, SHELL_PROBE_COMMAND, "POSIX").await;
+    if let Ok(output) = &posix_result
+        && parse_shell_probe(output).is_some()
+    {
+        return posix_result;
+    }
+    exec_probe_command(handle, POWERSHELL_PROBE_COMMAND, "PowerShell").await
+}
+
+async fn exec_probe_command(
+    handle: &russh::client::Handle<super::connection::ClientHandler>,
+    command: &str,
+    label: &str,
+) -> Result<String, &'static str> {
+    eprintln!("[nocterm-ssh-bootstrap] 阶段 1：探测 {label} 登录 shell …");
     let channel = handle.channel_open_session().await.map_err(|error| {
         eprintln!("[nocterm-ssh-bootstrap] 探针通道打开失败：{error}");
         "probe_channel_failed" as &'static str
     })?;
     channel
-        .exec(false, SHELL_PROBE_COMMAND.as_bytes().to_vec())
+        .exec(false, command.as_bytes().to_vec())
         .await
         .map_err(|_| "probe_exec_failed" as &'static str)?;
     let (mut read_half, write_half) = channel.split();
@@ -128,8 +211,36 @@ pub(super) async fn exec_probe(
         eprintln!("[nocterm-ssh-bootstrap] 探针输出不是有效 UTF-8");
         "probe_output_invalid" as &'static str
     })?;
-    eprintln!("[nocterm-ssh-bootstrap] 探针输出：{text:?}");
+    eprintln!("[nocterm-ssh-bootstrap] {label} 探针输出：{text:?}");
     Ok(text)
+}
+
+/// 标准 Base64 编码用于把 PowerShell integration 以内存脚本注入远端。
+/// 内容不是秘密；编码只解决跨 Shell 引号和换行传输，不承担加密职责。
+/// 刻意不引入 `base64` 依赖：这是仓库中唯一的编码调用点，实现由标准向量
+/// 测试锁定；新增生产依赖需按仓库规则评审，收益不足以抵消评审成本。
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let first = u32::from(chunk[0]);
+        let second = chunk.get(1).map_or(0, |value| u32::from(*value));
+        let third = chunk.get(2).map_or(0, |value| u32::from(*value));
+        let group = (first << 16) | (second << 8) | third;
+        out.push(ALPHABET[((group >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((group >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[((group >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(group & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// 阶段 2：在独立 channel 上以 `umask 077 && cat > <path>` 上传 rc 内容。
@@ -293,11 +404,62 @@ mod tests {
             Some(SshShellKind::Bash)
         );
         assert_eq!(parse_shell_probe("|5.9|0.0|\n"), Some(SshShellKind::Zsh));
-        // fish / PowerShell 不在第一期矩阵。
-        assert_eq!(parse_shell_probe("||3.7.1|\n"), None);
+        assert_eq!(parse_shell_probe("||3.7.1|\n"), Some(SshShellKind::Fish));
+        assert_eq!(
+            parse_shell_probe("__NOCTERM_POWERSHELL__|7.4.6\r\n"),
+            Some(SshShellKind::PowerShell)
+        );
+        // 没有固定前缀的第四字段不能被错误文本或环境变量伪装成 PowerShell。
         assert_eq!(parse_shell_probe("|||7.4\n"), None);
+        assert_eq!(parse_shell_probe("__NOCTERM_POWERSHELL__|\n"), None);
         assert_eq!(parse_shell_probe("|||\n"), None);
         assert_eq!(parse_shell_probe(""), None);
+    }
+
+    #[test]
+    fn fish_rc_uses_fish_nonce_assignment_and_postexec_hook() {
+        let content = build_rc_content(&plan(SshShellKind::Fish), &remote_rc_path("fish0011"));
+
+        assert!(content.contains("set -gx NOCTERM_OSC_NONCE 'abc123'"));
+        assert!(content.contains("--on-event fish_postexec"));
+        assert!(!content.contains("export NOCTERM_OSC_NONCE"));
+    }
+
+    #[test]
+    fn powershell_uses_memory_injection_with_nonce_bound_osc_hooks() {
+        let plan = plan(SshShellKind::PowerShell);
+        let content = build_rc_content(&plan, "unused");
+        let command = integration_command(&plan);
+
+        assert!(content.contains("$env:NOCTERM_OSC_NONCE = 'abc123'"));
+        assert!(content.contains("function global:__nocterm_emit"));
+        assert!(content.contains("$fields;$($env:NOCTERM_OSC_NONCE)"));
+        assert!(content.contains("__NOCTERM_LAST_ERROR_RECORD"));
+        assert!(content.contains("ReferenceEquals"));
+        assert!(command.contains("$env:NOCTERM_OSC_NONCE='abc123'"));
+        assert!(command.contains("[Convert]::FromBase64String("));
+        assert!(!command.contains("/tmp/"));
+        assert!(!command.contains("Remove-Item"));
+        assert_eq!(integration_echo_token(&plan), "FromBase64String");
+    }
+
+    #[test]
+    fn initial_directory_command_uses_shell_specific_literal_quoting() {
+        assert_eq!(
+            initial_directory_command("C:\\Users\\O'Brien", Some(SshShellKind::PowerShell)),
+            "Set-Location -LiteralPath 'C:\\Users\\O''Brien'\r\n"
+        );
+        assert_eq!(
+            initial_directory_command("/srv/it's", Some(SshShellKind::Bash)),
+            "cd '/srv/it'\\''s'\n"
+        );
+    }
+
+    #[test]
+    fn bootstrap_base64_uses_the_standard_padded_alphabet() {
+        assert_eq!(base64_encode(b"Man"), "TWFu");
+        assert_eq!(base64_encode(b"Ma"), "TWE=");
+        assert_eq!(base64_encode(b"M"), "TQ==");
     }
 
     #[test]
