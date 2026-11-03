@@ -68,9 +68,9 @@ pub struct AiGatewayState {
     tool_calls: Mutex<HashMap<String, VecDeque<Instant>>>,
     observed_tool_calls: Mutex<HashSet<String>>,
     endpoint: Mutex<Option<String>>,
-    /// 用户在本次运行中显式开启可见执行的 SSH 连接。真实环境矩阵完成前默认
-    /// 集合为空；即使开启，Prompt 或绑定校验失败仍由路由层降级独立 exec。
-    ssh_visible_connections: Mutex<HashSet<i64>>,
+    /// 用户在本次运行中显式关闭可见执行的 SSH 连接。可见执行默认开启；
+    /// 即使开启，Prompt 或绑定校验失败仍由路由层降级独立 exec。
+    ssh_isolated_connections: Mutex<HashSet<i64>>,
 }
 
 const AI_TOOL_RATE_WINDOW: Duration = Duration::from_secs(60);
@@ -393,22 +393,22 @@ impl AiGatewayState {
     /// 按连接设置 SSH 可见执行；关闭只影响该连接，不能放松后续 PTY 安全校验。
     pub fn set_ssh_visible_enabled(&self, connection_id: i64, enabled: bool) -> Result<(), String> {
         let mut connections = self
-            .ssh_visible_connections
+            .ssh_isolated_connections
             .lock()
             .map_err(|_| "SSH 终端可见设置状态不可用".to_string())?;
         if enabled {
-            connections.insert(connection_id);
-        } else {
             connections.remove(&connection_id);
+        } else {
+            connections.insert(connection_id);
         }
         Ok(())
     }
 
     pub fn ssh_visible_enabled(&self, connection_id: i64) -> bool {
         // 锁中毒时 fail closed，避免状态异常时意外写入用户正在操作的终端。
-        self.ssh_visible_connections
+        self.ssh_isolated_connections
             .lock()
-            .is_ok_and(|connections| connections.contains(&connection_id))
+            .is_ok_and(|connections| !connections.contains(&connection_id))
     }
 }
 
@@ -536,22 +536,24 @@ mod tests {
     }
 
     #[test]
-    fn ssh_visible_execution_requires_connection_scoped_opt_in() {
+    fn ssh_visible_execution_defaults_on_and_opt_out_is_connection_scoped() {
         let gateway = AiGatewayState::default();
 
+        // 默认开启：未显式关闭的连接都走可见优先路由。
+        assert!(gateway.ssh_visible_enabled(1));
+        assert!(gateway.ssh_visible_enabled(2));
+
+        // 关闭只影响该连接，其他连接保持默认。
+        gateway
+            .set_ssh_visible_enabled(1, false)
+            .expect("disable connection 1");
         assert!(!gateway.ssh_visible_enabled(1));
-        assert!(!gateway.ssh_visible_enabled(2));
+        assert!(gateway.ssh_visible_enabled(2));
 
         gateway
             .set_ssh_visible_enabled(1, true)
             .expect("enable connection 1");
         assert!(gateway.ssh_visible_enabled(1));
-        assert!(!gateway.ssh_visible_enabled(2));
-
-        gateway
-            .set_ssh_visible_enabled(1, false)
-            .expect("disable connection 1");
-        assert!(!gateway.ssh_visible_enabled(1));
     }
 
     #[test]

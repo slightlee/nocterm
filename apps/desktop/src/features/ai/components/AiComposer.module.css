@@ -139,21 +139,3 @@
     gap: 4px;
   }
 }
-
-/* SSH 可见执行开关：与策略选择器同排，暗色面板内的小型复选样式。 */
-.sshVisibleToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  color: var(--term-muted);
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.sshVisibleToggle input {
-  width: 12px;
-  height: 12px;
-  accent-color: var(--term-blue, #61afef);
-}

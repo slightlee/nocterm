@@ -100,6 +100,7 @@ describe('executionModeLabel', () => {
 
 describe('executionFallbackLabel', () => {
   it('distinguishes unsupported shells from integration and prompt failures', () => {
+    expect(executionFallbackLabel('SSH_VISIBLE_NOT_ENABLED')).toContain('已关闭终端可见');
     expect(executionFallbackLabel('SSH_SHELL_UNSUPPORTED')).toContain('Shell 不支持');
     expect(executionFallbackLabel('SSH_INTEGRATION_UNAVAILABLE')).toContain('初始化失败');
     expect(executionFallbackLabel('SSH_CONTROL_PLANE_UNAVAILABLE')).toContain('控制面不可用');

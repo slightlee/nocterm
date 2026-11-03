@@ -4,15 +4,11 @@
 //! 职责边界：本 Hook 只做状态编排与行为回调，不持有 JSX；渲染层通过返回值
 //! 消费状态与处理器。全部逻辑与既有 AiPanel 内联实现一一对应，行为零变化。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { TerminalSession, TerminalSessionId, TerminalStatus } from '../../terminal';
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
-import {
-  getAiSshVisibleEnabled,
-  resetAiConversation,
-  setAiSshVisibleEnabled,
-} from '../api/ai-client';
+import { resetAiConversation } from '../api/ai-client';
 import { useAiPersistence } from '../hooks/use-ai-persistence';
 import { useAiRuntime, type AiRuntimePresentation } from '../hooks/use-ai-runtime';
 import {
@@ -83,9 +79,6 @@ export interface AiPanelController {
   composerAttachments: AiComposerAttachments;
   composerRef: React.RefObject<HTMLTextAreaElement | null>;
   commandPolicy: AiCommandPolicy;
-  /** 当前 SSH 连接是否显式启用可见执行；非 SSH 目标恒为 false。 */
-  sshVisibleEnabled: boolean;
-  toggleSshVisibleEnabled: (enabled: boolean) => void;
   composerState: { draft: string; provider: AiProviderId; commandPolicy: AiCommandPolicy };
   /** 新建会话按钮可用性：目标已绑定且该目标没有运行中的任务。 */
   canBeginConversation: boolean;
@@ -161,14 +154,6 @@ export interface AiPanelControllerInput {
   visible: boolean;
 }
 
-function panelErrorMessage(error: unknown, fallback: string): string {
-  if (typeof error === 'object' && error !== null && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message) return message;
-  }
-  return error instanceof Error && error.message ? error.message : fallback;
-}
-
 /** AI 工作台控制器：常驻接收任务事件；Tab 切换只选择目标视图，不创建空会话。 */
 export function useAiPanelController(input: AiPanelControllerInput): AiPanelController {
   const {
@@ -218,79 +203,6 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeId) ?? null,
     [activeId, sessions]
-  );
-  const activeRemoteConnectionId =
-    activeSession?.kind === 'remote' ? activeSession.connectionId : null;
-  const [sshVisibleEnabled, setSshVisibleEnabled] = useState(false);
-  const sshVisibleRequestRef = useRef(0);
-  const activeRemoteConnectionIdRef = useRef(activeRemoteConnectionId);
-  activeRemoteConnectionIdRef.current = activeRemoteConnectionId;
-  useEffect(() => {
-    const requestId = ++sshVisibleRequestRef.current;
-    // 可见执行需要按连接显式开启；读取权威状态前保持关闭，避免 UI 短暂误导。
-    setSshVisibleEnabled(false);
-    if (!isDesktopRuntime() || activeRemoteConnectionId === null) {
-      return;
-    }
-    let disposed = false;
-    getAiSshVisibleEnabled(activeRemoteConnectionId)
-      .then((enabled) => {
-        if (
-          !disposed &&
-          sshVisibleRequestRef.current === requestId &&
-          activeRemoteConnectionIdRef.current === activeRemoteConnectionId
-        ) {
-          setSshVisibleEnabled(enabled);
-          setPanelNotices((current) => ({
-            ...current,
-            [`ssh:${activeRemoteConnectionId}`]: null,
-          }));
-        }
-      })
-      .catch((error: unknown) => {
-        if (!disposed && sshVisibleRequestRef.current === requestId) {
-          setSshVisibleEnabled(false);
-          setPanelNotices((current) => ({
-            ...current,
-            [`ssh:${activeRemoteConnectionId}`]: panelErrorMessage(
-              error,
-              '读取 SSH 终端可见设置失败。'
-            ),
-          }));
-        }
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [activeRemoteConnectionId]);
-  const toggleSshVisibleEnabled = useCallback(
-    (enabled: boolean) => {
-      if (activeRemoteConnectionId === null) return;
-      const connectionId = activeRemoteConnectionId;
-      const requestId = ++sshVisibleRequestRef.current;
-      setAiSshVisibleEnabled(activeRemoteConnectionId, enabled)
-        .then(() => {
-          if (
-            sshVisibleRequestRef.current === requestId &&
-            activeRemoteConnectionIdRef.current === connectionId
-          ) {
-            setSshVisibleEnabled(enabled);
-            setPanelNotices((current) => ({ ...current, [`ssh:${connectionId}`]: null }));
-          }
-        })
-        .catch((error: unknown) => {
-          if (
-            sshVisibleRequestRef.current === requestId &&
-            activeRemoteConnectionIdRef.current === connectionId
-          ) {
-            setPanelNotices((current) => ({
-              ...current,
-              [`ssh:${connectionId}`]: panelErrorMessage(error, '更新 SSH 终端可见设置失败。'),
-            }));
-          }
-        });
-    },
-    [activeRemoteConnectionId]
   );
   const activeSessionStatus = activeSession
     ? (terminalStatuses[String(activeSession.id)] ?? 'connecting')
@@ -764,8 +676,6 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     attachmentLoading,
     backgroundTasks,
     commandPolicy,
-    sshVisibleEnabled,
-    toggleSshVisibleEnabled,
     canBeginConversation,
     composerAttachments,
     composerRef,

@@ -1,14 +1,14 @@
 # AI 终端执行可观测与 SSH 可见执行演进方案
 
-> 状态：架构评审草案，不代表当前已经实现的产品行为
+> 状态：演进评审与实现记录；现行产品契约见 §0.3，历史方案不代表已验收
 >
-> 文档版本：0.6
+> 文档版本：0.8
 >
 > 评审基线：`main@1dfdaf5`
 >
 > 首次编写：2026-10-29
 >
-> 最近评审更新：2026-11-02
+> 最近更新：2026-11-03（产品契约同步，未新增真实环境验收）
 >
 > 适用范围：AI Tool Gateway、本地终端、SSH 终端、AI 面板、审批、审计与测试体系
 
@@ -22,8 +22,7 @@
 4. nonce-bound OSC 已证明 Prompt Ready 时允许 Marker 辅助完成恢复；integration 不可用时保留独立 SSH exec channel 兜底；
 5. 审批、执行、可观测、审计和失败恢复都以同一个后端执行状态机为事实来源。
 
-本文不是实施任务清单，也不表示已经批准修改默认行为。各阶段必须单独建立 Issue、分支和 Pull Request，
-遵循 `docs/development.md` 的 Issue 先行、验证记录和 Squash merge 规则。
+本文保留决策与实现演进记录，不替代现行产品契约或验收记录。历史规划中关于默认值、用户入口和分阶段状态的内容，若与 §0.3 冲突，均由 §0.3 的当前结论替代；历史真实验收结果不因此改变。各阶段必须单独建立 Issue、分支和 Pull Request，遵循 `docs/development.md` 的 Issue 先行、验证记录和 Squash merge 规则。
 
 ### 0.1 与现行文档的关系
 
@@ -32,16 +31,16 @@
 - 本文经评审批准并完成对应实现后，相关稳定结论再同步回上述文档；
 - 本文中的文件与行号基于评审基线，代码变化后应重新核对，不把旧行号当成运行时事实。
 
-### 0.2 评审结论摘要
+### 0.2 历史评审结论摘要
 
-当前建议为**条件通过**，但本文尚未达到直接实施全部阶段的成熟度：
+以下是当时形成的评审记录；其中有关默认策略和用户入口的决策已由 §0.3 替代，真实环境验收状态仍按记录保留。
 
 - 批准阶段 0：加固现有本地 Shell 协议和真实 Shell 测试；
 - 批准阶段 1A：在 Domain/Application 建设后端权威执行聚合、ledger、请求去重和恢复；
 - 批准阶段 1B：基于后端权威投影建设路线 2 轻量执行卡；
 - 阶段 2 需要在 dispatch receipt、gate owner 和 SSH terminal generation 契约评审通过后实施；
 - 阶段 3 只批准为具有停止条件的 SSH shell integration 技术预研；
-- 阶段 4 的代码已完成精确终端绑定和安全降级，真实环境退出标准尚未完成；当前保持默认隔离，用户可按连接显式开启；
+- 阶段 4 的代码已完成精确终端绑定和安全降级，真实环境退出标准尚未完成；当前产品契约已改为默认可见优先且无手动入口，后端仍保留 connection 级 opt-out；
 - 暂不批准完整 Warp 式 Block Terminal；
 - 独立 SSH exec channel 必须长期保留为隔离执行能力和最终兜底。
 
@@ -56,13 +55,22 @@
 | SSH 可见 PTY 执行     | 中     | 依赖前述控制面和真实环境证据，工程与安全风险高                |
 | 完整 Block Terminal   | 低     | 当前收益不足以覆盖终端数据模型重构成本                        |
 
+### 0.3 当前产品契约（2026-11-03）
+
+- 本地终端继续沿用原有可见 PTY 执行；此次入口调整不改变本地执行路径。
+- SSH 默认可见优先，当前版本没有手动切换执行模式的入口；AI composer 的“终端可见”图标按钮及前端 API 包装已移除。
+- 后端保留 connection 级内存 opt-out 模型及 `ai_ssh_visible_get` / `ai_ssh_visible_set` Tauri commands；状态不持久化，重启后恢复默认可见优先，不作为当前用户入口。
+- 路由以 `commands/ai_tool_approval.rs` 为准：先验证四元绑定，失效时以 `AI_TOOL_TARGET_INVALID` 在 dispatch 前失败；绑定有效后，后端 opt-out 或 Prompt 不可用时回退 independent exec。Prompt 初检通过但原子预占失败时，若检测到 gate 已占用则以 `SSH_TERMINAL_BUSY` 失败，否则以 `SSH_PROMPT_CHANGED` 回退；不能声称 gate busy 一定回退。
+- 执行卡依据权威 ledger 展示实际模式与降级原因；independent exec 不继承可见 Shell 的临时目录、环境变量或虚拟环境。已 dispatch 的命令不得通过回退重复执行。
+- 本节同步产品决策与源码事实，不代表真实 macOS/Windows 客户端、Provider 或远程 Shell 矩阵已通过验收；各阶段既有未验证记录继续有效。
+
 ---
 
 ## 1. 背景与问题定义
 
-### 1.1 当前用户行为差异
+### 1.1 评审基线时的用户行为差异
 
-当前本地和 SSH AI 命令使用两种不同的执行路径：
+以下描述评审基线时的问题背景；现行路径已按 §0.3 调整。当时本地和 SSH AI 命令使用两种不同的执行路径：
 
 - 本地 AI 命令写入用户正在看的本地 PTY，命令和输出在 xterm 中实时可见；
 - SSH AI 命令复用当前认证连接打开独立 exec channel，结果只返回 Provider 和 AI 面板，
@@ -98,7 +106,7 @@
 | Agent 自有运行环境 | Claude Code、Codex CLI、Gemini CLI 类产品 | Agent 管理子进程、输出、审批和隔离                       | 适合 Agent-native CLI，不能直接替代对现有 SSH 交互终端的控制          |
 | Block Terminal     | Warp                                      | 命令与输出形成可操作 Block，Agent 在真实终端展示执行过程 | 借鉴执行卡体验，不重写当前 xterm 数据模型                             |
 | Shell Integration  | VS Code、现代终端                         | OSC 633 提供 Prompt、命令边界、cwd 和退出码              | 适合作为增强控制面，但普通 SSH 自动注入可能失败，不能作为唯一远程基础 |
-| 独立 SSH exec      | 传统 SSH 自动化与运维工具                 | 协议级 exit-status、状态隔离、可预测                     | 继续作为 Nocterm 默认可靠路径和最终兜底                               |
+| 独立 SSH exec      | 传统 SSH 自动化与运维工具                 | 协议级 exit-status、状态隔离、可预测                     | 继续作为 Nocterm 隔离执行能力与最终兜底；默认偏好见 §0.3              |
 | 可见 PTY + Marker  | Netcatty 等终端 Agent                     | 命令与输出实时可见，不要求持久修改远程配置               | 可行但兼容、门控、恢复和过滤成本很高，只能渐进实现                    |
 
 VS Code 官方 Shell Integration 文档确认 OSC 633 可表达 Prompt Start/End、Command Start、Command
@@ -199,9 +207,11 @@ Marker 包装器是否使用子 shell、是否继承 alias/function、`cd` 是�
 
 ---
 
-## 4. 当前架构与调用链
+## 4. 评审基线时的架构与调用链
 
-### 4.1 当前执行流程
+本节保存评审基线的流程与缺口，不代表现行实现；当前执行路由与入口以 §0.3 和技术架构为准。
+
+### 4.1 评审基线执行流程
 
 ```mermaid
 sequenceDiagram
@@ -488,6 +498,8 @@ Domain 只保存稳定模型和 Port；Tauri host 负责事件、DTO 与依赖�
 ## 8. 执行策略路由
 
 ### 8.1 策略顺序
+
+以下图示为历史目标设计，不完整表达当前拒绝分支；现行顺序见 §0.3。绑定失效直接拒绝，Prompt 初检与 gate 预占分步进行；只有初检通过后的预占失败分支才区分 `SSH_TERMINAL_BUSY` 与 `SSH_PROMPT_CHANGED`。
 
 ```mermaid
 flowchart TD
@@ -1135,7 +1147,7 @@ sshMarkerFallback
 
 ### 阶段 4：SSH 可见执行灰度（代码完成，真实环境验收未完成）
 
-当前目标：按连接显式 opt-in，默认关闭；真实环境退出标准通过后再评审默认值。
+当前产品契约见 §0.3：默认可见优先，无手动入口；保留后端 connection 级 opt-out。Prompt 不可用等条件按现有路由回退 independent exec；绑定失效与预占失败后检测到 gate busy 时在 dispatch 前拒绝，不能笼统承诺校验失败均回退。
 
 策略顺序：
 
@@ -1155,15 +1167,15 @@ nonce-bound OSC
 
 ### 阶段 5：扩大矩阵与默认值评审
 
-当前产品保持隔离执行默认值；以下兼容矩阵通过后再评审可见优先：
+历史规划曾要求保持隔离默认、待矩阵通过后再评审可见优先；该默认值决策已由 §0.3 替代，当前版本没有手动入口。以下兼容性与扩展问题仍保留为后续评审范围，不代表已验收：
 
 - 持续验证 fish、PowerShell 与 Windows OpenSSH 的真实环境兼容性；
 - 是否支持 tmux/screen；
 - 可见优先在各受支持 Shell 上的成功率；
 - 是否建设全局 operation center；
-- 是否允许用户选择“可见执行优先”或“隔离执行优先”。
+- 未来是否提供执行模式选择入口（当前版本不提供）。
 
-未通过 Prompt Ready、精确终端身份或输入门控校验时，仍必须在 dispatch 前降级独立 exec，不能为维持默认可见而放松安全不变量。
+不能为维持默认可见而放松安全不变量；检查不满足时按现有路由在 dispatch 前回退或拒绝，具体分支见 §0.3。
 
 ---
 
@@ -1301,8 +1313,8 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 7. tmux/screen 是明确不支持还是实验支持；
 8. ResultUnknown 对同一目标的后续只读命令是否也阻塞；
 9. execution ledger 的保留周期和用户清除入口；
-10. 可见执行成熟后是否改变默认值；
-11. 用户是否可以按连接选择“可见优先”或“隔离优先”；
+10. 默认值决策已由 §0.3 替代：当前默认可见优先，真实兼容矩阵仍待验收；
+11. 当前无手动入口，后端保留 connection 级 opt-out；未来是否新增入口需另行评审；
 12. operation center 是否纳入后续产品路线。
 
 ---
@@ -1365,14 +1377,15 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 
 ## 22. 评审记录
 
-| 日期       | 版本 | 评审角色                   | 结论                           | 主要调整                                                                                       |
-| ---------- | ---- | -------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| 2026-10-29 | 0.1  | 初始架构草案               | 待评审                         | 建立路线 2 + 路线 3 组合、状态机、安全不变量和分阶段方案                                       |
-| 2026-10-30 | 0.3  | 阶段 0+3 实现评审（spike） | 代码已交付，真实环境验证待执行 | 交付 Stage 0 加固 + Stage 3 bootstrap spike；kill criteria 入档；Stage 4 前置条件部分就绪      |
-| 2026-11-01 | 0.4  | 阶段 4 opt-in 实现评审     | 自动化验证通过，真实环境待验收 | 交付按连接开关、精确 PTY 路由、统一工具执行路径、权威 ledger 与安全降级；Marker 仍未实现       |
-| 2026-11-02 | 0.6  | Marker 安全边界复审        | 自动化验证通过，真实环境待验收 | Marker 限定为 OSC readiness 后的 bash/zsh 完成恢复；禁止用 Marker 激活普通或 unsupported shell |
-| 2026-11-02 | 0.7  | PowerShell SSH 扩展评审    | 自动化与本机 Shell 验证通过    | Windows OpenSSH PowerShell 使用双探针和内存注入；不创建远端临时文件，不启用 POSIX Marker       |
-| 2026-11-02 | 0.5  | 默认行为复审               | 显式开启，隔离默认             | 真实 SSH 矩阵未完成前不自动启用；用户开启后仍执行全部绑定、Prompt 与 gate 校验                 |
+| 日期       | 版本 | 评审角色                   | 结论                           | 主要调整                                                                                                |
+| ---------- | ---- | -------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| 2026-10-29 | 0.1  | 初始架构草案               | 待评审                         | 建立路线 2 + 路线 3 组合、状态机、安全不变量和分阶段方案                                                |
+| 2026-10-30 | 0.3  | 阶段 0+3 实现评审（spike） | 代码已交付，真实环境验证待执行 | 交付 Stage 0 加固 + Stage 3 bootstrap spike；kill criteria 入档；Stage 4 前置条件部分就绪               |
+| 2026-11-01 | 0.4  | 阶段 4 opt-in 实现评审     | 自动化验证通过，真实环境待验收 | 交付按连接开关、精确 PTY 路由、统一工具执行路径、权威 ledger 与安全降级；Marker 仍未实现                |
+| 2026-11-02 | 0.6  | Marker 安全边界复审        | 自动化验证通过，真实环境待验收 | Marker 限定为 OSC readiness 后的 bash/zsh 完成恢复；禁止用 Marker 激活普通或 unsupported shell          |
+| 2026-11-02 | 0.7  | PowerShell SSH 扩展评审    | 自动化与本机 Shell 验证通过    | Windows OpenSSH PowerShell 使用双探针和内存注入；不创建远端临时文件，不启用 POSIX Marker                |
+| 2026-11-02 | 0.5  | 默认行为复审               | 显式开启，隔离默认（已替代）   | 保留当时决策记录；默认策略与用户入口现由 §0.3 替代，真实 SSH 矩阵待验收状态不变                         |
+| 2026-11-03 | 0.8  | 用户确认的产品契约同步     | 默认可见优先，无手动入口       | 移除 composer 按钮及前端 API 包装；保留后端 connection 级 opt-out 与 Tauri commands；未新增真实环境验收 |
 
 后续每轮评审至少记录：
 
@@ -1409,7 +1422,7 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 
 ### 23.2 真实环境验证（kill criteria，由维护者执行）
 
-以下任一现象出现即停止 Stage 4 推进、保持 independent exec 默认：
+以下为当时制定的停止条件；“保持 independent exec 默认”的旧默认值决策已由 §0.3 替代，安全停止条件及真实环境待验证状态仍保留。出现以下任一现象时必须停止扩大可见执行范围并处理问题：
 
 1. ForceCommand / 受限 shell 服务器上出现破坏性会话（拒绝监视未兜住）；
 2. Prompt Ready 误判（bootstrap 终端未见 A 事件即被判定就绪，或伪造事件
@@ -1426,15 +1439,17 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 - PowerShell/Windows OpenSSH bootstrap 已实现；本机 PowerShell 7.5.4 与 Windows
   PowerShell 5.1 已验证 nonce-bound D/A 序列，真实 Windows OpenSSH 服务端待验收；
 - `docs/testing.md` 已补充 SSH integration 与可见执行验收条目，真实结果仍待维护者记录；
-- Stage 4 的 opt-in、OSC 可见路由、bash/zsh Marker 完成恢复和 independent exec 降级已实现；Marker readiness 不存在独立路径，不得宣传为 unsupported shell 的可见执行能力。
+- Stage 4 的 OSC 可见路由、bash/zsh Marker 完成恢复和 independent exec 降级已实现；原 opt-in 入口与默认值决策已由 §0.3 替代。Marker readiness 不存在独立路径，不得宣传为 unsupported shell 的可见执行能力。
 
 ## 24. 阶段 4 opt-in 实现记录（2026-11-01）
 
+本节保留实现演进与验收边界；原 opt-in、后续用户按连接关闭的入口决策均已由 §0.3 替代，不代表当前产品提供开关。
+
 ### 24.1 已交付（代码与自动化测试层面）
 
-- SSH 可见执行默认关闭，以 connection ID 为粒度由用户显式开启，切换连接不会串用状态；
+- SSH 默认可见优先，后端 connection 级内存 opt-out 模型与 Tauri commands 保留；当前 composer 按钮及前端 API 包装已移除，连接状态隔离不构成用户入口；
 - execution target 持久化 workspace session、terminal ID、terminal generation 与 connection ID，路由只向任务发起时的精确 PTY 写入；
-- Prompt Ready 检查与 AI gate 预占原子完成；用户输入在同一锁内使 Prompt Ready 失效，竞态失败时回退 independent exec；
+- 原子预占在同一锁内检查 Prompt Ready 与 gate；用户输入在同一锁内使 Prompt Ready 失效。初检通过后的预占失败若检测到 gate 已占用则返回 `SSH_TERMINAL_BUSY`，否则以 `SSH_PROMPT_CHANGED` 回退 independent exec；
 - 通用命令与系统信息、进程、端口、日志、Docker 等结构化工具统一经过 approval/execution 编排，均遵循相同可见策略；
 - execution ledger 记录实际 mode、稳定 fallback reason、sequence 和生命周期；Provider 契约依据实际记录声明是否继承可见 Shell 状态；
 - bootstrap 不支持、初始化失败、控制面缺失、Integration 未确认（注入后从未观察到可信完成事件，用户可尝试重连）与 Prompt 未就绪（曾就绪、被用户键入失效）使用不同稳定 fallback reason，内部 probe/upload 错误不进入 ledger；nonce 过滤丢弃与首次可信完成事件在诊断日志留痕；
@@ -1445,18 +1460,19 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 
 ### 24.2 当时边界
 
-- 默认路径仍是 independent exec，可见执行不是全局默认；
+- 默认与入口现按 §0.3：可见优先，无手动入口；Prompt 不可用时回退 independent exec，精确绑定失效或预占失败后检测到 gate 已占用时在 dispatch 前拒绝；
 - 当前可见路由仍要求可信的 nonce-bound OSC Prompt Ready；Marker 仅恢复完成信号，不能为 unsupported shell 建立 readiness；
 - bash、zsh、fish、Windows OpenSSH PowerShell、自定义提示符、ForceCommand/受限
   shell 以及 macOS/Windows 客户端的真实端到端矩阵尚未执行；
 - 自动化测试证明路由、gate、持久化和尾部输出契约，不等价于真实 SSH 服务器验收。
 
-## 25. 默认行为复审（2026-11-02）
+## 25. 默认行为复审（2026-11-02；2026-11-03 同步产品结论）
 
 用户目标要求 AI 面板操作可以同步呈现在所连接终端，但阶段 4 的真实环境退出标准
-尚未全部通过。精确绑定、Prompt Ready 和输入门控已经具备，因此当前决策为：
+尚未全部通过。原“默认隔离、用户显式开启”及后续“默认开启、用户按连接关闭”的入口决策已被替代，当前结论为：
 
-- SSH 连接默认关闭“终端可见”，由用户按 connection ID 显式开启；
-- 应用重启后恢复隔离执行，不持久化尚未完成兼容验收的运行时偏好；
-- Prompt、generation、目标绑定或 gate 任一校验不满足时，继续安全降级独立 exec；
-- 真实 macOS/Windows 客户端和 Shell 矩阵通过后，再单独评审是否默认开启。
+- 本地终端继续沿用原有可见 PTY 执行；SSH 默认可见优先，当前版本不提供手动入口，移除 composer 的“终端可见”图标按钮和前端 API 包装；
+- 后端保留 connection 级内存 opt-out 模型及 `ai_ssh_visible_get` / `ai_ssh_visible_set` Tauri commands；状态不持久化，应用重启后恢复默认可见优先；
+- 安全条件不满足时按现有路由回退 independent exec 或在 dispatch 前拒绝：绑定失效直接失败；Prompt 不可用可回退；初检通过后的预占失败需区分 gate busy 的 `SSH_TERMINAL_BUSY` 与非 busy 的 `SSH_PROMPT_CHANGED`，详见 §0.3；
+- 执行卡展示 ledger 中的实际模式与降级原因；默认可见优先不放松精确终端绑定、Prompt Ready、输入门控或 dispatch 后禁止重试的门禁；
+- 此次同步不改变真实验收状态，真实 macOS/Windows 客户端和远程 Shell 矩阵仍须按 `docs/testing.md` 完成并记录。

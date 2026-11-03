@@ -38,10 +38,6 @@ interface AiComposerProps {
   onProviderChange: (provider: AiProviderId) => void;
   commandPolicy: AiCommandPolicy;
   onCommandPolicyChange: (policy: AiCommandPolicy) => void;
-  /** 当前 SSH 连接是否已显式启用可见执行。 */
-  sshVisibleEnabled: boolean;
-  showSshVisibleToggle: boolean;
-  onSshVisibleToggle: (enabled: boolean) => void;
   onStop: () => void;
 }
 
@@ -71,12 +67,10 @@ export function AiComposer({
   onProviderChange,
   commandPolicy,
   onCommandPolicyChange,
-  sshVisibleEnabled,
-  showSshVisibleToggle,
-  onSshVisibleToggle,
   onStop,
 }: AiComposerProps) {
   const [commandPolicyMenuOpen, setCommandPolicyMenuOpen] = useState(false);
+  const toolControlsDisabled = composerDisabled || controlsDisabled;
   return (
     <div className={styles.composerArea}>
       {providerAvailable === false ? (
@@ -120,13 +114,13 @@ export function AiComposer({
         <div className={styles.composerFooter}>
           <div className={styles.composerTools}>
             <AiAttachmentPicker
-              disabled={composerDisabled || controlsDisabled}
+              disabled={toolControlsDisabled}
               fileInputRef={fileInputRef}
               loading={attachmentLoading}
               onChange={onAttachmentChange}
             />
             <AiProviderSelector
-              disabled={composerDisabled || controlsDisabled}
+              disabled={toolControlsDisabled}
               onChange={onProviderChange}
               onToggle={() => {
                 setCommandPolicyMenuOpen(false);
@@ -137,7 +131,7 @@ export function AiComposer({
               providerId={providerId}
             />
             <AiCommandPolicySelector
-              disabled={composerDisabled || controlsDisabled}
+              disabled={toolControlsDisabled}
               onChange={(policy) => {
                 onCommandPolicyChange(policy);
                 setCommandPolicyMenuOpen(false);
@@ -149,20 +143,6 @@ export function AiComposer({
               open={commandPolicyMenuOpen}
               policy={commandPolicy}
             />
-            {showSshVisibleToggle ? (
-              <label
-                className={styles.sshVisibleToggle}
-                title="开启后优先将 AI 命令写入当前 SSH 终端；条件不满足时安全回退隔离通道"
-              >
-                <input
-                  checked={sshVisibleEnabled}
-                  disabled={composerDisabled || controlsDisabled}
-                  onChange={(event) => onSshVisibleToggle(event.target.checked)}
-                  type="checkbox"
-                />
-                终端可见
-              </label>
-            ) : null}
           </div>
           {running ? (
             <button

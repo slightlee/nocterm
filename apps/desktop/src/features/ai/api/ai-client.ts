@@ -131,15 +131,6 @@ export function resolveAiToolApproval(approvalId: string, sessionId: string, app
   return invoke<void>('ai_tool_approval_resolve', { approvalId, sessionId, approved });
 }
 
-/** 当前 SSH 连接是否已在本次运行中显式启用终端可见执行。 */
-export function getAiSshVisibleEnabled(connectionId: number): Promise<boolean> {
-  return invoke<boolean>('ai_ssh_visible_get', { connectionId });
-}
-
-export function setAiSshVisibleEnabled(connectionId: number, enabled: boolean): Promise<void> {
-  return invoke<void>('ai_ssh_visible_set', { connectionId, enabled });
-}
-
 /** 监听后端权威执行生命周期事件；事件可丢失，快照查询是恢复时的权威来源。 */
 export function onAiToolExecution(
   handler: (event: AiToolExecutionEvent) => void

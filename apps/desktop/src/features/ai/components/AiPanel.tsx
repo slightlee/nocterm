@@ -231,9 +231,6 @@ export function AiPanel({
             setCommandPolicy(workspaceTargetKey, controller.activeConversationId, policy);
           }
         }}
-        onSshVisibleToggle={controller.toggleSshVisibleEnabled}
-        showSshVisibleToggle={controller.workspaceTarget.connectionId !== undefined}
-        sshVisibleEnabled={controller.sshVisibleEnabled}
         onComposerKeyDown={handleComposerKeyDown}
         onDraftChange={handleDraftChange}
         onProviderChange={(nextProvider) => void handleProviderChange(nextProvider)}

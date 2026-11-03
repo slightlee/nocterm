@@ -448,9 +448,9 @@ impl TerminalExecution<'_> {
         tracker
             .transition(AiExecutionTransition::ReserveTerminal)
             .map_err(|error| error.to_string())?;
-        // SSH 可见路由：连接已显式开启且四元绑定、Prompt Ready、输入门控
-        // 全部满足时写入可见 PTY；任一前置不满足自动降级独立 exec。降级发生在
-        // dispatch 之前，不会造成重复执行或改变命令语义。
+        // SSH 可见路由默认开启：连接未显式关闭且四元绑定、Prompt Ready、
+        // 输入门控全部满足时写入可见 PTY；任一前置不满足自动降级独立 exec。
+        // 降级发生在 dispatch 之前，不会造成重复执行或改变命令语义。
         let mut ssh_visible_attempt: Option<SshVisibleAttempt> = None;
         let (mode, fallback_reason) = match &binding.target {
             AiTarget::Ssh {
@@ -1022,7 +1022,8 @@ mod tests {
                 ssh_registry,
                 // 服务与测试夹具共享同一份审计记录，便于断言完整事件序列。
                 audit_service: AiAuditService::new(audit.clone()),
-                // 夹具未开启可见执行，路由直接使用独立 exec。
+                // 可见执行默认开启；夹具未注册 integration 时仍会在 dispatch 前
+                // 安全降级独立 exec，测试不会意外写入终端桩。
                 gateway: AiGatewayState::default(),
                 connection: ConnectionService::new(Arc::new(StubConnectionRepository { profile })),
                 terminal: TerminalService::new(Arc::new(UnavailableSshPort)),
@@ -1684,11 +1685,7 @@ mod tests {
     #[test]
     fn ssh_execution_failure_keeps_pending_then_failed_audit_order() {
         let harness = Harness::new(None);
-        // 本用例验证已开启可见执行后的 Shell 能力降级，而不是默认 opt-in 策略。
-        harness
-            .gateway
-            .set_ssh_visible_enabled(7, true)
-            .expect("enable SSH visible execution");
+        // 可见执行默认开启；本用例验证 Shell 能力不可用时仍安全降级。
         harness
             .ssh_registry
             .register_integration_unavailable("ssh-test", "unsupported_shell");
@@ -1788,10 +1785,6 @@ mod tests {
     fn marker_capable_ssh_route_records_the_marker_execution_strategy() {
         let harness = Harness::new(None);
         harness
-            .gateway
-            .set_ssh_visible_enabled(7, true)
-            .expect("enable SSH visible execution");
-        harness
             .ssh_registry
             .register_integration("ssh-test", "nonce-marker");
         harness.ssh_registry.enable_marker_recovery("ssh-test");
@@ -1822,6 +1815,53 @@ mod tests {
         assert_eq!(
             tracker.record().mode,
             nocterm_domain::ai_execution::AiExecutionMode::SshVisibleMarker
+        );
+        assert!(!harness.ssh_registry.input_gated("ssh-test"));
+    }
+
+    #[test]
+    fn explicitly_disabled_ssh_visible_route_records_independent_exec() {
+        let harness = Harness::new(None);
+        harness
+            .gateway
+            .set_ssh_visible_enabled(7, false)
+            .expect("disable SSH visible execution");
+        // 即使 Prompt Ready 与 Marker 能力全部满足，连接级关闭仍必须在 dispatch
+        // 前选择 independent exec，不能先写 PTY 再回退。
+        harness
+            .ssh_registry
+            .register_integration("ssh-test", "nonce-marker");
+        harness.ssh_registry.enable_marker_recovery("ssh-test");
+        harness.ssh_registry.record_integration_event(
+            "ssh-test",
+            &crate::state::Osc633Event::PromptStarted {
+                nonce: Some("nonce-marker".into()),
+            },
+        );
+        let binding = ssh_binding();
+        let access = AiGatewayAccess {
+            binding: binding.clone(),
+            cancellation: Arc::new(AtomicBool::new(false)),
+        };
+        let (execution, mut tracker) = harness.execution(&binding, "ssh-opt-out-mode");
+
+        let _ = execution.run(
+            &access,
+            &mut tracker,
+            nocterm_domain::ai_audit::AiAuditTool::SshExec,
+            "uptime",
+            AiAuditApproval::Approved,
+            Instant::now() + Duration::from_secs(5),
+            None,
+        );
+
+        assert_eq!(
+            tracker.record().mode,
+            nocterm_domain::ai_execution::AiExecutionMode::SshIndependentExec
+        );
+        assert_eq!(
+            tracker.record().fallback_reason.as_deref(),
+            Some("SSH_VISIBLE_NOT_ENABLED")
         );
         assert!(!harness.ssh_registry.input_gated("ssh-test"));
     }

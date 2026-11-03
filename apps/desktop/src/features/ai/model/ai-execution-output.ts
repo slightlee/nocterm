@@ -119,7 +119,7 @@ export function executionFallbackLabel(reason: string | null): string | null {
     case null:
       return null;
     case 'SSH_VISIBLE_NOT_ENABLED':
-      return '当前连接未启用终端可见执行';
+      return '当前连接已关闭终端可见执行，已隔离执行';
     case 'SSH_PROMPT_NOT_READY':
       return '终端提示符未就绪，已安全回退';
     case 'SSH_INTEGRATION_NOT_CONFIRMED':
