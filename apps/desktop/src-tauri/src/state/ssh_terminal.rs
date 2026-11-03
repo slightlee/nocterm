@@ -496,13 +496,29 @@ impl SshTerminalRegistry {
         let nonce_bound = if let Some(expected) = &integration.expected_nonce {
             match event.event_nonce() {
                 Some(nonce) if nonce == expected => true,
-                _ => return SshIntegrationObservation::default(),
+                _ => {
+                    // 丢弃留痕：正常链路中远端只在钩子生效后发事件，这里出现
+                    // 丢弃说明存在串线或残留的旧 integration，需要证据定位。
+                    eprintln!(
+                        "[nocterm-ssh-integration] 丢弃 nonce 不匹配事件：terminal={terminal_id} \
+                         received={:?} expected={expected}",
+                        event.event_nonce()
+                    );
+                    return SshIntegrationObservation::default();
+                }
             }
         } else {
             false
         };
         if let Osc633Event::CommandFinished { code, .. } = event {
             integration.completions += 1;
+            if integration.completions == 1 {
+                // 首个可信 D 是"远端钩子已生效"的正面证据，与 bootstrap 注入
+                // 日志配对后即可判断 integration 链路是否完整。
+                eprintln!(
+                    "[nocterm-ssh-integration] 首个可信完成事件已确认：terminal={terminal_id}"
+                );
+            }
             integration.last_exit_code = *code;
             // D 事件证明 Shell 已回到提示符：无论当时的占用者是谁都放行。
             // 返回 true 供读取链路清理可能被 Ctrl+C 截断的 Marker 过滤器。
@@ -575,7 +591,11 @@ impl SshTerminalRegistry {
     }
 
     /// 可见执行未就绪时返回稳定降级原因。调用方只在 `prompt_ready == false`
-    /// 时使用；bootstrap 成功但尚无可信提示符事件与控制面缺失必须区分。
+    /// 时使用；bootstrap 成功后的两种失败必须区分：
+    /// - `completions == 0`：从未观察到一次可信完成事件，远端钩子大概率没有
+    ///   生效（注入行未被执行或脚本失败），用户重试只会继续降级；
+    /// - `completions > 0`：曾经就绪、后被用户键入失效，等待下一次可信 A/D
+    ///   恢复（用户在终端按回车即自愈）。
     pub fn visible_unavailable_reason(&self, terminal_id: &str) -> &'static str {
         let Ok(integrations) = self.integrations.lock() else {
             return "SSH_CONTROL_PLANE_UNAVAILABLE";
@@ -584,10 +604,22 @@ impl SshTerminalRegistry {
             return "SSH_CONTROL_PLANE_UNAVAILABLE";
         };
         integration.bootstrap_fallback_reason.unwrap_or_else(|| {
-            if integration.expected_nonce.is_some() {
-                "SSH_PROMPT_NOT_READY"
+            if integration.expected_nonce.is_none() {
+                return "SSH_CONTROL_PLANE_UNAVAILABLE";
+            }
+            if integration.completions == 0 {
+                eprintln!(
+                    "[nocterm-ssh-integration] 未见任何可信完成事件，判定 integration 未生效：\
+                     terminal={terminal_id}"
+                );
+                "SSH_INTEGRATION_NOT_CONFIRMED"
             } else {
-                "SSH_CONTROL_PLANE_UNAVAILABLE"
+                eprintln!(
+                    "[nocterm-ssh-integration] 就绪被用户输入失效，等待下一次可信提示符事件：\
+                     terminal={terminal_id} completions={}",
+                    integration.completions
+                );
+                "SSH_PROMPT_NOT_READY"
             }
         })
     }
@@ -797,6 +829,8 @@ impl SshTerminalRegistry {
     /// 注册本次包装器过滤。调用发生在写 PTY 之前，因此首个回显分块不会泄漏。
     /// deadline 为过滤窗口：执行截止 + 中断确认窗口 + 余量，窗口过后降级
     /// 直通，保证过滤器不会吞掉执行结束后的任何输出。
+    /// display_command 中的 LF 统一归一为 CRLF：xterm 的 LF 只下移不回车，
+    /// 多行命令的合成回显若保留裸 LF 会渲染成阶梯状。
     pub fn begin_marker_output_suppression(
         &self,
         terminal_id: &str,
@@ -811,7 +845,7 @@ impl SshTerminalRegistry {
                 MarkerOutputSuppressor {
                     marker: marker.to_string(),
                     owner: owner.to_string(),
-                    display_command: display_command.to_string(),
+                    display_command: display_command.replace('\n', "\r\n"),
                     pending: String::new(),
                     wrapper_echo_hidden: false,
                     deadline,
@@ -1264,6 +1298,22 @@ mod tests {
 
         // 同一 terminal 后续成功注册时必须清除旧失败事实，等待可信 Prompt 事件。
         registry.register_integration("ssh-1", "nonce-1");
+        // nonce 已注册但从未观察到可信完成事件：不能表述为"提示符未就绪"，
+        // 必须指向 integration 未生效，否则用户无从修复。
+        assert_eq!(
+            registry.visible_unavailable_reason("ssh-1"),
+            "SSH_INTEGRATION_NOT_CONFIRMED"
+        );
+        // 首个可信 D 建立就绪后，用户键入使其失效：此时才是"提示符未就绪"，
+        // 且用户在终端按回车（新 D/A）即可自愈。
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::CommandFinished {
+                code: 0,
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        registry.begin_user_input("ssh-1");
         assert_eq!(
             registry.visible_unavailable_reason("ssh-1"),
             "SSH_PROMPT_NOT_READY"
@@ -1667,6 +1717,55 @@ mod tests {
         std::thread::sleep(MARKER_RECOVERY_GRACE + Duration::from_millis(20));
         assert!(!registry.input_gated("ssh-1"));
         assert!(!registry.prompt_ready("ssh-1"));
+    }
+
+    #[test]
+    fn marker_filter_strips_multiline_wrapper_echo_and_renders_display_with_crlf() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        registry.register_integration("ssh-1", "nonce-1");
+        registry.enable_marker_recovery("ssh-1");
+        registry.record_integration_event(
+            "ssh-1",
+            &Osc633Event::PromptStarted {
+                nonce: Some("nonce-1".into()),
+            },
+        );
+        assert!(registry.try_reserve_visible_execution("ssh-1", "exec-1"));
+
+        // 多行命令：包装器回显横跨两行，readline 在续行前渲染 `> ` 提示符。
+        // 只剥 Marker 所在行会把 ` eval '…` 行泄漏到终端；合成回显若保留
+        // 裸 LF，xterm 会渲染成阶梯状（LF 只下移不回车）。
+        let marker = "__NOCTERM_SSH_AI_DONE_multiline__";
+        registry.begin_marker_output_suppression(
+            "ssh-1",
+            marker,
+            "exec-1",
+            "docker info --format 'A\nB'",
+            suppression_deadline(),
+        );
+        let echo = format!(
+            "user@host:~$  eval 'docker info --format 'A\r\n> B'\\''; \
+             __nocterm_status_x=$?; printf '{marker}%s__\\n' \"${{status_name}}\"; \
+             __nocterm_cleanup_x() {{ return 3; }}; __nocterm_cleanup_x\r\n"
+        );
+        let first = registry.visible_output("ssh-1", &echo[..40.min(echo.len())]);
+        let second = registry.visible_output("ssh-1", &echo[40.min(echo.len())..]);
+        let third = registry.visible_output("ssh-1", "out1\r\nout2\r\n");
+        let fourth = registry.visible_output("ssh-1", &format!("{marker}0__\r\nprompt$ "));
+
+        let visible = format!("{first}{second}{third}{fourth}");
+        // 协议与包装器内部文本对用户完全不可见。
+        assert!(!visible.contains("eval"));
+        assert!(!visible.contains("__nocterm"));
+        assert!(!visible.contains(marker));
+        // 合成回显保留原命令语义，多行以 CRLF 分隔（不是裸 LF）。
+        assert!(visible.contains("docker info --format 'A\r\nB'"));
+        // 命令输出与后续提示符完整保留。
+        assert!(visible.contains("out1\r\nout2\r\nprompt$ "));
+        assert!(registry.input_gated("ssh-1"));
+        std::thread::sleep(MARKER_RECOVERY_GRACE);
+        assert!(!registry.input_gated("ssh-1"));
     }
 
     #[test]

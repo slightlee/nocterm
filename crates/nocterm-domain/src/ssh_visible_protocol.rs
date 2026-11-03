@@ -60,30 +60,47 @@ pub fn completion(data: &str, marker: &str) -> Option<(usize, usize, i64)> {
     None
 }
 
-/// 定位包含包装器 Marker 字面量的已终结逻辑行。
+/// 包装器回显锚点：`wrapped_command` 的固定前缀（前导空格配合
+/// HISTCONTROL=ignorespace）。可见执行期间输入被门控，用户不可能敲出同样的
+/// 行；命令自身输出若在回显窗口内出现该片段会被一并隐藏，与既有启发式
+/// 同一取舍级别。
+pub const WRAPPER_ECHO_ANCHOR: &str = " eval '";
+
+/// 定位完整包装器回显跨度：从 ` eval '` 锚点所在行到 Marker 所在行（含）。
 ///
-/// 流式过滤专用：行未终结时返回 None，调用方必须继续缓冲等待。返回范围只
-/// 覆盖包装器回显行，前面的异步后台输出和后面的命令输出都必须保留。
+/// 多行命令的包装器回显横跨多行（shell 续行符由 readline 渲染为输出），
+/// 只剥 Marker 所在行会把前面的 ` eval '…` 行泄漏到终端；单行命令锚点与
+/// Marker 重合，行为不变。返回范围只覆盖包装器回显，前面的异步后台输出
+/// 和后面的命令输出都必须保留。
 pub fn wrapper_echo_range(data: &str, marker: &str) -> Option<std::ops::Range<usize>> {
     let marker_at = data.find(marker)?;
-    let line_start = line_start_before(data, marker_at);
+    let start = wrapper_echo_start(data, marker_at)?;
     let terminator_at = marker_at + data[marker_at..].find(['\r', '\n'])?;
-    Some(line_start..line_end_after(data, terminator_at))
+    Some(start..line_end_after(data, terminator_at))
 }
 
-/// 终局剥离专用的包装器回显范围：允许该行尚未终结（缓冲就此结束）。
+/// 终局剥离专用的包装器回显跨度：允许 Marker 所在行尚未终结（缓冲就此结束）。
 ///
 /// AI 结果过滤与 OSC 清理只在缓冲终了时调用，此时“行未终结”意味着完成
 /// Marker 先于回显行换行到达的极端分块；流式路径不能使用本函数，否则会把
 /// 仍在到达途中的回显行截断。
 pub fn wrapper_echo_range_at_end(data: &str, marker: &str) -> Option<std::ops::Range<usize>> {
     let marker_at = data.find(marker)?;
-    let line_start = line_start_before(data, marker_at);
+    let start = wrapper_echo_start(data, marker_at)?;
     let end = match data[marker_at..].find(['\r', '\n']) {
         Some(relative) => line_end_after(data, marker_at + relative),
         None => data.len(),
     };
-    Some(line_start..end)
+    Some(start..end)
+}
+
+/// 包装器跨度的起点：锚点所在行的行首。锚点必须先于 Marker 出现（单行命令
+/// 两者同行）；找不到锚点时退回 Marker 所在行——等价旧的保守行为。
+fn wrapper_echo_start(data: &str, marker_at: usize) -> Option<usize> {
+    match data.find(WRAPPER_ECHO_ANCHOR) {
+        Some(anchor_at) if anchor_at <= marker_at => Some(line_start_before(data, anchor_at)),
+        _ => Some(line_start_before(data, marker_at)),
+    }
 }
 
 /// Provider 结果只包含业务输出：去掉包装器回显与内部 Marker。
@@ -174,6 +191,32 @@ mod tests {
         assert_eq!(range, 0..echo.len());
         // 流式路径必须继续等待换行，不能在行中途截断。
         assert!(wrapper_echo_range(echo, &marker).is_none());
+    }
+
+    #[test]
+    fn wrapper_echo_span_covers_multiline_command_echo_with_continuation_prompts() {
+        let marker = marker_from_random(b"deadbeefdeadbeef");
+        // 多行命令：包装器回显横跨两行，readline 在续行前渲染 `> ` 提示符，
+        // Marker 位于最后一个源行（printf 片段）。跨度必须从 ` eval '` 行
+        // 开始，否则第一行会连同内部协议一起泄漏到终端。
+        let echo = format!(
+            "user@host:~$  eval 'docker info --format 'A\r\n> B'\\''; \
+             __nocterm_status_x=$?; printf '{marker}%s__\\n' \"${{status_name}}\"; \
+             __nocterm_cleanup_x() {{ return 3; }}; __nocterm_cleanup_x\r\n"
+        );
+        let range = wrapper_echo_range(&echo, &marker).expect("multiline wrapper echo");
+        assert!(echo[range.clone()].starts_with("user@host:~$  eval '"));
+        assert!(!echo[..range.start].contains("eval"));
+        assert!(range.end >= echo.len() - 2);
+
+        // 不含锚点的异步输出必须保留（含锚点的行按文档化取舍会被跨度一并
+        // 隐藏——执行窗口内该取舍优先于回显整洁）。
+        let with_background = format!(
+            "background notice\r\n eval 'A\r\n> B'\\''; printf '{marker}%s__\\n' \"x\"; \r\n"
+        );
+        let range = wrapper_echo_range(&with_background, &marker).expect("wrapper after output");
+        assert_eq!(&with_background[..range.start], "background notice\r\n");
+        assert!(with_background[range.clone()].starts_with(" eval 'A"));
     }
 
     #[test]

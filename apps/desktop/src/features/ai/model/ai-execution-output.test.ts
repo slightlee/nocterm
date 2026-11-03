@@ -104,6 +104,11 @@ describe('executionFallbackLabel', () => {
     expect(executionFallbackLabel('SSH_INTEGRATION_UNAVAILABLE')).toContain('初始化失败');
     expect(executionFallbackLabel('SSH_CONTROL_PLANE_UNAVAILABLE')).toContain('控制面不可用');
     expect(executionFallbackLabel('SSH_PROMPT_NOT_READY')).toContain('提示符未就绪');
+    // 从未观察到可信完成事件与"就绪后被用户输入失效"必须分开提示，
+    // 前者指向远端钩子未生效（重连修复），后者等待下一次提示符事件自愈。
+    expect(executionFallbackLabel('SSH_INTEGRATION_NOT_CONFIRMED')).toContain(
+      'Shell Integration 生效'
+    );
   });
 });
 

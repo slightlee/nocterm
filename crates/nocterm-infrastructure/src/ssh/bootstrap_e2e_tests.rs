@@ -322,6 +322,40 @@ fn bootstrap_full_flow_over_in_memory_ssh_server() {
     // 等待 run_session 的 source 注入到达桩。
     std::thread::sleep(std::time::Duration::from_millis(500));
 
+    // 回传链路契约：桩模拟钩子生效后发出的 nonce-bound OSC 633 必须经
+    // output_tx 到达 reader——这是命令层 Prompt Ready 证据的物理来源，此前
+    // 只断言了服务端收到注入，回传侧从未被守护。
+    let mut reader = opened.reader;
+    let (chunk_tx, chunk_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 1024];
+        while let Ok(length) = reader.read(&mut buffer) {
+            if length == 0 || chunk_tx.send(buffer[..length].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut received = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if let Ok(chunk) = chunk_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            received.extend_from_slice(&chunk);
+        }
+        let finished = ["633;D;0;", "633;A;"].iter().all(|marker| {
+            std::str::from_utf8(&received)
+                .map(|text| text.contains(marker))
+                .unwrap_or(false)
+        });
+        if finished {
+            break;
+        }
+    }
+    let echoed = String::from_utf8_lossy(&received);
+    assert!(
+        echoed.contains(&format!("633;D;0;{}", plan.nonce)) && echoed.contains("633;A;"),
+        "reader must receive nonce-bound OSC 633 events, got {echoed:?}"
+    );
+
     let shared = shared.lock().unwrap();
     // 探针被调用。
     assert_eq!(shared.probe_count, 1);

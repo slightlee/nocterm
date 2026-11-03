@@ -122,6 +122,8 @@ export function executionFallbackLabel(reason: string | null): string | null {
       return '当前连接未启用终端可见执行';
     case 'SSH_PROMPT_NOT_READY':
       return '终端提示符未就绪，已安全回退';
+    case 'SSH_INTEGRATION_NOT_CONFIRMED':
+      return '未能确认远端 Shell Integration 生效，已隔离执行（可尝试重连终端）';
     case 'SSH_SHELL_UNSUPPORTED':
       return '当前远程 Shell 不支持终端可见执行，已隔离执行';
     case 'SSH_INTEGRATION_UNAVAILABLE':

@@ -981,17 +981,18 @@ updated_at
 
 建议新增或规范稳定错误码，最终名称在实现评审中确定：
 
-| 类别               | 示例语义                                |
-| ------------------ | --------------------------------------- |
-| 目标失效           | 终端已关闭、重连或 generation 不匹配    |
-| 终端忙             | 当前终端已有 AI 命令执行或仍在恢复      |
-| Prompt 未就绪      | 当前 shell 不处于可接收命令的提示符状态 |
-| Integration 不可用 | 注入、启动或 OSC 协议不可用             |
-| Marker 不可用      | shell 未知或输出过滤不可信              |
-| 执行已 dispatch    | 命令已经进入终端，禁止自动重试          |
-| 结果未知           | 命令可能已经执行，但无法确认结果        |
-| 审计不完整         | 命令可能执行，但最终审计写入失败        |
-| 门控恢复中         | 已发送 Ctrl+C，尚未证明 shell 恢复      |
+| 类别               | 示例语义                                                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| 目标失效           | 终端已关闭、重连或 generation 不匹配                                                                                      |
+| 终端忙             | 当前终端已有 AI 命令执行或仍在恢复                                                                                        |
+| Prompt 未就绪      | 当前 shell 不处于可接收命令的提示符状态                                                                                   |
+| Integration 未确认 | bootstrap 已注册 nonce 但从未观察到可信完成事件，远端钩子大概率未生效（区别于 Prompt 未就绪：后者曾就绪、被用户键入失效） |
+| Integration 不可用 | 注入、启动或 OSC 协议不可用                                                                                               |
+| Marker 不可用      | shell 未知或输出过滤不可信                                                                                                |
+| 执行已 dispatch    | 命令已经进入终端，禁止自动重试                                                                                            |
+| 结果未知           | 命令可能已经执行，但无法确认结果                                                                                          |
+| 审计不完整         | 命令可能执行，但最终审计写入失败                                                                                          |
+| 门控恢复中         | 已发送 Ctrl+C，尚未证明 shell 恢复                                                                                        |
 
 UI 不解析 stderr 或中文文本决定行为，所有分支依赖稳定 code 和结构化 phase。
 
@@ -1436,10 +1437,10 @@ macOS 和 Windows 客户端必须分别真实运行，不能用一种客户端�
 - Prompt Ready 检查与 AI gate 预占原子完成；用户输入在同一锁内使 Prompt Ready 失效，竞态失败时回退 independent exec；
 - 通用命令与系统信息、进程、端口、日志、Docker 等结构化工具统一经过 approval/execution 编排，均遵循相同可见策略；
 - execution ledger 记录实际 mode、稳定 fallback reason、sequence 和生命周期；Provider 契约依据实际记录声明是否继承可见 Shell 状态；
-- bootstrap 不支持、初始化失败、控制面缺失与 Prompt 未就绪使用不同稳定 fallback reason，内部 probe/upload 错误不进入 ledger；
+- bootstrap 不支持、初始化失败、控制面缺失、Integration 未确认（注入后从未观察到可信完成事件，用户可尝试重连）与 Prompt 未就绪（曾就绪、被用户键入失效）使用不同稳定 fallback reason，内部 probe/upload 错误不进入 ledger；nonce 过滤丢弃与首次可信完成事件在诊断日志留痕；
 - 取消和超时从 dispatching/dispatched 映射到明确终态；前端启动后通过 ledger 快照补齐监听窗口内丢失的事件；
 - SSH reader 先发布普通输出再提交同一数据块中的 OSC 完成事件，可见执行完成时再次排空队列，避免尾部输出丢失。
-- bash/zsh 可见命令使用 owner-bound 高熵 Marker 包装，OSC D 在 250ms 窗口内优先；Marker 跨块过滤且只能返回原 execution 的结果、释放其 gate，不能恢复 Prompt Ready，后续无可信 A/D 时下一次执行降级 independent exec；过滤器最多缓冲 128 KiB，窗口（执行截止 + 余量）过后降级直通，并保留包装器前的异步输出。
+- bash/zsh 可见命令使用 owner-bound 高熵 Marker 包装，OSC D 在 250ms 窗口内优先；Marker 跨块过滤且只能返回原 execution 的结果、释放其 gate，不能恢复 Prompt Ready，后续无可信 A/D 时下一次执行降级 independent exec；过滤器最多缓冲 128 KiB，窗口（执行截止 + 余量）过后降级直通，并保留包装器前的异步输出。包装器回显以 ` eval '` 锚点定界完整跨度（多行命令横跨多行，防止续行泄漏），合成回显中的换行归一为 CRLF（xterm 的 LF 不回车，裸 LF 会渲染成阶梯）。
 - bootstrap 回显抑制最多缓冲 128 KiB，窗口 5 秒；首个可信 nonce-bound OSC 会结束抑制并在无回显时交还正常提示符。窗口内无法精确匹配 token 时保持 fail closed；超限或超时降级为只剔除可确证内部行的直通（PowerShell 固定 token 必须叠加注入语法特征，避免吞掉用户命令），避免钩子未安装时终端假死或内存无限增长。
 
 ### 24.2 当时边界
