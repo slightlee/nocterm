@@ -10,38 +10,57 @@ use nocterm_application::{
     connection::ConnectionService,
     terminal::{LocalTerminalService, TerminalService},
 };
-use nocterm_domain::ai_audit::{AiAuditApproval, AiAuditOutcome, AiAuditTool};
+use nocterm_domain::{
+    ai_audit::{AiAuditApproval, AiAuditOutcome, AiAuditTool},
+    ai_execution::{AiExecutionMode, AiExecutionTransition},
+};
 use tauri::Emitter;
 
 use crate::{
     commands::{
         ai_policy::{AI_APPROVAL_TIMEOUT, AI_EXECUTION_TIMEOUT},
-        ai_terminal::{TerminalCommandResult, execute_local_sync, execute_ssh_sync},
-        ai_tool_audit::{append as append_audit, elapsed_ms, execute_after_audit},
+        ai_terminal::{
+            TerminalCommandResult, execute_local_sync, execute_ssh_sync, execute_ssh_visible_sync,
+        },
+        ai_tool_audit::{append as append_audit, append_with_execution, elapsed_ms},
         ai_tool_gateway::{GatewayServices, ToolExecutionContext},
     },
     dto::ai::{AiToolApprovalClosedEvent, AiToolApprovalEvent},
     state::{
         AiApprovalDecision, AiGatewayAccess, AiGatewayBinding, AiGatewayState, AiTarget,
-        LocalTerminalRegistry,
+        LocalTerminalRegistry, SshTerminalRegistry,
     },
 };
 
 static NEXT_APPROVAL_ID: AtomicU64 = AtomicU64::new(1);
 
+/// 一次 SSH 可见执行的终端定位：路由确认前置满足后携带，执行器据此写入。
+struct SshVisibleAttempt {
+    terminal_id: String,
+}
+
 impl GatewayServices {
     pub(super) fn execute_after_approval(
         &self,
-        context: &ToolExecutionContext<'_>,
+        context: &mut ToolExecutionContext<'_>,
         command: &str,
     ) -> Result<TerminalCommandResult, String> {
-        self.execute_with_approval_callback(context, command, |command| {
+        let access = context.access.clone();
+        let audit_tool = context.audit_tool;
+        let deadline = context.deadline;
+        self.execute_with_approval_callback(context, command, |command, tracker| {
+            tracker
+                .transition(AiExecutionTransition::Approve)
+                .map_err(|error| error.to_string())?;
+            let execution_id = tracker.record().execution_id.clone();
             self.execute_command(
-                context.access,
-                context.audit_tool,
+                &access,
+                tracker,
+                audit_tool,
                 command,
                 AiAuditApproval::Approved,
-                context.deadline,
+                deadline,
+                Some(&execution_id),
             )
         })
     }
@@ -49,65 +68,89 @@ impl GatewayServices {
     /// 结构化工具和通用命令共用同一审批状态机，避免“每次确认”出现旁路。
     pub(super) fn execute_with_approval_callback<F>(
         &self,
-        context: &ToolExecutionContext<'_>,
+        context: &mut ToolExecutionContext<'_>,
         command: &str,
         on_approved: F,
     ) -> Result<TerminalCommandResult, String>
     where
-        F: FnOnce(&str) -> Result<TerminalCommandResult, String>,
+        F: FnOnce(
+            &str,
+            &mut crate::commands::ai_execution::ExecutionTracker,
+        ) -> Result<TerminalCommandResult, String>,
     {
-        // 状态机主体在 ApprovalFlow 中实现；这里只注入真正的事件发布闭包。
+        let access = context.access.clone();
+        let audit_tool = context.audit_tool;
+        let deadline = context.deadline;
+        let session_id = access.binding.session_id.clone();
+        let tracker = &mut context.execution;
         ApprovalFlow {
             audit: &self.audit,
             gateway: context.gateway,
             connection: &self.connection,
             local_registry: &self.local_registry,
             token: context.token,
-            binding: &context.access.binding,
-            audit_tool: context.audit_tool,
-            deadline: context.deadline,
+            binding: &access.binding,
+            audit_tool,
+            deadline,
         }
         .run(
             command,
             |event| self.app.emit("nocterm://ai-tool-approval", event).is_ok(),
-            // UI 只接受同一 session/approval 的关闭事件；事件丢失时前端仍有
-            // expiresAt 本地兜底，这里尽力发送即可。
             |approval_id, resolution| {
                 let _ = self.app.emit(
                     "nocterm://ai-tool-approval-closed",
                     AiToolApprovalClosedEvent {
                         approval_id: approval_id.to_string(),
-                        session_id: context.access.binding.session_id.clone(),
+                        session_id: session_id.clone(),
                         resolution: resolution.to_string(),
                     },
                 );
             },
-            on_approved,
+            |approved_command| on_approved(approved_command, tracker),
         )
     }
 
     /// 策略允许跳过确认时仍使用同一审计和执行核心。
     pub(super) fn execute_command_without_approval(
         &self,
-        access: &AiGatewayAccess,
-        audit_tool: AiAuditTool,
+        context: &mut ToolExecutionContext<'_>,
         command: &str,
-        call_deadline: Instant,
     ) -> Result<TerminalCommandResult, String> {
-        self.terminal_execution()
-            .without_approval(access, audit_tool, command, call_deadline)
+        let execution_id = context.execution.record().execution_id.clone();
+        self.execute_command(
+            context.access,
+            &mut context.execution,
+            context.audit_tool,
+            command,
+            AiAuditApproval::NotRequired,
+            context.deadline,
+            Some(&execution_id),
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_command(
         &self,
         access: &AiGatewayAccess,
+        tracker: &mut crate::commands::ai_execution::ExecutionTracker,
         audit_tool: AiAuditTool,
         command: &str,
         approval: AiAuditApproval,
         call_deadline: Instant,
+        execution_id: Option<&str>,
     ) -> Result<TerminalCommandResult, String> {
-        self.terminal_execution()
-            .run(access, audit_tool, command, approval, call_deadline)
+        let execution_id = execution_id
+            .map(str::to_string)
+            .unwrap_or_else(|| tracker.record().execution_id.clone());
+        self.terminal_execution().run(
+            access,
+            tracker,
+            audit_tool,
+            command,
+            approval,
+            call_deadline,
+            Some(&execution_id),
+        )
     }
 
     fn terminal_execution(&self) -> TerminalExecution<'_> {
@@ -117,6 +160,8 @@ impl GatewayServices {
             terminal: &self.terminal,
             local_terminal: &self.local_terminal,
             local_registry: &self.local_registry,
+            ssh_registry: &self.ssh_registry,
+            gateway: &self.gateway,
         }
     }
 }
@@ -169,7 +214,7 @@ impl ApprovalFlow<'_> {
             NEXT_APPROVAL_ID.fetch_add(1, AtomicOrdering::Relaxed)
         );
         let (target_kind, target_label) = match &binding.target {
-            AiTarget::Ssh { connection_id } => match self.connection.get(*connection_id) {
+            AiTarget::Ssh { connection_id, .. } => match self.connection.get(*connection_id) {
                 Ok(profile) => (
                     "ssh".to_string(),
                     format!(
@@ -339,22 +384,33 @@ struct TerminalExecution<'a> {
     terminal: &'a TerminalService,
     local_terminal: &'a LocalTerminalService,
     local_registry: &'a LocalTerminalRegistry,
+    ssh_registry: &'a SshTerminalRegistry,
+    gateway: &'a AiGatewayState,
 }
 
 impl TerminalExecution<'_> {
-    fn without_approval(
+    #[allow(clippy::too_many_arguments)]
+    fn run(
         &self,
         access: &AiGatewayAccess,
+        tracker: &mut crate::commands::ai_execution::ExecutionTracker,
         audit_tool: AiAuditTool,
         command: &str,
+        approval: AiAuditApproval,
         call_deadline: Instant,
+        execution_id: Option<&str>,
     ) -> Result<TerminalCommandResult, String> {
+        let binding = &access.binding;
+        // 参数校验先于终端占用：非法命令不得跨越 dispatch 边界。
         let command = match crate::commands::ai_policy::validate_approved_command(command) {
             Ok(command) => command,
             Err(error) => {
+                let _ = tracker.transition(AiExecutionTransition::FailBeforeDispatch {
+                    error_code: "AI_TOOL_ARGUMENTS_INVALID".to_string(),
+                });
                 return Err(audited_denial(
                     self.audit,
-                    &access.binding,
+                    binding,
                     audit_tool,
                     AiAuditApproval::NotRequested,
                     AiAuditOutcome::Failed,
@@ -363,70 +419,253 @@ impl TerminalExecution<'_> {
                 ));
             }
         };
-        self.run(
-            access,
-            audit_tool,
-            &command,
-            AiAuditApproval::NotRequired,
-            call_deadline,
-        )
-    }
-
-    fn run(
-        &self,
-        access: &AiGatewayAccess,
-        audit_tool: AiAuditTool,
-        command: &str,
-        approval: AiAuditApproval,
-        call_deadline: Instant,
-    ) -> Result<TerminalCommandResult, String> {
-        let binding = &access.binding;
         let execution_deadline = (Instant::now() + AI_EXECUTION_TIMEOUT).min(call_deadline);
-        // 无论是用户批准还是策略自动放行，命令都必须先写入 pending 审计再执行。
-        let started_at = Instant::now();
-        let result =
-            execute_after_audit(
-                self.audit,
-                binding,
-                audit_tool,
-                approval,
-                || match &binding.target {
-                    AiTarget::Ssh { connection_id } => execute_ssh_sync(
-                        self.connection,
-                        self.terminal,
-                        *connection_id,
-                        command,
-                        &access.cancellation,
-                        execution_deadline,
-                    ),
-                    AiTarget::Local {
-                        session_id,
-                        terminal_id,
-                    } => execute_local_sync(
-                        self.local_terminal,
-                        self.local_registry,
-                        session_id,
-                        terminal_id,
-                        command,
-                        &access.cancellation,
-                        execution_deadline,
-                    ),
-                },
-            )?;
-        let succeeded = result.as_ref().is_ok_and(|value| value.exit_code == 0);
-        let (outcome, error_code) = if succeeded {
-            (AiAuditOutcome::Succeeded, None)
-        } else {
-            (AiAuditOutcome::Failed, Some("AI_TOOL_EXECUTION_FAILED"))
+        // 授权补齐只在聚合仍处于早期阶段时执行：审批链（execute_terminal_command
+        // 的 Confirm/Execute 分支）通常已推进到 Authorized，这里重复转换会触发
+        // "AI 执行状态变化不合法"。直调 run 的路径（测试/未来调用方）才需要补。
+        match tracker.record().phase {
+            nocterm_domain::ai_execution::AiExecutionPhase::Requested => {
+                if matches!(approval, AiAuditApproval::Approved) {
+                    tracker
+                        .transition(AiExecutionTransition::RequestApproval)
+                        .map_err(|error| error.to_string())?;
+                    tracker
+                        .transition(AiExecutionTransition::Approve)
+                        .map_err(|error| error.to_string())?;
+                } else {
+                    tracker
+                        .transition(AiExecutionTransition::AuthorizeAutomatically)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            nocterm_domain::ai_execution::AiExecutionPhase::AwaitingApproval => {
+                tracker
+                    .transition(AiExecutionTransition::Approve)
+                    .map_err(|error| error.to_string())?;
+            }
+            _ => {}
+        }
+        tracker
+            .transition(AiExecutionTransition::ReserveTerminal)
+            .map_err(|error| error.to_string())?;
+        // SSH 可见路由默认开启：连接未显式关闭且四元绑定、Prompt Ready、
+        // 输入门控全部满足时写入可见 PTY；任一前置不满足自动降级独立 exec。
+        // 降级发生在 dispatch 之前，不会造成重复执行或改变命令语义。
+        let mut ssh_visible_attempt: Option<SshVisibleAttempt> = None;
+        let (mode, fallback_reason) = match &binding.target {
+            AiTarget::Ssh {
+                connection_id,
+                workspace_session_id,
+                terminal_id,
+                terminal_generation,
+            } => {
+                if let Err(error) = self.ssh_registry.verify_binding(
+                    workspace_session_id,
+                    terminal_id,
+                    *terminal_generation,
+                    *connection_id,
+                ) {
+                    eprintln!("[nocterm-ssh-route] 降级失败：目标绑定失效：{error}");
+                    // 目标失效不降级：写另一个终端是不可接受的风险。
+                    tracker
+                        .transition(AiExecutionTransition::FailBeforeDispatch {
+                            error_code: "AI_TOOL_TARGET_INVALID".to_string(),
+                        })
+                        .map_err(|error| error.to_string())?;
+                    return Err(error);
+                }
+                if !self.gateway.ssh_visible_enabled(*connection_id) {
+                    (
+                        AiExecutionMode::SshIndependentExec,
+                        Some("SSH_VISIBLE_NOT_ENABLED".to_string()),
+                    )
+                } else if !self.ssh_registry.prompt_ready(terminal_id) {
+                    (
+                        AiExecutionMode::SshIndependentExec,
+                        Some(
+                            self.ssh_registry
+                                .visible_unavailable_reason(terminal_id)
+                                .to_string(),
+                        ),
+                    )
+                } else if !self
+                    .ssh_registry
+                    .try_reserve_visible_execution(terminal_id, &tracker.record().execution_id)
+                {
+                    if self.ssh_registry.input_gated(terminal_id) {
+                        // 终端忙是暂态：报错让 Provider/用户稍后重试，不静默改道。
+                        tracker
+                            .transition(AiExecutionTransition::FailBeforeDispatch {
+                                error_code: "SSH_TERMINAL_BUSY".to_string(),
+                            })
+                            .map_err(|error| error.to_string())?;
+                        return Err(
+                            "当前 SSH 终端已有 AI 命令正在执行，请等待完成后重试".to_string()
+                        );
+                    }
+                    // 用户输入在 Prompt Ready 检查后抢先进入队列时，安全降级独立执行。
+                    (
+                        AiExecutionMode::SshIndependentExec,
+                        Some("SSH_PROMPT_CHANGED".to_string()),
+                    )
+                } else {
+                    let visible_mode = if self.ssh_registry.marker_recovery_supported(terminal_id) {
+                        AiExecutionMode::SshVisibleMarker
+                    } else {
+                        AiExecutionMode::SshVisibleOsc
+                    };
+                    ssh_visible_attempt = Some(SshVisibleAttempt {
+                        terminal_id: terminal_id.clone(),
+                    });
+                    (visible_mode, None)
+                }
+            }
+            AiTarget::Local { terminal_id, .. }
+                if self.local_registry.integration_active(terminal_id) =>
+            {
+                (AiExecutionMode::LocalVisibleOsc, None)
+            }
+            AiTarget::Local { .. } => (AiExecutionMode::LocalVisibleMarker, None),
         };
-        if append_audit(
+        let execution_id = execution_id
+            .map(str::to_string)
+            .unwrap_or_else(|| tracker.record().execution_id.clone());
+        if let Err(error) = append_with_execution(
             self.audit,
             binding,
             audit_tool,
             approval,
-            outcome,
-            Some(elapsed_ms(started_at)),
-            error_code,
+            AiAuditOutcome::Pending,
+            None,
+            None,
+            Some(&execution_id),
+        ) {
+            if let Some(attempt) = &ssh_visible_attempt {
+                self.ssh_registry
+                    .release_input_gate(&attempt.terminal_id, &tracker.record().execution_id);
+            }
+            let _ = tracker.transition(AiExecutionTransition::FailBeforeDispatch {
+                error_code: "AI_AUDIT_WRITE_FAILED".to_string(),
+            });
+            return Err(error);
+        }
+        if let Err(error) = tracker.transition(AiExecutionTransition::BeginDispatch {
+            mode,
+            fallback_reason,
+        }) {
+            if let Some(attempt) = &ssh_visible_attempt {
+                self.ssh_registry
+                    .release_input_gate(&attempt.terminal_id, &tracker.record().execution_id);
+            }
+            return Err(error.to_string());
+        }
+        let started_at = Instant::now();
+        let result = match (&binding.target, &ssh_visible_attempt) {
+            (AiTarget::Ssh { .. }, Some(attempt)) => execute_ssh_visible_sync(
+                self.terminal,
+                self.ssh_registry,
+                attempt.terminal_id.clone(),
+                0,
+                &tracker.record().execution_id,
+                &command,
+                &access.cancellation,
+                execution_deadline,
+            ),
+            (AiTarget::Ssh { connection_id, .. }, None) => execute_ssh_sync(
+                self.connection,
+                self.terminal,
+                *connection_id,
+                &command,
+                &access.cancellation,
+                execution_deadline,
+            ),
+            (
+                AiTarget::Local {
+                    session_id,
+                    terminal_id,
+                },
+                None,
+            ) => execute_local_sync(
+                self.local_terminal,
+                self.local_registry,
+                session_id,
+                terminal_id,
+                &command,
+                &access.cancellation,
+                execution_deadline,
+            ),
+            (_, Some(attempt)) => {
+                self.ssh_registry
+                    .release_input_gate(&attempt.terminal_id, &tracker.record().execution_id);
+                let _ = tracker.transition(AiExecutionTransition::MarkResultUnknown {
+                    duration_ms: None,
+                    error_code: "AI_EXECUTION_ROUTING_INVALID".to_string(),
+                });
+                return Err("AI 执行路由状态不一致，命令未执行".to_string());
+            }
+        };
+        let duration_ms = elapsed_ms(started_at);
+        let final_result = match &result {
+            Ok(value) if value.exit_code == 0 => {
+                tracker
+                    .transition(AiExecutionTransition::ConfirmDispatch)
+                    .map_err(|error| error.to_string())?;
+                tracker
+                    .transition(AiExecutionTransition::Complete {
+                        exit_code: Some(value.exit_code as i32),
+                        duration_ms,
+                    })
+                    .map_err(|error| error.to_string())?;
+                (AiAuditOutcome::Succeeded, None)
+            }
+            Ok(value) => {
+                tracker
+                    .transition(AiExecutionTransition::ConfirmDispatch)
+                    .map_err(|error| error.to_string())?;
+                tracker
+                    .transition(AiExecutionTransition::FailAfterDispatch {
+                        exit_code: Some(value.exit_code as i32),
+                        duration_ms,
+                        error_code: "AI_TOOL_EXECUTION_FAILED".to_string(),
+                    })
+                    .map_err(|error| error.to_string())?;
+                (AiAuditOutcome::Failed, Some("AI_TOOL_EXECUTION_FAILED"))
+            }
+            Err(_)
+                if access
+                    .cancellation
+                    .load(std::sync::atomic::Ordering::Acquire) =>
+            {
+                tracker
+                    .transition(AiExecutionTransition::Cancel { duration_ms })
+                    .map_err(|error| error.to_string())?;
+                (AiAuditOutcome::Failed, Some("AI_TOOL_CANCELLED"))
+            }
+            Err(_) if Instant::now() >= execution_deadline => {
+                tracker
+                    .transition(AiExecutionTransition::TimeOut { duration_ms })
+                    .map_err(|error| error.to_string())?;
+                (AiAuditOutcome::Failed, Some("AI_TOOL_TIMEOUT"))
+            }
+            Err(_) => {
+                tracker
+                    .transition(AiExecutionTransition::MarkResultUnknown {
+                        duration_ms: Some(duration_ms),
+                        error_code: "AI_TOOL_RESULT_UNKNOWN".to_string(),
+                    })
+                    .map_err(|error| error.to_string())?;
+                (AiAuditOutcome::Failed, Some("AI_TOOL_RESULT_UNKNOWN"))
+            }
+        };
+        if append_with_execution(
+            self.audit,
+            binding,
+            audit_tool,
+            approval,
+            final_result.0,
+            Some(duration_ms),
+            final_result.1,
+            Some(&execution_id),
         )
         .is_err()
         {
@@ -485,6 +724,89 @@ mod tests {
     use nocterm_domain::terminal::{
         LocalTerminalPort, OpenedTerminal, SshTerminalError, SshTerminalPort,
     };
+
+    use nocterm_domain::ai_execution::{
+        AiExecutionCreateOutcome, AiExecutionExpectation, AiExecutionListFilter, AiExecutionRecord,
+        AiExecutionRepository, AiExecutionRepositoryError, AiExecutionUpdateOutcome,
+    };
+
+    #[derive(Default)]
+    struct InMemoryExecutionRepository {
+        records: Mutex<Vec<AiExecutionRecord>>,
+    }
+
+    impl AiExecutionRepository for InMemoryExecutionRepository {
+        fn create_or_get(
+            &self,
+            candidate: &AiExecutionRecord,
+        ) -> Result<AiExecutionCreateOutcome, AiExecutionRepositoryError> {
+            let mut records = self.records.lock().expect("records lock");
+            if let Some(existing) = records
+                .iter()
+                .find(|record| record.request_key == candidate.request_key)
+            {
+                return Ok(AiExecutionCreateOutcome::Existing(existing.clone()));
+            }
+            records.push(candidate.clone());
+            Ok(AiExecutionCreateOutcome::Created(candidate.clone()))
+        }
+
+        fn get(
+            &self,
+            execution_id: &str,
+        ) -> Result<Option<AiExecutionRecord>, AiExecutionRepositoryError> {
+            Ok(self
+                .records
+                .lock()
+                .expect("records lock")
+                .iter()
+                .find(|record| record.execution_id == execution_id)
+                .cloned())
+        }
+
+        fn list(
+            &self,
+            filter: &AiExecutionListFilter,
+        ) -> Result<Vec<AiExecutionRecord>, AiExecutionRepositoryError> {
+            Ok(self
+                .records
+                .lock()
+                .expect("records lock")
+                .iter()
+                .filter(|record| {
+                    filter
+                        .conversation_id
+                        .as_ref()
+                        .is_none_or(|id| &record.conversation_id == id)
+                        && filter
+                            .provider_session_id
+                            .as_ref()
+                            .is_none_or(|id| &record.request_key.provider_session_id == id)
+                        && (filter.phases.is_empty() || filter.phases.contains(&record.phase))
+                })
+                .cloned()
+                .collect())
+        }
+
+        fn conditional_update(
+            &self,
+            expectation: AiExecutionExpectation,
+            replacement: &AiExecutionRecord,
+        ) -> Result<AiExecutionUpdateOutcome, AiExecutionRepositoryError> {
+            let mut records = self.records.lock().expect("records lock");
+            let Some(record) = records
+                .iter_mut()
+                .find(|record| record.execution_id == replacement.execution_id)
+            else {
+                return Ok(AiExecutionUpdateOutcome::Conflict(None));
+            };
+            if record.phase != expectation.phase || record.sequence != expectation.sequence {
+                return Ok(AiExecutionUpdateOutcome::Conflict(Some(record.clone())));
+            }
+            *record = replacement.clone();
+            Ok(AiExecutionUpdateOutcome::Updated(replacement.clone()))
+        }
+    }
 
     use crate::state::{
         AiCommandPolicy, AiGatewayAccess, AiGatewayBinding, AiGatewayState, AiTarget,
@@ -676,6 +998,7 @@ mod tests {
 
     /// 装配被测核心的全部协作者：审计仓库、网关状态、服务桩与本地注册表。
     struct Harness {
+        ssh_registry: Arc<crate::state::SshTerminalRegistry>,
         audit: Arc<RecordingAudit>,
         audit_service: AiAuditService,
         gateway: AiGatewayState,
@@ -691,9 +1014,16 @@ mod tests {
         }
 
         fn with_audit(profile: Option<ConnectionProfile>, audit: Arc<RecordingAudit>) -> Self {
+            let ssh_registry = Arc::new(crate::state::SshTerminalRegistry::default());
+            ssh_registry
+                .bind("remote:7:test", "ssh-test", 7)
+                .expect("bind SSH terminal");
             Self {
+                ssh_registry,
                 // 服务与测试夹具共享同一份审计记录，便于断言完整事件序列。
                 audit_service: AiAuditService::new(audit.clone()),
+                // 可见执行默认开启；夹具未注册 integration 时仍会在 dispatch 前
+                // 安全降级独立 exec，测试不会意外写入终端桩。
                 gateway: AiGatewayState::default(),
                 connection: ConnectionService::new(Arc::new(StubConnectionRepository { profile })),
                 terminal: TerminalService::new(Arc::new(UnavailableSshPort)),
@@ -721,13 +1051,54 @@ mod tests {
             }
         }
 
-        fn execution(&self) -> TerminalExecution<'_> {
-            TerminalExecution {
-                audit: &self.audit_service,
-                connection: &self.connection,
-                terminal: &self.terminal,
-                local_terminal: &self.local_terminal,
-                local_registry: &self.local_registry,
+        fn execution(
+            &self,
+            binding: &AiGatewayBinding,
+            provider_request_id: &str,
+        ) -> (
+            TerminalExecution<'_>,
+            crate::commands::ai_execution::ExecutionTracker,
+        ) {
+            (
+                TerminalExecution {
+                    audit: &self.audit_service,
+                    connection: &self.connection,
+                    terminal: &self.terminal,
+                    local_terminal: &self.local_terminal,
+                    local_registry: &self.local_registry,
+                    ssh_registry: &self.ssh_registry,
+                    gateway: &self.gateway,
+                },
+                self.execution_tracker(binding, provider_request_id),
+            )
+        }
+
+        fn execution_tracker(
+            &self,
+            binding: &AiGatewayBinding,
+            provider_request_id: &str,
+        ) -> crate::commands::ai_execution::ExecutionTracker {
+            use crate::commands::ai_execution::ExecutionEmitter;
+            struct NullEmitter;
+            impl ExecutionEmitter for NullEmitter {
+                fn emit(&self, _event: &crate::dto::ai::AiToolExecutionEvent) {}
+            }
+            let service = nocterm_application::ai_execution::AiExecutionService::new(Arc::new(
+                InMemoryExecutionRepository::default(),
+            ));
+            match crate::commands::ai_execution::ExecutionTracker::start(
+                service,
+                Arc::new(NullEmitter),
+                binding,
+                provider_request_id,
+                nocterm_domain::ai_audit::AiAuditTool::SshExec,
+            )
+            .expect("start tracker")
+            {
+                crate::commands::ai_execution::ExecutionStart::Created(tracker) => tracker,
+                crate::commands::ai_execution::ExecutionStart::Existing(_) => {
+                    panic!("fresh request must create a new execution")
+                }
             }
         }
 
@@ -762,8 +1133,14 @@ mod tests {
 
     fn ssh_binding() -> AiGatewayBinding {
         AiGatewayBinding {
-            target: AiTarget::Ssh { connection_id: 7 },
+            target: AiTarget::Ssh {
+                connection_id: 7,
+                workspace_session_id: "remote:7:test".into(),
+                terminal_id: "ssh-test".into(),
+                terminal_generation: 1,
+            },
             provider: "codex".to_string(),
+            conversation_id: "conversation-test".to_string(),
             session_id: "ai-test".to_string(),
             command_policy: AiCommandPolicy::ConfirmEach,
         }
@@ -776,6 +1153,7 @@ mod tests {
                 terminal_id: "local-1".to_string(),
             },
             provider: "codex".to_string(),
+            conversation_id: "conversation-test".to_string(),
             session_id: "ai-test".to_string(),
             command_policy: AiCommandPolicy::ConfirmEach,
         }
@@ -1264,8 +1642,10 @@ mod tests {
         );
     }
 
+    /// 真实环境回归：审批链已把聚合推进到 Authorized（Confirm/Execute 分支）后，
+    /// run 不得重复授权转换——否则报"AI 执行状态变化不合法"，命令永远无法执行。
     #[test]
-    fn ssh_execution_failure_keeps_pending_then_failed_audit_order() {
+    fn run_accepts_pre_authorized_tracker_without_reauthorizing() {
         let harness = Harness::new(None);
         let binding = ssh_binding();
         let access = AiGatewayAccess {
@@ -1273,18 +1653,77 @@ mod tests {
             cancellation: Arc::new(AtomicBool::new(false)),
         };
 
-        let error = harness
-            .execution()
+        // 模拟上游 Confirm/Execute 分支：已授权。
+        let (execution, mut tracker) = harness.execution(&binding, "pre-authorized");
+        tracker
+            .transition(nocterm_domain::ai_execution::AiExecutionTransition::AuthorizeAutomatically)
+            .expect("authorize upstream");
+
+        let result = execution.run(
+            &access,
+            &mut tracker,
+            nocterm_domain::ai_audit::AiAuditTool::SshExec,
+            "uptime",
+            AiAuditApproval::NotRequired,
+            Instant::now() + Duration::from_secs(5),
+            None,
+        );
+
+        // 命令进入执行（桩连接失败是预期终局），关键是不再报状态转换错误。
+        assert_eq!(
+            tracker.record().phase,
+            nocterm_domain::ai_execution::AiExecutionPhase::ResultUnknown
+        );
+        if let Err(error) = result {
+            assert!(
+                !error.contains("AI 执行状态变化不合法"),
+                "pre-authorized run must not re-authorize: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_execution_failure_keeps_pending_then_failed_audit_order() {
+        let harness = Harness::new(None);
+        // 可见执行默认开启；本用例验证 Shell 能力不可用时仍安全降级。
+        harness
+            .ssh_registry
+            .register_integration_unavailable("ssh-test", "unsupported_shell");
+        let binding = ssh_binding();
+        let access = AiGatewayAccess {
+            binding: binding.clone(),
+            cancellation: Arc::new(AtomicBool::new(false)),
+        };
+
+        let (execution, mut tracker) = harness.execution(&binding, "ssh-failure");
+        let _error = execution
             .run(
                 &access,
+                &mut tracker,
                 nocterm_domain::ai_audit::AiAuditTool::SshExec,
                 "uptime",
                 AiAuditApproval::Approved,
                 Instant::now() + Duration::from_secs(5),
+                None,
             )
             .unwrap_err();
 
-        assert_eq!(error, "读取连接资料失败");
+        assert_eq!(
+            tracker.record().phase,
+            nocterm_domain::ai_execution::AiExecutionPhase::ResultUnknown
+        );
+        assert_eq!(
+            tracker.record().result,
+            nocterm_domain::ai_execution::AiExecutionResult::Unknown
+        );
+        assert_eq!(
+            tracker.record().mode,
+            nocterm_domain::ai_execution::AiExecutionMode::SshIndependentExec
+        );
+        assert_eq!(
+            tracker.record().fallback_reason.as_deref(),
+            Some("SSH_SHELL_UNSUPPORTED")
+        );
         let events = harness.events();
         assert_audit(
             &events,
@@ -1293,7 +1732,7 @@ mod tests {
                 (
                     AiAuditApproval::Approved,
                     AiAuditOutcome::Failed,
-                    Some("AI_TOOL_EXECUTION_FAILED"),
+                    Some("AI_TOOL_RESULT_UNKNOWN"),
                 ),
             ],
         );
@@ -1314,14 +1753,16 @@ mod tests {
             cancellation: Arc::new(AtomicBool::new(false)),
         };
 
-        let error = harness
-            .execution()
+        let (execution, mut tracker) = harness.execution(&binding, "unwritable-final");
+        let error = execution
             .run(
                 &access,
+                &mut tracker,
                 nocterm_domain::ai_audit::AiAuditTool::SshExec,
                 "uptime",
                 AiAuditApproval::Approved,
                 Instant::now() + Duration::from_secs(5),
+                None,
             )
             .unwrap_err();
 
@@ -1330,10 +1771,99 @@ mod tests {
             error,
             "终端命令可能已执行，但完成审计写入失败，请勿自动重试"
         );
+        assert_eq!(
+            tracker.record().phase,
+            nocterm_domain::ai_execution::AiExecutionPhase::ResultUnknown
+        );
         assert_audit(
             &harness.events(),
             &[(AiAuditApproval::Approved, AiAuditOutcome::Pending, None)],
         );
+    }
+
+    #[test]
+    fn marker_capable_ssh_route_records_the_marker_execution_strategy() {
+        let harness = Harness::new(None);
+        harness
+            .ssh_registry
+            .register_integration("ssh-test", "nonce-marker");
+        harness.ssh_registry.enable_marker_recovery("ssh-test");
+        harness.ssh_registry.record_integration_event(
+            "ssh-test",
+            &crate::state::Osc633Event::PromptStarted {
+                nonce: Some("nonce-marker".into()),
+            },
+        );
+        let binding = ssh_binding();
+        let access = AiGatewayAccess {
+            binding: binding.clone(),
+            cancellation: Arc::new(AtomicBool::new(false)),
+        };
+        let (execution, mut tracker) = harness.execution(&binding, "ssh-marker-mode");
+
+        // 终端桩拒绝写入，执行最终失败；本用例只验证 dispatch 前选定的权威模式。
+        let _ = execution.run(
+            &access,
+            &mut tracker,
+            nocterm_domain::ai_audit::AiAuditTool::SshExec,
+            "uptime",
+            AiAuditApproval::Approved,
+            Instant::now() + Duration::from_secs(5),
+            None,
+        );
+
+        assert_eq!(
+            tracker.record().mode,
+            nocterm_domain::ai_execution::AiExecutionMode::SshVisibleMarker
+        );
+        assert!(!harness.ssh_registry.input_gated("ssh-test"));
+    }
+
+    #[test]
+    fn explicitly_disabled_ssh_visible_route_records_independent_exec() {
+        let harness = Harness::new(None);
+        harness
+            .gateway
+            .set_ssh_visible_enabled(7, false)
+            .expect("disable SSH visible execution");
+        // 即使 Prompt Ready 与 Marker 能力全部满足，连接级关闭仍必须在 dispatch
+        // 前选择 independent exec，不能先写 PTY 再回退。
+        harness
+            .ssh_registry
+            .register_integration("ssh-test", "nonce-marker");
+        harness.ssh_registry.enable_marker_recovery("ssh-test");
+        harness.ssh_registry.record_integration_event(
+            "ssh-test",
+            &crate::state::Osc633Event::PromptStarted {
+                nonce: Some("nonce-marker".into()),
+            },
+        );
+        let binding = ssh_binding();
+        let access = AiGatewayAccess {
+            binding: binding.clone(),
+            cancellation: Arc::new(AtomicBool::new(false)),
+        };
+        let (execution, mut tracker) = harness.execution(&binding, "ssh-opt-out-mode");
+
+        let _ = execution.run(
+            &access,
+            &mut tracker,
+            nocterm_domain::ai_audit::AiAuditTool::SshExec,
+            "uptime",
+            AiAuditApproval::Approved,
+            Instant::now() + Duration::from_secs(5),
+            None,
+        );
+
+        assert_eq!(
+            tracker.record().mode,
+            nocterm_domain::ai_execution::AiExecutionMode::SshIndependentExec
+        );
+        assert_eq!(
+            tracker.record().fallback_reason.as_deref(),
+            Some("SSH_VISIBLE_NOT_ENABLED")
+        );
+        assert!(!harness.ssh_registry.input_gated("ssh-test"));
     }
 
     #[test]
@@ -1346,13 +1876,16 @@ mod tests {
         };
 
         // 策略放行不豁免参数校验。
-        let error = harness
-            .execution()
-            .without_approval(
+        let (execution, mut tracker) = harness.execution(&binding, "policy-invalid");
+        let error = execution
+            .run(
                 &access,
+                &mut tracker,
                 nocterm_domain::ai_audit::AiAuditTool::SshExec,
                 "echo \0 boom",
+                AiAuditApproval::NotRequired,
                 Instant::now() + Duration::from_secs(5),
+                None,
             )
             .unwrap_err();
         assert_eq!(error, "终端命令包含不允许的空字符");
@@ -1366,16 +1899,22 @@ mod tests {
         );
 
         // 合法命令免确认执行，但仍写入 NotRequired 的完整审计对。
-        let error = harness
-            .execution()
-            .without_approval(
+        let (execution, mut tracker) = harness.execution(&binding, "policy-uptime");
+        let _error = execution
+            .run(
                 &access,
+                &mut tracker,
                 nocterm_domain::ai_audit::AiAuditTool::SshExec,
                 "uptime",
+                AiAuditApproval::NotRequired,
                 Instant::now() + Duration::from_secs(5),
+                None,
             )
             .unwrap_err();
-        assert_eq!(error, "读取连接资料失败");
+        assert_eq!(
+            tracker.record().phase,
+            nocterm_domain::ai_execution::AiExecutionPhase::ResultUnknown
+        );
         assert_audit(
             &harness.events(),
             &[
@@ -1388,7 +1927,7 @@ mod tests {
                 (
                     AiAuditApproval::NotRequired,
                     AiAuditOutcome::Failed,
-                    Some("AI_TOOL_EXECUTION_FAILED"),
+                    Some("AI_TOOL_RESULT_UNKNOWN"),
                 ),
             ],
         );

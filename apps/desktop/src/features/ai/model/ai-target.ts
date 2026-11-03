@@ -62,7 +62,9 @@ export function resolveAiTerminalTarget(
     return {
       binding,
       connectionId: session.connectionId,
-      context: `当前 SSH 连接：${session.name}（${session.username}@${session.host}）。查询主机、进程、端口、服务、日志、磁盘、内存或 Docker 时优先使用 Nocterm 提供的结构化检查能力，其他命令使用 Nocterm 的远程终端能力，由 Nocterm 按当前权限策略决定是否确认。远程执行使用独立 Shell，不要假设它继承可见终端中的 cd、export 或虚拟环境；需要目录上下文时先查询并在后续命令中显式 cd。不要在本机 Shell 中代替执行；如果 Nocterm 工具不可用，直接报告错误，不要尝试浏览器、GUI 或其他 Shell。面向用户说明操作时使用自然语言，不要提及 MCP、函数名或 Nocterm 内部工具名。\n\n`,
+      // workspace 会话标识（remote: 前缀）用于后端解析精确终端绑定。
+      targetSessionId: session.id,
+      context: `当前 SSH 连接：${session.name}（${session.username}@${session.host}）。查询主机、进程、端口、服务、日志、磁盘、内存或 Docker 时优先使用 Nocterm 提供的结构化检查能力，其他命令使用 Nocterm 的远程终端能力，由 Nocterm 按当前权限策略决定是否确认。每次工具结果都会声明实际执行模式；只有 visibleTerminalStateInherited=true 时才能假设继承当前终端的 cd、export、alias 或虚拟环境，否则需要显式建立目录和环境上下文。不要在本机 Shell 中代替执行；如果 Nocterm 工具不可用，直接报告错误，不要尝试浏览器、GUI 或其他 Shell。面向用户说明操作时使用自然语言，不要提及 MCP、函数名或 Nocterm 内部工具名。\n\n`,
       workspaceSessionId: session.id,
     };
   }

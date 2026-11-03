@@ -81,6 +81,27 @@ pub fn ai_conversation_reset(
     Ok(())
 }
 
+/// 当前连接是否启用 SSH 可见执行；默认开启，可按连接在本次运行内关闭。
+#[tauri::command]
+pub fn ai_ssh_visible_get(state: State<'_, AppState>, connection_id: i64) -> bool {
+    state.ai_gateway().ssh_visible_enabled(connection_id)
+}
+
+/// 按连接设置 SSH 可见执行；关闭仅驻留内存，重启后恢复默认开启。
+#[tauri::command]
+pub fn ai_ssh_visible_set(
+    state: State<'_, AppState>,
+    connection_id: i64,
+    enabled: bool,
+) -> Result<(), String> {
+    if connection_id <= 0 {
+        return Err("SSH 连接标识无效".to_string());
+    }
+    state
+        .ai_gateway()
+        .set_ssh_visible_enabled(connection_id, enabled)
+}
+
 #[tauri::command]
 pub fn ai_tool_approval_resolve(
     state: State<'_, AppState>,

@@ -30,8 +30,9 @@ describe('resolveAiTerminalTarget', () => {
     expect(target.workspaceSessionId).toBe('remote:7:session-a');
     expect(target.binding).toEqual({ kind: 'ssh', id: '7', label: 'Production' });
     expect(target.connectionId).not.toBe(session.id);
-    expect(target.targetSessionId).toBeUndefined();
-    expect(target.context).toContain('不要假设它继承可见终端中的 cd');
+    // Phase 2 起 SSH 目标也携带 workspace 终端会话，供后端解析精确终端绑定。
+    expect(target.targetSessionId).toBe('remote:7:session-a');
+    expect(target.context).toContain('只有 visibleTerminalStateInherited=true');
     expect(target.context).not.toContain('ssh_exec');
     expect(target.context).toContain('不要提及 MCP、函数名或 Nocterm 内部工具名');
   });
@@ -62,8 +63,9 @@ describe('resolveAiTerminalTarget', () => {
 
     expect(first.connectionId).toBe(7);
     expect(second.connectionId).toBe(7);
-    expect(first.targetSessionId).toBeUndefined();
-    expect(second.targetSessionId).toBeUndefined();
+    // 同一连接的两个终端标签各自携带自己的 workspace 会话标识。
+    expect(first.targetSessionId).toBe('remote:7:session-a');
+    expect(second.targetSessionId).toBe('remote:7:session-b');
     expect(first.binding).toEqual(second.binding);
     expect(first.workspaceSessionId).toBe('remote:7:session-a');
     expect(second.workspaceSessionId).toBe('remote:7:session-b');

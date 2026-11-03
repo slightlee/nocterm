@@ -70,6 +70,7 @@ export function AiComposer({
   onStop,
 }: AiComposerProps) {
   const [commandPolicyMenuOpen, setCommandPolicyMenuOpen] = useState(false);
+  const toolControlsDisabled = composerDisabled || controlsDisabled;
   return (
     <div className={styles.composerArea}>
       {providerAvailable === false ? (
@@ -113,13 +114,13 @@ export function AiComposer({
         <div className={styles.composerFooter}>
           <div className={styles.composerTools}>
             <AiAttachmentPicker
-              disabled={composerDisabled || controlsDisabled}
+              disabled={toolControlsDisabled}
               fileInputRef={fileInputRef}
               loading={attachmentLoading}
               onChange={onAttachmentChange}
             />
             <AiProviderSelector
-              disabled={composerDisabled || controlsDisabled}
+              disabled={toolControlsDisabled}
               onChange={onProviderChange}
               onToggle={() => {
                 setCommandPolicyMenuOpen(false);
@@ -130,7 +131,7 @@ export function AiComposer({
               providerId={providerId}
             />
             <AiCommandPolicySelector
-              disabled={composerDisabled || controlsDisabled}
+              disabled={toolControlsDisabled}
               onChange={(policy) => {
                 onCommandPolicyChange(policy);
                 setCommandPolicyMenuOpen(false);

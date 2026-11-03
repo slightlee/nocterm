@@ -11,6 +11,7 @@ import type {
   AiProviderId,
   AiToolApprovalClosedEvent,
   AiToolApprovalEvent,
+  AiToolExecutionEvent,
 } from '../model/ai-types';
 
 export interface AiProviderStatus {
@@ -128,4 +129,24 @@ export function onAiToolApprovalClosed(
 
 export function resolveAiToolApproval(approvalId: string, sessionId: string, approved: boolean) {
   return invoke<void>('ai_tool_approval_resolve', { approvalId, sessionId, approved });
+}
+
+/** 监听后端权威执行生命周期事件；事件可丢失，快照查询是恢复时的权威来源。 */
+export function onAiToolExecution(
+  handler: (event: AiToolExecutionEvent) => void
+): Promise<UnlistenFn> {
+  return listen<AiToolExecutionEvent>('nocterm://ai-tool-execution', (event) =>
+    handler(event.payload)
+  );
+}
+
+/** 事件丢失或面板重展开时，按对话或 Provider 会话查询后端权威执行快照。 */
+export function listAiToolExecutions(
+  conversationId?: string,
+  providerSessionId?: string
+): Promise<AiToolExecutionEvent[]> {
+  return invoke<AiToolExecutionEvent[]>('ai_tool_execution_list', {
+    conversationId,
+    providerSessionId,
+  });
 }

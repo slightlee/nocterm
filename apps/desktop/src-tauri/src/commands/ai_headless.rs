@@ -8,6 +8,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread,
     time::Duration,
@@ -135,6 +136,10 @@ pub(super) fn start_headless_session(
     let reader_id = session_id.clone();
     let output_budget = Arc::new(HeadlessOutputBudget::default());
     let output_failed = Arc::new(AtomicBool::new(false));
+    // 读线程完成信号：Provider 退出后其派生子进程可能仍持有管道写端，
+    // 读线程感知不到 EOF——exit 事件不能无界等待它们，只能限时等待。
+    let (stdout_done_tx, stdout_done_rx) = mpsc::channel::<bool>();
+    let (stderr_done_tx, stderr_done_rx) = mpsc::channel::<bool>();
     // 两个管道必须并发消费；任一缓冲区写满都会阻塞 Provider 退出。
     let stdout_thread = stdout.map(|stdout| {
         let app = app.clone();
@@ -153,7 +158,8 @@ pub(super) fn start_headless_session(
                 budget: &output_budget,
                 failed: &output_failed,
             };
-            emit_lines("stdout", stdout, &context, readiness_requirement.as_ref())
+            let ok = emit_lines("stdout", stdout, &context, readiness_requirement.as_ref());
+            let _ = stdout_done_tx.send(ok);
         })
     });
     let stderr_thread = stderr.map(|stderr| {
@@ -173,7 +179,8 @@ pub(super) fn start_headless_session(
                 budget: &output_budget,
                 failed: &output_failed,
             };
-            emit_lines("stderr", stderr, &context, None)
+            let ok = emit_lines("stderr", stderr, &context, None);
+            let _ = stderr_done_tx.send(ok);
         })
     });
     let exit_app = app.clone();
@@ -231,12 +238,24 @@ pub(super) fn start_headless_session(
                 }
             }
         };
-        // 管道 EOF 后先回收读线程，确保退出事件之后不再追加输出。
+        // 限时等待读线程收尾：Provider 退出后其派生的子进程（MCP 等）可能仍
+        // 持有管道写端，EOF 不会到来——无界等待会让 exit 事件永不发出，前端
+        // 任务永远停在"输出中"。超时视为管道异常（ok=false），照常发 exit；
+        // 未退出的读线程就地 detach，随应用退出回收。
+        let pipe_teardown_deadline = Duration::from_secs(3);
         let stdout_ok = stdout_thread
-            .map(|handle| handle.join().unwrap_or(false))
+            .map(|_| {
+                stdout_done_rx
+                    .recv_timeout(pipe_teardown_deadline)
+                    .unwrap_or(false)
+            })
             .unwrap_or(true);
         let stderr_ok = stderr_thread
-            .map(|handle| handle.join().unwrap_or(false))
+            .map(|_| {
+                stderr_done_rx
+                    .recv_timeout(pipe_teardown_deadline)
+                    .unwrap_or(false)
+            })
             .unwrap_or(true);
         // stdout 的完成校验需要读取本轮 Gateway 调用记录，因此必须在回收读线程后撤销。
         if let Some(token) = bridge_token.as_deref() {

@@ -31,11 +31,11 @@ pub(super) fn start_session(
         session_id,
         conversation_id,
         working_directory,
-        local_session_id,
+        workspace_session_id,
         command_policy,
     } = validated;
     let connection_id = request.connection_id;
-    let target = resolve_target(state, connection_id, local_session_id.as_deref())?;
+    let target = resolve_target(state, connection_id, workspace_session_id.as_deref())?;
     let adapter =
         provider_adapter(&request.provider).ok_or_else(|| "不支持的 AI Provider".to_string())?;
     let provider_id = adapter.id();
@@ -59,6 +59,7 @@ pub(super) fn start_session(
         state,
         target.as_ref(),
         provider_id,
+        &conversation_id,
         &session_id,
         command_policy,
     )?;
@@ -83,7 +84,7 @@ pub(super) fn start_session(
     });
     let identity = ProviderSessionIdentity {
         connection_id,
-        target_session_id: local_session_id.clone(),
+        target_session_id: workspace_session_id.clone(),
         working_directory: working_directory.clone(),
     };
     let launch_plan = match adapter.prepare_launch(ProviderLaunch {
@@ -164,18 +165,35 @@ pub(super) fn start_session(
 fn resolve_target(
     state: &AppState,
     connection_id: Option<i64>,
-    local_session_id: Option<&str>,
+    workspace_session_id: Option<&str>,
 ) -> Result<Option<AiTarget>, String> {
+    let Some(session_id) = workspace_session_id else {
+        return Ok(None);
+    };
     if let Some(connection_id) = connection_id {
         state
             .connection_service()
             .get(connection_id)
             .map_err(|_| "目标 SSH 连接不存在或已被删除".to_string())?;
-        return Ok(Some(AiTarget::Ssh { connection_id }));
+        // 后端从权威 Registry 解析完整绑定，拒绝前端拼接 connection/session。
+        let (terminal_id, terminal_generation, bound_connection_id) = state
+            .ssh_terminals()
+            .resolve(session_id)
+            .map_err(|_| "SSH 终端绑定状态不可用，请重新连接后重试".to_string())?
+            .ok_or_else(|| "目标 SSH 终端尚未就绪或已关闭".to_string())?;
+        if bound_connection_id != connection_id {
+            return Err("目标 SSH 终端与连接标识不匹配".to_string());
+        }
+        return Ok(Some(AiTarget::Ssh {
+            connection_id,
+            workspace_session_id: session_id.to_string(),
+            terminal_id,
+            terminal_generation,
+        }));
     }
-    let Some(session_id) = local_session_id else {
-        return Ok(None);
-    };
+    if !session_id.starts_with("local:") {
+        return Err("AI 终端目标与连接标识不匹配".to_string());
+    }
     let terminal_id = state
         .local_terminals()
         .terminal_for(session_id)
@@ -190,6 +208,7 @@ fn bind_gateway(
     state: &AppState,
     target: Option<&AiTarget>,
     provider: &str,
+    conversation_id: &str,
     session_id: &str,
     command_policy: AiCommandPolicy,
 ) -> Result<Option<String>, String> {
@@ -202,6 +221,7 @@ fn bind_gateway(
         AiGatewayBinding {
             target: target.clone(),
             provider: provider.into(),
+            conversation_id: conversation_id.into(),
             session_id: session_id.into(),
             command_policy,
         },

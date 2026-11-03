@@ -75,4 +75,30 @@ describe('presentAiMessageParts', () => {
       activityCount: 0,
     });
   });
+
+  it('projects execution parts as execution entries with the full execution model', () => {
+    const execution = {
+      executionId: 'exec-1',
+      sequence: 3,
+      phase: 'completed' as const,
+      approvalState: 'not_required' as const,
+      executionMode: 'ssh_independent_exec' as const,
+      fallbackReason: 'SSH_VISIBLE_NOT_ENABLED',
+      resultState: 'succeeded' as const,
+      dispatchReceipt: 'confirmed' as const,
+      exitCode: 0,
+      durationMs: 120,
+      errorCode: null,
+      tool: 'ssh_exec',
+      targetKind: 'ssh',
+      updatedAtMs: 200,
+    };
+    const presentation = presentAiMessageParts('', [
+      { type: 'execution', execution },
+      { type: 'text', content: '命令已执行。' },
+    ]);
+    expect(presentation.processEntries).toEqual([{ kind: 'execution', content: '', execution }]);
+    expect(presentation.answer).toBe('命令已执行。');
+    expect(presentation.activityCount).toBe(1);
+  });
 });

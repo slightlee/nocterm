@@ -4,12 +4,22 @@
 //! 模块结构：
 //! - `connection`：共享连接/认证原语、主机密钥 TOFU 校验、分阶段建连与错误分类；
 //! - `terminal`：会话管理器、终端/exec 生命周期、取消注册表与 `SshTerminalPort` 实现；
-//! - `sftp`：SFTP 实现，复用 `connection` 的建连与认证策略。
+//! - `marker`：可见执行完成标识的随机生成（格式与解析契约在
+//!   `nocterm_domain::ssh_visible_protocol`）；
+//! - `sftp`：SFTP 实现，复用 `connection` 的建连与认证策略；
+//! - `bootstrap_e2e_tests`：内存 SSH 服务器的 bootstrap 全链路集成测试（仅测试编译）。
 
+pub mod bootstrap;
+#[cfg(test)]
+mod bootstrap_e2e_tests;
 mod connection;
+mod marker;
 pub mod sftp;
 mod terminal;
 
+/// 供命令层计算注入命令的远端 rc 路径（source 回显抑制的特征匹配用）。
+pub use bootstrap::remote_rc_path;
+pub use marker::create_completion_marker;
 pub use terminal::SshTerminalManager;
 
 /// SSH 基础设施错误：`code` 为前端稳定错误码（与领域 `SshTerminalError`

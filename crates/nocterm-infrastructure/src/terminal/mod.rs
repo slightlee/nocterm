@@ -15,6 +15,8 @@ use portable_pty::{Child, MasterPty, PtySize, native_pty_system};
 mod shell;
 
 use shell::{LocalShellKind, completion_command, local_shell_command};
+// SSH bootstrap 复用同一转义原语，避免两份实现漂移。
+pub(crate) use shell::shell_single_quoted;
 
 /// PTY 基础设施错误保留底层上下文，由 Application 边界转换为稳定错误码。
 #[derive(Debug)]
@@ -175,7 +177,12 @@ impl LocalTerminalPort for LocalTerminalManager {
     fn open(&self, cols: u16, rows: u16) -> Result<OpenedTerminal, String> {
         let (id, reader) =
             LocalTerminalManager::open(self, cols, rows).map_err(|error| error.to_string())?;
-        Ok(OpenedTerminal { id, reader })
+        Ok(OpenedTerminal {
+            id,
+            reader,
+            shell_integration: None,
+            integration_fallback_reason: None,
+        })
     }
 
     fn write(&self, terminal_id: &str, data: &str) -> Result<(), String> {

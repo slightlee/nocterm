@@ -3,6 +3,12 @@ import { listen } from '@tauri-apps/api/event';
 
 interface OpenTerminalResponse {
   terminalId: string;
+  /** workspace 会话内的重连世代；后续 AI 可见执行用它校验目标一致性。 */
+  terminalGeneration: number;
+  /** bootstrap 成功时注入的 shell（bash/zsh/fish/PowerShell）；null 表示未注入。 */
+  integrationShell: string | null;
+  /** bootstrap 失败的降级原因；成功或未尝试时为 null。 */
+  integrationFallbackReason: string | null;
 }
 
 export interface TerminalOutputEvent {
@@ -24,19 +30,24 @@ const TERMINAL_EXIT_EVENT = 'ssh-terminal-exit';
 /** 后端要求交互输入登录密码时返回的稳定错误码。 */
 export const PASSWORD_REQUIRED_CODE = 'SSH_PASSWORD_REQUIRED';
 
+/** AI 命令执行期间用户输入被门控时返回的稳定错误码。 */
+export const TERMINAL_BUSY_CODE = 'SSH_TERMINAL_BUSY';
+
 /**
- * SSH IPC 参数只包含连接主键和终端尺寸，主机资料由后端读取。
+ * SSH IPC 参数包含连接主键、workspace 终端会话标识与终端尺寸，主机资料由后端读取。
  *
  * `password` 仅在后端返回 {@link PASSWORD_REQUIRED_CODE} 后由终端提示符收集并回传，
  * 用于本次建连；后端认证通过才会转入内存缓存，不会写入系统凭据库。
  */
 export function openSshTerminal(
   connectionId: number,
+  workspaceSessionId: string,
   cols: number,
   rows: number,
   password?: string
 ) {
   return invoke<OpenTerminalResponse>('ssh_terminal_open', {
+    workspaceSessionId,
     connectionId,
     cols,
     rows,

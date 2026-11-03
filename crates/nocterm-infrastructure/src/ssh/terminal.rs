@@ -17,8 +17,8 @@ use std::{
 use nocterm_domain::{
     connection::ConnectionProfile,
     terminal::{
-        OpenedSshExecution, OpenedTerminal, SshExecutionCompletion, SshTerminalError,
-        SshTerminalPort,
+        OpenedSshExecution, OpenedTerminal, SshExecutionCompletion, SshShellIntegrationPlan,
+        SshShellKind, SshTerminalError, SshTerminalPort,
     },
 };
 use russh::{ChannelMsg, Disconnect, client, client::Handle};
@@ -65,13 +65,6 @@ struct ExecChannelRequest {
     ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
     cancel_rx: oneshot::Receiver<()>,
 }
-
-/// 已认证会话持有的 russh 资源三元组：连接句柄 + 读半区 + 写半区。
-type Session = (
-    Handle<ClientHandler>,
-    russh::ChannelReadHalf,
-    russh::ChannelWriteHalf<client::Msg>,
-);
 
 /// 单个终端在管理器侧的句柄：仅保留投递指令与中止任务所需的最小状态。
 struct TerminalHandle {
@@ -170,6 +163,57 @@ impl ExecutionRegistry {
     }
 }
 
+/// 一次 SSH 会话建立的 integration 结果：成功计划或降级原因（可同时为空表示
+/// 普通 shell 且无降级语义——保留以区分"未尝试"）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshIntegrationOutcome {
+    pub shell_integration: Option<SshShellIntegrationPlan>,
+    pub fallback_reason: Option<&'static str>,
+}
+
+/// Bootstrap 的内部结果同时保留 Shell 识别事实和 integration 能力。
+///
+/// 二者不能合并：例如 PowerShell 已识别但脚本注入失败时，AI 必须降级独立
+/// exec，普通终端的初始目录仍应使用 `Set-Location` 而不是 POSIX `cd`。
+struct BootstrapOutcome {
+    detected_shell: Option<SshShellKind>,
+    shell_integration: Option<SshShellIntegrationPlan>,
+    fallback_reason: Option<&'static str>,
+}
+
+impl BootstrapOutcome {
+    fn unavailable(reason: &'static str) -> Self {
+        Self {
+            detected_shell: None,
+            shell_integration: None,
+            fallback_reason: Some(reason),
+        }
+    }
+
+    fn detected_but_unavailable(shell: SshShellKind, reason: &'static str) -> Self {
+        Self {
+            detected_shell: Some(shell),
+            shell_integration: None,
+            fallback_reason: Some(reason),
+        }
+    }
+
+    fn ready(plan: SshShellIntegrationPlan) -> Self {
+        Self {
+            detected_shell: Some(plan.shell),
+            shell_integration: Some(plan),
+            fallback_reason: None,
+        }
+    }
+}
+
+/// 同步 open() 的完整产物：终端标识、输出流与 integration 结果。
+pub struct SshOpenedSession {
+    pub terminal_id: String,
+    pub reader: Box<dyn std::io::Read + Send>,
+    pub integration: SshIntegrationOutcome,
+}
+
 /// 会话管理器统一持有运行时与所有终端句柄，避免命令层散落异步资源。
 pub struct SshTerminalManager {
     runtime: Runtime,
@@ -198,6 +242,10 @@ impl Default for SshTerminalManager {
 
 impl SshTerminalManager {
     /// 打开一个 SSH 终端：在运行时上派生会话任务，同步阻塞直至认证并开壳成功。
+    ///
+    /// 返回 integration 计划（bootstrap 成功）与降级原因（回退普通 shell）。
+    /// 两者都属于控制面事实，命令层据此注册 nonce 与 capability；open 本身
+    /// 不因 bootstrap 失败而失败。
     pub fn open(
         &self,
         profile: &ConnectionProfile,
@@ -205,7 +253,7 @@ impl SshTerminalManager {
         rows: u16,
         password: Option<&str>,
         private_key: Option<&str>,
-    ) -> Result<(String, Box<dyn Read + Send>), SshError> {
+    ) -> Result<SshOpenedSession, SshError> {
         // 依据认证方式装配所需凭据，缺失时提前失败以给出明确提示。
         let auth = build_auth(profile, password, private_key)?;
 
@@ -218,7 +266,8 @@ impl SshTerminalManager {
         // 输出走同步通道桥接为 Read；指令走异步通道；就绪结果走同步通道以便阻塞等待。
         let (output_tx, output_rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<TerminalCommand>();
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), SshError>>();
+        let (ready_tx, ready_rx) =
+            std::sync::mpsc::channel::<Result<SshIntegrationOutcome, SshError>>();
 
         let task = self.runtime.spawn(run_session(
             host,
@@ -237,8 +286,8 @@ impl SshTerminalManager {
 
         // 各建连阶段自带精确超时，这里只做兜底：会话任务被意外中止或运行时僵死时，
         // 同步调用方不至于永久阻塞。正常路径下永远不会走到这一支。
-        match ready_rx.recv_timeout(CONNECT_READY_TIMEOUT) {
-            Ok(Ok(())) => {}
+        let integration = match ready_rx.recv_timeout(CONNECT_READY_TIMEOUT) {
+            Ok(Ok(outcome)) => outcome,
             Ok(Err(error)) => {
                 task.abort();
                 return Err(error);
@@ -255,7 +304,7 @@ impl SshTerminalManager {
                     ),
                 ));
             }
-        }
+        };
 
         let mut terminals = self
             .terminals
@@ -269,14 +318,15 @@ impl SshTerminalManager {
                 task,
             },
         );
-        Ok((
+        Ok(SshOpenedSession {
             terminal_id,
-            Box::new(ChannelReader {
+            reader: Box::new(ChannelReader {
                 rx: output_rx,
                 buffer: Vec::new(),
                 position: 0,
             }),
-        ))
+            integration,
+        })
     }
 
     /// 在已有终端所属的认证连接上建立独立 exec channel。
@@ -465,10 +515,14 @@ impl SshTerminalPort for SshTerminalManager {
         password: Option<&str>,
         private_key: Option<&str>,
     ) -> Result<OpenedTerminal, SshTerminalError> {
-        let (id, reader) =
-            SshTerminalManager::open(self, profile, cols, rows, password, private_key)
-                .map_err(|error| SshTerminalError::new(error.code, error.message))?;
-        Ok(OpenedTerminal { id, reader })
+        let opened = SshTerminalManager::open(self, profile, cols, rows, password, private_key)
+            .map_err(|error| SshTerminalError::new(error.code, error.message))?;
+        Ok(OpenedTerminal {
+            id: opened.terminal_id,
+            reader: opened.reader,
+            shell_integration: opened.integration.shell_integration,
+            integration_fallback_reason: opened.integration.fallback_reason,
+        })
     }
 
     fn write(&self, terminal_id: &str, data: &str) -> Result<(), String> {
@@ -555,31 +609,58 @@ async fn run_session(
     initial_path: Option<String>,
     output_tx: std::sync::mpsc::Sender<Vec<u8>>,
     mut command_rx: mpsc::UnboundedReceiver<TerminalCommand>,
-    ready_tx: std::sync::mpsc::Sender<Result<(), SshError>>,
+    ready_tx: std::sync::mpsc::Sender<Result<SshIntegrationOutcome, SshError>>,
     terminal_id: String,
     executions: Arc<ExecutionRegistry>,
 ) {
     // 建连与认证阶段的结果先回传给同步 open()，再进入长期事件循环。
-    let (handle, mut read_half, write_half) =
-        match connect_session(&host, port, &username, auth, cols, rows).await {
-            Ok(session) => {
-                let _ = ready_tx.send(Ok(()));
-                session
-            }
-            Err(error) => {
-                let _ = ready_tx.send(Err(error));
-                return;
-            }
-        };
+    // integration 结果随就绪信号一起回传；bootstrap 失败不阻塞建连。
+    let session = match connect_session(&host, port, &username, auth, cols, rows).await {
+        Ok(setup) => {
+            // 计划同时供两处消费：outcome 给命令层注册 nonce，run_session
+            // 据此敲入 source——必须 clone 而非 take，否则注入永远不发生。
+            let outcome = SshIntegrationOutcome {
+                shell_integration: setup.shell_integration.clone(),
+                fallback_reason: setup.integration_fallback_reason,
+            };
+            let _ = ready_tx.send(Ok(outcome));
+            setup
+        }
+        Err(error) => {
+            let _ = ready_tx.send(Err(error));
+            return;
+        }
+    };
+    let SessionSetup {
+        handle,
+        read_half: mut session_read_half,
+        write_half,
+        shell_integration,
+        detected_shell,
+        ..
+    } = session;
     // russh 的 Handle 本身不可 Clone；用异步互斥封装后，AI exec channel 可以在
     // 保持可见 Shell 读写循环运行的同时复用同一条已认证 SSH 连接。
     let handle = Arc::new(tokio::sync::Mutex::new(handle));
     let mut execution_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
+    // bootstrap 成功时向登录 shell 注入集成钩子；POSIX source 临时 rc，
+    // PowerShell 在内存中解码脚本。注入先于 initial_path，保证目录切换触发的
+    // 首个完成事件已经携带 nonce。
+    if let Some(plan) = &shell_integration {
+        eprintln!(
+            "[nocterm-ssh-bootstrap] 向可见终端注入 integration：shell={}（terminal={terminal_id}）",
+            plan.shell.as_str()
+        );
+        let _ = write_half
+            .data_bytes(super::bootstrap::integration_command(plan).into_bytes())
+            .await;
+    }
+
     // 若配置了远程初始目录，开壳后立即切换，等价旧实现的 `cd` 行为。
     if let Some(path) = initial_path {
-        let escaped = path.replace('\'', "'\\''");
-        let _ = write_half.data_bytes(format!("cd '{escaped}'\n")).await;
+        let command = super::bootstrap::initial_directory_command(&path, detected_shell);
+        let _ = write_half.data_bytes(command.into_bytes()).await;
     }
 
     loop {
@@ -587,7 +668,7 @@ async fn run_session(
         // 无限增长内存占用。
         execution_tasks.retain(|task| !task.is_finished());
         tokio::select! {
-            message = read_half.wait() => match message {
+            message = session_read_half.wait() => match message {
                 // 标准输出与扩展输出（stderr）都回传给前端渲染。
                 Some(ChannelMsg::Data { data }) => {
                     if output_tx.send(data.to_vec()).is_err() {
@@ -717,10 +798,24 @@ async fn run_exec_channel(
     let _ = write_half.close().await;
 }
 
-/// 建立 TCP 连接、完成认证、开启带 PTY 的交互式 shell 通道。
+/// 建连产物：会话三元组 + integration 计划/降级原因。
+struct SessionSetup {
+    handle: Handle<ClientHandler>,
+    read_half: russh::ChannelReadHalf,
+    write_half: russh::ChannelWriteHalf<client::Msg>,
+    /// bootstrap 成功时的注入计划；run_session 据此向 PTY 注入对应 Shell 脚本。
+    shell_integration: Option<SshShellIntegrationPlan>,
+    /// 独立于 integration 成功与否的 Shell 识别结果，用于普通终端命令语义。
+    detected_shell: Option<SshShellKind>,
+    integration_fallback_reason: Option<&'static str>,
+}
+
+/// 建立 TCP 连接、完成认证，并尝试 bootstrap shell integration。
 ///
-/// 沿用 `connect_authenticated_coded` 的分阶段分类，让解析失败、拨号失败、
-/// 认证失败和主机密钥变更各自携带稳定错误码向上传播，不再压平成一句话。
+/// 流程：建连认证（分阶段分类不变）→ request_pty + request_shell（**登录语义
+/// 原样保留**，用户 profile 链完整执行）→ 登录 shell 探针 → 准备注入脚本。
+/// POSIX Shell 上传临时 rc；PowerShell 使用内存脚本。bootstrap 任一步骤失败都降级，
+/// 只记录降级原因，绝不让 `open()` 失败。注入命令由 run_session 在就绪后敲入。
 async fn connect_session(
     host: &str,
     port: u16,
@@ -728,11 +823,49 @@ async fn connect_session(
     auth: Auth,
     cols: u16,
     rows: u16,
-) -> Result<Session, SshError> {
+) -> Result<SessionSetup, SshError> {
     let handle = connect_authenticated_coded(host, port, username, auth)
         .await
         .map_err(|failure| SshError::coded(failure.code, failure.message))?;
 
+    let channel = open_pty_channel(&handle, cols, rows).await?;
+    channel
+        .request_shell(true)
+        .await
+        .map_err(|error| SshError::new(format!("启动远程 Shell 失败：{error}")))?;
+    let (read_half, write_half) = channel.split();
+    // bootstrap 只涉及独立 channel（探针 + 上传），不触碰已建立的交互通道；
+    // 失败时半区原样保留，integration 不可用而已。
+    let bootstrap = run_bootstrap(&handle).await;
+    let (shell_integration, detected_shell, integration_fallback_reason) = if let Some(plan) =
+        bootstrap.shell_integration
+    {
+        eprintln!(
+            "[nocterm-ssh-bootstrap] 本连接启用可见执行前置：shell={:?}",
+            plan.shell.as_str()
+        );
+        (Some(plan), bootstrap.detected_shell, None)
+    } else {
+        let reason = bootstrap.fallback_reason.unwrap_or("bootstrap_unavailable");
+        eprintln!("[nocterm-ssh-bootstrap] bootstrap 降级（{reason}）：AI 命令将走独立 exec 通道");
+        (None, bootstrap.detected_shell, Some(reason))
+    };
+    Ok(SessionSetup {
+        handle,
+        read_half,
+        write_half,
+        shell_integration,
+        detected_shell,
+        integration_fallback_reason,
+    })
+}
+
+/// 打开会话 channel 并请求 PTY；ptyDenied 分类与既有行为一致。
+async fn open_pty_channel(
+    handle: &Handle<ClientHandler>,
+    cols: u16,
+    rows: u16,
+) -> Result<russh::Channel<client::Msg>, SshError> {
     let channel = handle
         .channel_open_session()
         .await
@@ -758,13 +891,65 @@ async fn connect_session(
                 format!("远程主机拒绝分配 PTY：{error}。请确认该账号允许交互式登录（未被限制为仅 SFTP/命令模式）"),
             )
         })?;
-    channel
-        .request_shell(true)
-        .await
-        .map_err(|error| SshError::new(format!("启动远程 Shell 失败：{error}")))?;
+    Ok(channel)
+}
 
-    let (read_half, write_half) = channel.split();
-    Ok((handle, read_half, write_half))
+/// 执行 bootstrap 的探针与上传阶段；返回注入计划。
+///
+/// 失败返回降级原因。所有失败都不产生用户可见错误——登录 shell 已正常启动，
+/// 只是 integration 不可用（Stage 4 策略路由据此选择 exec）。
+async fn run_bootstrap(handle: &Handle<ClientHandler>) -> BootstrapOutcome {
+    // 阶段 1：登录 shell 探针（独立无 PTY channel，短超时）。
+    let probe_output = match super::bootstrap::exec_probe(handle).await {
+        Ok(output) => output,
+        Err(reason) => return BootstrapOutcome::unavailable(reason),
+    };
+    let shell = match super::bootstrap::parse_shell_probe(&probe_output) {
+        Some(shell) => {
+            eprintln!("[nocterm-ssh-bootstrap] 识别到 shell：{}", shell.as_str());
+            shell
+        }
+        None => {
+            eprintln!(
+                "[nocterm-ssh-bootstrap] 未识别到受支持的 shell，降级独立 exec：{probe_output:?}"
+            );
+            return BootstrapOutcome::unavailable("unsupported_shell");
+        }
+    };
+    // 阶段 2：生成 nonce 与随机远程路径。
+    let mut nonce_bytes = [0_u8; 16];
+    if getrandom::fill(&mut nonce_bytes).is_err() {
+        return BootstrapOutcome::detected_but_unavailable(shell, "bootstrap_unavailable");
+    }
+    let nonce: String = nonce_bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let path = super::bootstrap::remote_rc_path(&nonce);
+    let plan = SshShellIntegrationPlan { nonce, shell };
+    if matches!(plan.shell, SshShellKind::PowerShell) {
+        eprintln!(
+            "[nocterm-ssh-bootstrap] bootstrap 完成：shell=powershell nonce={}，等待 Shell 就绪后内存注入",
+            plan.nonce
+        );
+        return BootstrapOutcome::ready(plan);
+    }
+    // 阶段 3：umask 077 上传临时 rc（内容经 stdin，免转义）。
+    // rc 内容 = nonce 导出 + 集成钩子；自删除由注入命令的 rm 负责（见
+    // bootstrap::source_command），上传中断时由 cleanup_rc 兜底删除。
+    let content = super::bootstrap::build_rc_content(&plan, &path);
+    if let Err(reason) = super::bootstrap::upload_rc(handle, &path, content.as_bytes()).await {
+        // 上传中断可能已在远端留下半截 rc（cat 创建后中断）：补一次清理。
+        eprintln!("[nocterm-ssh-bootstrap] 上传失败（{reason}），清理临时 rc");
+        super::bootstrap::cleanup_rc(handle, &path).await;
+        return BootstrapOutcome::detected_but_unavailable(shell, reason);
+    }
+    eprintln!(
+        "[nocterm-ssh-bootstrap] bootstrap 完成：shell={:?} nonce={} rc={path}，等待 shell 就绪后注入 source",
+        plan.shell.as_str(),
+        plan.nonce
+    );
+    BootstrapOutcome::ready(plan)
 }
 
 #[cfg(test)]
@@ -780,6 +965,25 @@ mod tests {
             .exec_existing(7, "docker ps", &AtomicBool::new(false))
             .expect("session lookup should not fail");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn detected_shell_survives_integration_failure_for_terminal_semantics() {
+        let outcome = BootstrapOutcome::detected_but_unavailable(
+            SshShellKind::PowerShell,
+            "upload_remote_failed",
+        );
+
+        assert_eq!(outcome.detected_shell, Some(SshShellKind::PowerShell));
+        assert!(outcome.shell_integration.is_none());
+        assert_eq!(outcome.fallback_reason, Some("upload_remote_failed"));
+        assert_eq!(
+            super::super::bootstrap::initial_directory_command(
+                r"C:\Users\O'Brien",
+                outcome.detected_shell,
+            ),
+            "Set-Location -LiteralPath 'C:\\Users\\O''Brien'\r\n"
+        );
     }
 
     #[test]

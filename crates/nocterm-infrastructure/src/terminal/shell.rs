@@ -101,6 +101,11 @@ fn apply_zsh_integration(command: &mut CommandBuilder) {
     if std::fs::write(dir.join(".zshrc"), wrapper).is_err() {
         return;
     }
+    // nonce 是本轮终端 integration 的事件关联标识（getrandom 不可用时静默
+    // 放弃 nonce——脚本按旧协议输出，完成计数路径不受影响）。
+    if let Some(nonce) = integration_nonce() {
+        command.env("NOCTERM_OSC_NONCE", nonce);
+    }
     command.env("ZDOTDIR", dir);
 }
 
@@ -123,6 +128,9 @@ fn apply_bash_integration(command: &mut CommandBuilder) {
     if std::fs::write(&path, wrapper).is_err() {
         return;
     }
+    if let Some(nonce) = integration_nonce() {
+        command.env("NOCTERM_OSC_NONCE", nonce);
+    }
     command.arg("--rcfile");
     command.arg(path);
 }
@@ -141,7 +149,19 @@ fn apply_fish_integration(command: &mut CommandBuilder) {
     if std::fs::write(conf_d.join("nocterm_integration.fish"), integration).is_err() {
         return;
     }
+    if let Some(nonce) = integration_nonce() {
+        command.env("NOCTERM_OSC_NONCE", nonce);
+    }
     command.env("XDG_CONFIG_HOME", root);
+}
+
+/// 生成本轮 integration 的事件关联 nonce（16 字节 CSPRNG 的十六进制形式）。
+/// 随机源不可用时返回 None，脚本按旧协议输出，完成计数路径不受影响。
+#[cfg(not(windows))]
+pub(super) fn integration_nonce() -> Option<String> {
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).ok()?;
+    Some(random.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// 生成 ZDOTDIR 包装 `.zshrc`：先加载用户原始配置，再加载 Nocterm 集成钩子。
@@ -168,8 +188,8 @@ fn build_zsh_wrapper(original_zdotdir: Option<String>) -> String {
 }
 
 /// POSIX 单引号转义：内容中的单引号按 `'\''` 规则闭合再开。
-#[cfg(not(windows))]
-fn shell_single_quoted(value: &str) -> String {
+/// 本地 Unix 注入与 SSH bootstrap 共用；纯字符串函数，无平台差异。
+pub(crate) fn shell_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
@@ -185,7 +205,7 @@ mod zsh_integration_tests {
             .find("source \"$NOCTERM_ORIG_ZDOTDIR/.zshrc\"")
             .expect("wrapper must source the original ZDOTDIR config");
         let hooks = wrapper
-            .find("precmd()")
+            .find("precmd_functions+=(__nocterm_precmd_hook)")
             .expect("wrapper must install hooks");
         assert!(user_source < hooks);
         // 原始 ZDOTDIR 在 source 前被单引号转义保存。

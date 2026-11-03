@@ -6,12 +6,24 @@
 //! UTF-8 解码之前——序列可能被 PTY 分块从任意字节处切开，必须跨分块保持状态。
 
 /// 从 633 序列解析出的集成事件。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// nonce 是可选的关联标识：bootstrap 注入的 integration 会在序列尾部携带，
+/// 未注入（旧脚本/用户自装 integration）时为 `None`。它只用于把事件关联到
+/// 当前终端 generation，不是密码学认证。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Osc633Event {
-    /// 633;D;<code>：上一条命令结束并携带真实退出码。
-    CommandFinished(i64),
-    /// 633;A：提示符开始（也用作"集成已激活"的检测信号）。
-    PromptStarted,
+    /// 633;D;<code>[;<nonce>]：上一条命令结束并携带真实退出码。
+    CommandFinished { code: i64, nonce: Option<String> },
+    /// 633;A[;<nonce>]：提示符开始（也用作"集成已激活"的检测信号）。
+    PromptStarted { nonce: Option<String> },
+}
+
+impl Osc633Event {
+    pub(crate) fn event_nonce(&self) -> Option<&str> {
+        match self {
+            Self::CommandFinished { nonce, .. } | Self::PromptStarted { nonce } => nonce.as_deref(),
+        }
+    }
 }
 
 /// 633 序列前缀；`\x1b]` 之后的部分用于匹配。
@@ -99,14 +111,25 @@ fn find_terminator(data: &[u8], from: usize) -> Option<(usize, usize)> {
     None
 }
 
-/// 解析 `633;` 之后的事件体：单字母事件名，D 事件附带 `;退出码`。
+/// 解析 `633;` 之后的事件体：单字母事件名，D 事件附带 `;退出码[;nonce]`，
+/// A 事件可附带 `;nonce`。带额外字段但格式不合法的序列整体丢弃。
 fn parse_event(body: &[u8]) -> Option<Osc633Event> {
     let text = std::str::from_utf8(body).ok()?;
-    match text.as_bytes().first() {
-        Some(b'A') if text.len() == 1 => Some(Osc633Event::PromptStarted),
-        Some(b'D') => {
-            let code = text.get(2..)?.parse::<i64>().ok()?;
-            Some(Osc633Event::CommandFinished(code))
+    let mut fields = text.split(';');
+    // 空 nonce 与缺省等价：bootstrap 未注入时的脚本不会输出空字段，
+    // 但防御性接受并归一化，避免空串参与匹配。
+    let parse_nonce =
+        |field: Option<&str>| field.filter(|value| !value.is_empty()).map(str::to_string);
+    match fields.next()? {
+        "A" => {
+            let nonce = parse_nonce(fields.next());
+            // 只允许一个 nonce 字段，多余字段视为畸形。
+            (fields.next().is_none()).then_some(Osc633Event::PromptStarted { nonce })
+        }
+        "D" => {
+            let code = fields.next()?.parse::<i64>().ok()?;
+            let nonce = parse_nonce(fields.next());
+            (fields.next().is_none()).then_some(Osc633Event::CommandFinished { code, nonce })
         }
         _ => None,
     }
@@ -137,7 +160,13 @@ mod tests {
         assert_eq!(data, b"beforeaftertail");
         assert_eq!(
             events,
-            vec![Osc633Event::CommandFinished(7), Osc633Event::PromptStarted]
+            vec![
+                Osc633Event::CommandFinished {
+                    code: 7,
+                    nonce: None
+                },
+                Osc633Event::PromptStarted { nonce: None },
+            ]
         );
     }
 
@@ -146,7 +175,13 @@ mod tests {
         let mut scanner = Osc633Scanner::new();
         let (data, events) = feed_all(&mut scanner, &[b"\x1b]633;D;-12\x1b\\ok"]);
         assert_eq!(data, b"ok");
-        assert_eq!(events, vec![Osc633Event::CommandFinished(-12)]);
+        assert_eq!(
+            events,
+            vec![Osc633Event::CommandFinished {
+                code: -12,
+                nonce: None
+            }]
+        );
     }
 
     #[test]
@@ -154,7 +189,37 @@ mod tests {
         let mut scanner = Osc633Scanner::new();
         let (data, events) = feed_all(&mut scanner, &[b"out\x1b]6", b"33;D", b";0\x07", b"7rest"]);
         assert_eq!(data, b"out7rest");
-        assert_eq!(events, vec![Osc633Event::CommandFinished(0)]);
+        assert_eq!(
+            events,
+            vec![Osc633Event::CommandFinished {
+                code: 0,
+                nonce: None
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_nonce_bound_events_and_rejects_malformed_extras() {
+        let mut scanner = Osc633Scanner::new();
+        let (data, events) = feed_all(
+            &mut scanner,
+            &[b"\x1b]633;A;abc123\x07\x1b]633;D;5;abc123\x07\x1b]633;D;5;abc;extra\x07\x1b]633;A;\x07"],
+        );
+        assert_eq!(data, b"");
+        assert_eq!(
+            events,
+            vec![
+                Osc633Event::PromptStarted {
+                    nonce: Some("abc123".into())
+                },
+                Osc633Event::CommandFinished {
+                    code: 5,
+                    nonce: Some("abc123".into())
+                },
+                // 空字段视为无 nonce 的合法事件；三个字段的 D 被丢弃。
+                Osc633Event::PromptStarted { nonce: None },
+            ]
+        );
     }
 
     #[test]

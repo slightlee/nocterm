@@ -8,7 +8,8 @@ use std::sync::Arc;
 use commands::sftp::{SftpLocalDirectoryState, SftpTransferState, shutdown_sftp};
 use nocterm_application::{
     ai_audit::AiAuditService, ai_conversation::AiConversationService,
-    connection::ConnectionService, health::HealthService, settings::SettingsService,
+    ai_execution::AiExecutionService, connection::ConnectionService, health::HealthService,
+    settings::SettingsService,
 };
 use nocterm_infrastructure::{
     credential::SystemCredentialStore, persistence::SqliteConnectionRepository,
@@ -42,6 +43,11 @@ pub fn run() {
             let settings_service = SettingsService::new(repository.clone());
             let ai_audit_service = AiAuditService::new(repository.clone());
             let ai_conversation_service = AiConversationService::new(repository.clone());
+            let ai_execution_service = AiExecutionService::new(repository.clone());
+            // 不能确定是否已 dispatch 的旧记录只收敛为 ResultUnknown，启动恢复绝不重放命令。
+            ai_execution_service
+                .recover_after_startup(current_unix_ms())
+                .map_err(|error| std::io::Error::other(error.message))?;
             // 产品版本由 Tauri 配置解析根 package.json；Cargo crate 版本仅描述内部包。
             let health_service = HealthService::new(
                 Arc::new(SystemPlatformProbe),
@@ -54,6 +60,7 @@ pub fn run() {
                 settings_service,
                 ai_audit_service,
                 ai_conversation_service,
+                ai_execution_service,
             ));
             if let Some(state) = app.try_state::<AppState>() {
                 commands::ai_bridge::start_gateway(app.handle().clone(), &state);
@@ -76,9 +83,12 @@ pub fn run() {
             commands::ai::ai_session_stop,
             commands::ai::ai_conversation_reset,
             commands::ai::ai_tool_approval_resolve,
+            commands::ai::ai_ssh_visible_get,
+            commands::ai::ai_ssh_visible_set,
             commands::ai_conversation::ai_conversation_list,
             commands::ai_conversation::ai_conversation_save,
             commands::ai_conversation::ai_conversation_delete,
+            commands::ai_execution::ai_tool_execution_list,
             commands::ai_ssh_exec::ai_ssh_exec_readonly,
             commands::ai_ssh_exec::ai_ssh_exec_stop,
             commands::connection::connection_list,
@@ -130,6 +140,14 @@ pub fn run() {
             shutdown_sftp(app_handle);
         }
     });
+}
+
+fn current_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
 }
 
 fn mcp_stdio_args() -> Option<String> {

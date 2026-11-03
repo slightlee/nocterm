@@ -1,7 +1,18 @@
 import { Fragment, useId, useState } from 'react';
 
+import {
+  executionModeLabel,
+  executionPhaseLabel,
+  executionFallbackLabel,
+  isExecutionHighRisk,
+} from '../model/ai-execution-output';
 import { presentAiMessageParts, type AiProcessEntry } from '../model/ai-message-presentation';
-import type { AiMessage, AiMessagePart, AiToolApprovalEvent } from '../model/ai-types';
+import type {
+  AiExecutionPresentation,
+  AiMessage,
+  AiMessagePart,
+  AiToolApprovalEvent,
+} from '../model/ai-types';
 import { AiMarkdown } from './AiMarkdown';
 import styles from './AiConversationView.module.css';
 
@@ -17,6 +28,39 @@ interface AiConversationViewProps {
   lastUserMessageId?: string;
   onRetry: () => void;
   onResolveApproval: (approved: boolean) => void;
+}
+
+/** 执行卡：展示后端权威的执行状态、模式和退出码，不展示命令或输出。 */
+function ExecutionCard({ execution }: { execution: AiExecutionPresentation }) {
+  const highRisk = isExecutionHighRisk(execution);
+  const fallbackLabel = executionFallbackLabel(execution.fallbackReason);
+  return (
+    <div
+      className={`${styles.executionCard} ${highRisk ? styles.executionCardHighRisk : ''}`}
+      data-execution-phase={execution.phase}
+    >
+      <span
+        className={`${styles.executionStatus} ${
+          highRisk ? styles.executionCardStatusError : styles.executionCardStatusOk
+        }`}
+      />
+      <div className={styles.executionContent}>
+        <span className={styles.executionPhase}>{executionPhaseLabel(execution.phase)}</span>
+        <span className={styles.executionMode}>{executionModeLabel(execution.executionMode)}</span>
+        {fallbackLabel ? <span className={styles.executionMode}>{fallbackLabel}</span> : null}
+        {execution.exitCode !== null ? (
+          <span className={styles.executionExitCode}>退出码 {execution.exitCode}</span>
+        ) : null}
+        {execution.durationMs !== null ? (
+          <span className={styles.executionDuration}>
+            {execution.durationMs < 1000
+              ? `${execution.durationMs}ms`
+              : `${(execution.durationMs / 1000).toFixed(1)}s`}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 /** 过程区只展示可审计的动作摘要，不把 Provider 的私有推理当作回答正文。 */
@@ -56,17 +100,26 @@ function ActivityDisclosure({
       </button>
       {expanded ? (
         <div className={styles.activityList} id={detailsId}>
-          {entries.map((entry, index) => (
-            <div className={styles.activityLine} key={`${entry.kind}-${index}-${entry.content}`}>
-              <span
-                aria-hidden="true"
-                className={`${styles.activityMarker} ${
-                  entry.kind === 'tool' ? styles.activityMarkerTool : styles.activityMarkerProgress
-                }`}
-              />
-              <span className={styles.activityText}>{entry.content}</span>
-            </div>
-          ))}
+          {entries.map((entry, index) => {
+            if (entry.kind === 'execution' && entry.execution) {
+              return (
+                <ExecutionCard execution={entry.execution} key={entry.execution.executionId} />
+              );
+            }
+            return (
+              <div className={styles.activityLine} key={`${entry.kind}-${index}-${entry.content}`}>
+                <span
+                  aria-hidden="true"
+                  className={`${styles.activityMarker} ${
+                    entry.kind === 'tool'
+                      ? styles.activityMarkerTool
+                      : styles.activityMarkerProgress
+                  }`}
+                />
+                <span className={styles.activityText}>{entry.content}</span>
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </section>
@@ -114,7 +167,6 @@ export function AiConversationView({
   pendingApproval,
   approvalSubmitting,
   notice,
-  lastUserMessageId,
   onRetry,
   onResolveApproval,
 }: AiConversationViewProps) {
@@ -125,6 +177,10 @@ export function AiConversationView({
       </div>
     );
   }
+
+  // notice 锚定在最后一条消息之后：它描述的是当前轮的最终状态（异常退出/
+  // 启动失败等），必须出现在结果消息之后，而不是用户消息与回复之间。
+  const lastMessageId = messages.at(-1)?.id;
 
   return (
     <div className={styles.messageList}>
@@ -144,7 +200,7 @@ export function AiConversationView({
               )}
             </div>
           </article>
-          {message.id === lastUserMessageId && notice ? (
+          {message.id === lastMessageId && notice ? (
             <div className={styles.noticeRow}>
               <span className={styles.notice}>{notice}</span>
               {!running ? (
@@ -206,7 +262,7 @@ export function AiConversationView({
           </div>
         </section>
       ) : null}
-      {notice && !lastUserMessageId ? <div className={styles.notice}>{notice}</div> : null}
+      {notice && messages.length === 0 ? <div className={styles.notice}>{notice}</div> : null}
     </div>
   );
 }

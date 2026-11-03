@@ -221,6 +221,64 @@
   white-space: pre-wrap;
 }
 
+/* 执行卡：在过程区内展示后端权威执行状态；高风险状态使用警示色。 */
+.executionCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 6px;
+  margin-top: 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--term-panel) 60%, transparent);
+}
+
+.executionCardHighRisk {
+  background: color-mix(in srgb, var(--term-red, #e06c75) 12%, transparent);
+}
+
+.executionCardStatus {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--term-muted);
+}
+
+.executionCardStatusOk {
+  background: color-mix(in srgb, var(--term-green, #98c379) 80%, var(--term-muted));
+}
+
+.executionCardStatusError {
+  background: color-mix(in srgb, var(--term-red, #e06c75) 85%, var(--term-muted));
+}
+
+.executionContent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--term-muted);
+}
+
+.executionPhase {
+  font-weight: 500;
+  color: color-mix(in srgb, var(--term-fg, inherit) 85%, var(--term-muted));
+}
+
+.executionMode {
+  color: var(--term-muted);
+}
+
+.executionExitCode,
+.executionDuration {
+  color: var(--term-muted);
+  opacity: 0.8;
+}
+
 .answerContent {
   margin-top: 6px;
 }

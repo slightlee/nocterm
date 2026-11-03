@@ -24,7 +24,7 @@ impl AiAuditTarget {
 }
 
 /// 工具名使用封闭枚举，防止把任意命令或 Provider 输入误写进审计库。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AiAuditTool {
     SessionContext,
     GetSystemInfo,
@@ -110,6 +110,8 @@ impl AiAuditOutcome {
 /// 单条不可变审计事件。参数、命令、stdout/stderr 和 Bridge token 不属于该模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiToolAuditEvent {
+    /// 只关联脱敏 execution ledger；不通过该字段反查命令或输出。
+    pub execution_id: Option<String>,
     pub provider: String,
     pub session_id: String,
     pub target: AiAuditTarget,

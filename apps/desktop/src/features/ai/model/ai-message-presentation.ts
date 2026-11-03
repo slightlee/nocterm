@@ -1,8 +1,9 @@
-import type { AiMessagePart } from './ai-types';
+import type { AiExecutionPresentation, AiMessagePart } from './ai-types';
 
 export interface AiProcessEntry {
-  kind: 'progress' | 'tool';
+  kind: 'progress' | 'tool' | 'execution';
   content: string;
+  execution?: AiExecutionPresentation;
 }
 
 export interface AiMessagePresentation {
@@ -25,7 +26,7 @@ export function presentAiMessageParts(
 
   let lastActivityIndex = -1;
   for (let index = parts.length - 1; index >= 0; index -= 1) {
-    if (parts[index]?.type === 'activity') {
+    if (parts[index]?.type === 'activity' || parts[index]?.type === 'execution') {
       lastActivityIndex = index;
       break;
     }
@@ -33,21 +34,35 @@ export function presentAiMessageParts(
   if (lastActivityIndex < 0) {
     return {
       processEntries: [],
-      answer: parts.map((part) => part.content).join(''),
+      answer: parts
+        .filter((part): part is Extract<AiMessagePart, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.content)
+        .join(''),
       activityCount: 0,
     };
   }
 
-  const processEntries = parts.slice(0, lastActivityIndex + 1).flatMap((part) => {
-    const normalized = part.content.trim();
-    if (!normalized) return [];
-    return [
-      {
-        kind: part.type === 'text' ? ('progress' as const) : part.kind,
-        content: normalized,
-      },
-    ];
-  });
+  const processEntries: AiProcessEntry[] = parts
+    .slice(0, lastActivityIndex + 1)
+    .flatMap((part): AiProcessEntry[] => {
+      if (part.type === 'execution') {
+        return [
+          {
+            kind: 'execution',
+            content: '',
+            execution: part.execution,
+          },
+        ];
+      }
+      const normalized = part.content.trim();
+      if (!normalized) return [];
+      return [
+        {
+          kind: part.type === 'text' ? 'progress' : part.kind,
+          content: normalized,
+        },
+      ];
+    });
   const answer = parts
     .slice(lastActivityIndex + 1)
     .filter((part): part is Extract<AiMessagePart, { type: 'text' }> => part.type === 'text')
@@ -57,6 +72,7 @@ export function presentAiMessageParts(
   return {
     processEntries,
     answer,
-    activityCount: parts.filter((part) => part.type === 'activity').length,
+    activityCount: parts.filter((part) => part.type === 'activity' || part.type === 'execution')
+      .length,
   };
 }

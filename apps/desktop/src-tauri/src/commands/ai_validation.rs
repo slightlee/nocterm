@@ -13,7 +13,9 @@ pub(super) struct ValidatedAiSessionStart {
     pub session_id: String,
     pub conversation_id: String,
     pub working_directory: Option<String>,
-    pub local_session_id: Option<String>,
+    /// 目标终端的 workspace 会话标识：`local:` 前缀为本地终端，
+    /// `remote:` 前缀为 SSH 终端标签；执行目标在后端解析，不信任前端传入的连接资料。
+    pub workspace_session_id: Option<String>,
     pub command_policy: AiCommandPolicy,
 }
 
@@ -27,13 +29,13 @@ pub(super) fn validate_start_request(
     validate_prompt(&request.continuation_prompt, "AI 本轮请求")?;
     let working_directory = validate_working_directory(request.working_directory.as_deref())?;
     let command_policy = parse_command_policy(request.command_policy.as_deref())?;
-    let local_session_id =
+    let workspace_session_id =
         validate_target_selectors(request.connection_id, request.target_session_id.as_deref())?;
     Ok(ValidatedAiSessionStart {
         session_id,
         conversation_id,
         working_directory,
-        local_session_id,
+        workspace_session_id,
         command_policy,
     })
 }
@@ -121,6 +123,9 @@ fn validate_working_directory(raw: Option<&str>) -> Result<Option<String>, Strin
 }
 
 /// 终端目标必须是 SSH、本地或无目标三者之一；歧义目标在 IPC 边界直接拒绝。
+///
+/// `target_session_id` 携带 workspace 会话标识：`local:` 为本地终端，
+/// `remote:` 为 SSH 终端标签。两种前缀共用同一有界白名单校验。
 fn validate_target_selectors(
     connection_id: Option<i64>,
     target_session_id: Option<&str>,
@@ -128,26 +133,35 @@ fn validate_target_selectors(
     if connection_id.is_some_and(|value| value <= 0) {
         return Err("目标 SSH 连接标识无效".to_string());
     }
-    let local_session_id = target_session_id
+    let workspace_session_id = target_session_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    if local_session_id.as_deref().is_some_and(|value| {
-        !value.starts_with("local:")
+    let is_remote = workspace_session_id
+        .as_deref()
+        .is_some_and(|value| value.starts_with("remote:"));
+    if is_remote != connection_id.is_some() {
+        // SSH 目标必须同时给出连接与终端会话；本地目标不能带 connectionId。
+        return Err("AI 终端目标与连接标识不匹配".to_string());
+    }
+    if let Some(value) = &workspace_session_id {
+        let valid_prefix = value.starts_with("local:") || value.starts_with("remote:");
+        if !valid_prefix
             || value.len() > 128
             || !value.chars().all(|character| {
                 character.is_ascii_alphanumeric() || matches!(character, ':' | '-' | '_')
             })
-    }) {
-        return Err("目标本地终端会话标识无效".to_string());
+        {
+            return Err("目标终端会话标识无效".to_string());
+        }
     }
-    if connection_id.is_some() && local_session_id.is_some() {
-        return Err("AI 会话不能同时绑定本地终端和 SSH 连接".to_string());
+    if connection_id.is_some() && workspace_session_id.is_none() {
+        return Err("SSH 目标必须携带终端会话标识".to_string());
     }
-    if connection_id.is_none() && local_session_id.is_none() {
+    if connection_id.is_none() && workspace_session_id.is_none() {
         return Err("请先连接本地终端或远程服务器，再使用 AI 助手".to_string());
     }
-    Ok(local_session_id)
+    Ok(workspace_session_id)
 }
 
 #[cfg(test)]
@@ -182,11 +196,16 @@ mod tests {
             validate_target_selectors(None, Some(" local:one ")).unwrap(),
             Some("local:one".to_string())
         );
-        assert_eq!(validate_target_selectors(Some(7), None).unwrap(), None);
+        // SSH 目标必须同时携带连接标识与 workspace 终端会话。
+        assert_eq!(
+            validate_target_selectors(Some(7), Some("remote:7:abc")).unwrap(),
+            Some("remote:7:abc".to_string())
+        );
+        assert!(validate_target_selectors(Some(7), None).is_err());
+        assert!(validate_target_selectors(None, Some("remote:7:abc")).is_err());
         assert!(validate_target_selectors(Some(0), None).is_err());
         assert!(validate_target_selectors(Some(-1), None).is_err());
         assert!(validate_target_selectors(Some(7), Some("local:one")).is_err());
-        assert!(validate_target_selectors(None, Some("remote:one")).is_err());
         assert!(validate_target_selectors(None, Some("local:bad/path")).is_err());
         assert!(
             validate_target_selectors(None, Some(&format!("local:{}", "x".repeat(130)))).is_err()

@@ -24,10 +24,11 @@ impl AiAuditRepository for SqliteConnectionRepository {
         transaction
             .execute(
                 "INSERT INTO ai_tool_audit_events
-                 (provider, session_id, target_kind, connection_id, tool_name,
+                 (execution_id, provider, session_id, target_kind, connection_id, tool_name,
                   approval_state, outcome, duration_ms, error_code)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
+                    event.execution_id,
                     event.provider,
                     event.session_id,
                     event.target.kind(),
@@ -73,6 +74,7 @@ mod tests {
 
     fn audit_event() -> AiToolAuditEvent {
         AiToolAuditEvent {
+            execution_id: Some("exec-audit-test".into()),
             provider: "codex".into(),
             session_id: "ai-audit-test".into(),
             target: AiAuditTarget::Ssh { connection_id: 7 },
@@ -133,6 +135,7 @@ mod tests {
                 "outcome",
                 "duration_ms",
                 "error_code",
+                "execution_id",
             ]
         );
         assert_eq!(
