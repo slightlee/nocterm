@@ -4,6 +4,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ConnectionList } from '../../features/connections';
 import { AiPanel, useAiStore, type AiTerminalSelectionRequest } from '../../features/ai';
 import { useTerminalStore } from '../../features/terminal';
+import { PanelSideIcon } from '../../shared/components/PanelSideIcon';
 import { useTopWindowDoubleClick, useTopWindowDrag } from '../../shared/hooks/useWindowDrag';
 import { isWindowsDesktopRuntime } from '../../shared/lib/desktop-platform';
 import { onAppMenuAction } from '../platform/app-menu-client';
@@ -141,14 +142,12 @@ export function AppShell() {
               <button
                 aria-expanded={!sidebarCollapsed}
                 aria-label={sidebarCollapsed ? '显示连接面板' : '隐藏连接面板'}
-                className={`${styles.titleBarToggle} ${
-                  sidebarCollapsed ? styles.titleBarToggleCollapsed : styles.titleBarToggleExpanded
-                }`}
+                className={styles.titleBarToggle}
                 onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
                 title={sidebarCollapsed ? '显示连接面板' : '隐藏连接面板'}
                 type="button"
               >
-                <span aria-hidden="true" className={styles.titleBarToggleIcon} />
+                <PanelSideIcon className={styles.titleBarToggleIcon} side="left" />
               </button>
             ) : null}
           </div>

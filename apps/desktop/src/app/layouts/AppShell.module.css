@@ -76,21 +76,13 @@
 }
 
 .titleBarToggleIcon {
-  display: block;
   width: 18px;
   height: 18px;
-  background: currentcolor;
-  mask-position: center;
-  mask-repeat: no-repeat;
-  mask-size: contain;
-}
-
-.titleBarToggleExpanded .titleBarToggleIcon {
-  mask-image: url('/assets/toggle-right.svg');
-}
-
-.titleBarToggleCollapsed .titleBarToggleIcon {
-  mask-image: url('/assets/toggle-left.svg');
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .app {

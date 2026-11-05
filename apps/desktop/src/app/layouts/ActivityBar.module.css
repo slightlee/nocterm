@@ -137,18 +137,14 @@
 }
 
 .toggleIcon {
-  display: block;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   flex: none;
-  background: currentcolor;
-  mask-position: center;
-  mask-repeat: no-repeat;
-  mask-size: contain;
-}
-
-.toggleIconRight {
-  mask-image: url('/assets/toggle-right.svg');
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .embedded .spacer {

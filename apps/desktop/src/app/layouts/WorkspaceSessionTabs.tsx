@@ -18,6 +18,7 @@ import {
   useSftpStore,
 } from '../../features/sftp';
 import { useTerminalStore, type TerminalSessionId } from '../../features/terminal';
+import { PanelSideIcon } from '../../shared/components/PanelSideIcon';
 import { TabContextMenu } from '../../shared/components/TabContextMenu';
 import {
   createWorkspaceSessionTabKeys,
@@ -309,10 +310,7 @@ export function WorkspaceSessionTabs({
               title="显示连接面板"
               type="button"
             >
-              <span
-                aria-hidden="true"
-                className={`${styles.toggleIcon} ${styles.toggleIconLeft}`}
-              />
+              <PanelSideIcon className={styles.toggleIcon} side="left" />
             </button>
           ) : null}
           <button

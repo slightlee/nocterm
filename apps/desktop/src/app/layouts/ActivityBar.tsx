@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 
+import { PanelSideIcon } from '../../shared/components/PanelSideIcon';
 import { useWindowDrag } from '../../shared/hooks/useWindowDrag';
 import styles from './ActivityBar.module.css';
 
@@ -73,10 +74,7 @@ export function ActivityBar({
               title="隐藏连接面板"
               type="button"
             >
-              <span
-                aria-hidden="true"
-                className={`${styles.toggleIcon} ${styles.toggleIconRight}`}
-              />
+              <PanelSideIcon className={styles.toggleIcon} side="left" />
             </button>
           ) : (
             navigation.map((item) => (

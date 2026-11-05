@@ -1,3 +1,4 @@
+import { PanelSideIcon } from '../../../shared/components/PanelSideIcon';
 import styles from './AiPanelToggle.module.css';
 
 interface AiPanelToggleProps {
@@ -21,8 +22,7 @@ export function AiPanelToggle({ expanded, onToggle }: AiPanelToggleProps) {
       type="button"
     >
       {expanded ? (
-        // 复用连接面板的折叠资源，让左右侧栏使用同一套图标语言。
-        <span aria-hidden="true" className={styles.panelCollapseIcon} />
+        <PanelSideIcon className={styles.panelCollapseIcon} side="right" />
       ) : (
         <>
           <svg aria-hidden="true" className={styles.assistantIcon} viewBox="0 0 24 24">

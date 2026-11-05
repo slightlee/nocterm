@@ -27,10 +27,6 @@
   background: color-mix(in srgb, var(--term-panel) 98%, var(--term-text));
 }
 
-.toggle[aria-expanded='true'] {
-  color: var(--term-text);
-}
-
 /* 展开后标题已经说明面板身份，这里只保留与相邻操作同规格的收起命令。 */
 .compact {
   width: 30px;
@@ -97,14 +93,9 @@
   stroke-width: 1.6;
 }
 
-.panelCollapseIcon {
-  display: block;
-  width: 24px;
-  height: 24px;
-  flex: none;
-  background: currentcolor;
-  mask-image: url('/assets/toggle-right.svg');
-  mask-position: center;
-  mask-repeat: no-repeat;
-  mask-size: contain;
+.toggle .panelCollapseIcon {
+  width: 18px;
+  height: 18px;
+  stroke-linecap: round;
+  stroke-width: 1.8;
 }
