@@ -1,4 +1,5 @@
 import { AI_PROVIDERS, type AiProvider, type AiProviderId } from '../model/ai-types';
+import { AiProviderIcon } from './AiProviderIcon';
 import styles from './AiComposerControls.module.css';
 
 interface AiProviderSelectorProps {
@@ -30,9 +31,7 @@ export function AiProviderSelector({
         type="button"
       >
         <span className={styles.providerLabel}>
-          <svg className={styles.providerIcon} viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M7 5h10v14H7zM10 9h4M10 13h4" />
-          </svg>
+          <AiProviderIcon className={styles.agentProviderIcon} providerId={providerId} />
           <span>{provider.name}</span>
         </span>
         <svg className={styles.providerChevron} viewBox="0 0 24 24" aria-hidden="true">
@@ -44,17 +43,18 @@ export function AiProviderSelector({
           {AI_PROVIDERS.map((item) => (
             <button
               aria-selected={item.id === providerId}
-              className={
-                item.id === providerId ? styles.providerOptionActive : styles.providerOption
-              }
+              className={`${item.id === providerId ? styles.providerOptionActive : styles.providerOption} ${styles.agentProviderOption}`}
               key={item.id}
               disabled={disabled}
               onClick={() => onChange(item.id)}
               role="option"
               type="button"
             >
-              <span>{item.name}</span>
-              <small>{item.description}</small>
+              <AiProviderIcon className={styles.providerOptionIcon} providerId={item.id} />
+              <span className={styles.providerOptionCopy}>
+                <span>{item.name}</span>
+                <small>{item.description}</small>
+              </span>
             </button>
           ))}
         </div>

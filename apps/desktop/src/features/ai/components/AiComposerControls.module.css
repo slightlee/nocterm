@@ -79,6 +79,27 @@
   background: var(--accent-blue-soft);
 }
 
+.agentProviderOption {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.providerOptionCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.providerOptionIcon {
+  width: 18px;
+  height: 18px;
+  color: var(--text-primary);
+  fill: currentcolor;
+}
+
 .providerOption:focus-visible,
 .providerOptionActive:focus-visible {
   outline: 2px solid var(--term-blue);
@@ -243,6 +264,15 @@
   height: 14px;
   flex: none;
   color: var(--term-blue);
+}
+
+.providerButton .agentProviderIcon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--term-text);
+  fill: currentcolor;
+  stroke: none;
 }
 
 /* 高权限状态在菜单收起后仍显示危险色。 */
