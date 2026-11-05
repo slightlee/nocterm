@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0-beta.2](https://github.com/slightlee/nocterm/compare/v0.3.0-beta.1...v0.3.0-beta.2) (2026-11-05)
+
+
+### Features
+
+* enable SSH visible AI execution by default ([#110](https://github.com/slightlee/nocterm/issues/110)) ([c4385a0](https://github.com/slightlee/nocterm/commit/c4385a09e9bc9f0c2772253f997d8f079daae09a))
+* propagate ssh terminal connection error codes ([#105](https://github.com/slightlee/nocterm/issues/105)) ([0f529c1](https://github.com/slightlee/nocterm/commit/0f529c192774d239c4fc0251845bc4331199cfe1))
+
+
+### Bug Fixes
+
+* add Apple HIG margin to macOS app icon ([#108](https://github.com/slightlee/nocterm/issues/108)) ([d8663ce](https://github.com/slightlee/nocterm/commit/d8663ce3d70d65db10b7a7f8c674071a7dbaa177)), closes [#106](https://github.com/slightlee/nocterm/issues/106)
+* preserve SFTP local path across tab switches ([#109](https://github.com/slightlee/nocterm/issues/109)) ([1dfdaf5](https://github.com/slightlee/nocterm/commit/1dfdaf50f3f85e284846207c16d749ec83a79eb8)), closes [#107](https://github.com/slightlee/nocterm/issues/107)
+
 ## [0.3.0-beta.1](https://github.com/slightlee/nocterm/compare/v0.2.0-beta.7...v0.3.0-beta.1) (2026-10-27)
 
 
