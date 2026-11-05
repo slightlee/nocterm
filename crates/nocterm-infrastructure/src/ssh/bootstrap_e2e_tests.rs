@@ -11,8 +11,9 @@
 //! 断言覆盖真实环境发现过的全部回归：
 //! 1. rc 内容含 nonce 导出与钩子、**不含 rm**（删除责任在注入命令）
 //! 2. rc 内容**不含**用户 rc 重建（登录链由 request_shell 原样保留）
-//! 3. shell channel 上收到 ` source '<path>'; rm -f -- '<path>'` 注入
-//!    （此前该敲入代码在历次修改中丢失，集成从未生效）
+//! 3. shell channel 上收到 ` source '<path>'; rm -f -- '<path>'; printf …`
+//!    注入，且携带提示符清理序列（此前该敲入代码在历次修改中丢失，集成从未
+//!    生效；缺失 printf 会让登录提示符残留，连接后出现两行提示符）
 //! 4. PowerShell 先经历一次 POSIX 未命中，再通过专用探针识别；不上传文件，
 //!    shell channel 直接收到 Base64 内存注入命令。
 
@@ -380,14 +381,16 @@ fn bootstrap_full_flow_over_in_memory_ssh_server() {
     assert!(!rc.contains("rm -f"), "rc must not carry the delete itself");
     assert!(!rc.contains(". \"$HOME/.bashrc\""));
 
-    // source 注入敲入契约（真实环境回归：该敲入曾整体丢失）：
+    // source 注入敲入契约（真实环境回归：该敲入曾整体丢失）；
+    // printf 清理序列擦除残留登录提示符（真实环境回归：连接后双提示符）。
     let expected_path = super::bootstrap::remote_rc_path(&plan.nonce);
     assert!(
         shared.shell_inputs.iter().any(|input| {
             input.contains(&format!("source '{}'", expected_path))
                 && input.contains(&format!("rm -f -- '{}'", expected_path))
+                && input.contains("\\033[1A\\033[2K\\r")
         }),
-        "run_session must type the source+rm command into the visible shell; inputs: {:?}",
+        "run_session must type the source+rm+cleanup command into the visible shell; inputs: {:?}",
         shared.shell_inputs
     );
     assert_eq!(plan.nonce, extract_nonce_from_rc(rc).expect("nonce in rc"));
