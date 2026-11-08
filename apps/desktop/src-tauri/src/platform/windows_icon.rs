@@ -68,9 +68,6 @@ unsafe fn set_icons(hwnd: isize) -> (isize, isize) {
 
     // SAFETY: 均为查询/加载型调用，入参为常量与窗口自身句柄。
     let (big_icon, small_icon) = unsafe { (load_icon(big_size), load_icon(small_size)) };
-    eprintln!(
-        "[nocterm] DPI 图标: dpi={dpi} big={big_size}px→{big_icon:#x} small={small_size}px→{small_icon:#x}"
-    );
 
     // SAFETY: WM_SETICON 的 wParam/lParam 按文档取值，HICON 由进程持有至退出。
     unsafe {
@@ -147,7 +144,6 @@ unsafe fn icon_from_ico_frame(size: i32) -> Option<isize> {
             LR_DEFAULTCOLOR,
         ) as isize
     };
-    eprintln!("[nocterm] ico 帧 {size}px 命中 {}px→{handle:#x}", frame.0);
     (handle != 0).then_some(handle)
 }
 
