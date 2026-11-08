@@ -142,17 +142,15 @@ export function bindConnectionPrivateKeyFile(connectionId: number, path: string)
   });
 }
 
-/** 文件选择属于桌面平台能力，组件只消费规范化后的路径结果。 */
+/**
+ * 文件选择属于桌面平台能力，组件只消费规范化后的路径结果。
+ *
+ * 刻意不设置扩展名过滤：OpenSSH 默认私钥无后缀（如 `id_ed25519`），而文件对话框
+ * 的扩展名模式无法表达"任意无后缀文件"，任何白名单都必然漏掉有效密钥（issue #112）。
+ * 选择器只负责返回路径，不承担能力校验；文件是否为可用私钥由连接时 Rust 侧解析
+ * 并以稳定错误码反馈，选错文件在连接阶段即可发现。
+ */
 export async function selectPrivateKeyFile(): Promise<string | null> {
-  const selected = await open({
-    directory: false,
-    multiple: false,
-    filters: [
-      {
-        name: 'SSH Private Key',
-        extensions: ['pem', 'key', 'pub', 'txt', 'ppk'],
-      },
-    ],
-  });
+  const selected = await open({ directory: false, multiple: false });
   return typeof selected === 'string' ? selected : null;
 }
