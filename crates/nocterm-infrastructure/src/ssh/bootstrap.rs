@@ -109,9 +109,16 @@ pub(super) fn build_rc_content(plan: &SshShellIntegrationPlan, _path: &str) -> S
 /// 验证发现的 5 个 /tmp 残留即此）。`source` 返回后 rm 必然执行；行首空格
 /// 配合 `HISTCONTROL=ignorespace`（Ubuntu 默认）避免进入 history；bash 与
 /// zsh 的 `source` 语义一致，无需按 shell 分支。
+///
+/// 尾部的 `printf` 清理序列擦除上一行残留的登录提示符：注入命令必然以一次
+/// 回车结束，tty 回显的换行会让远端再打印一次提示符，用户因此看到两行
+/// 提示符（beta.2 实测回归）。命令执行点光标位于回显换行后的空行，`ESC[A`
+/// 上移到登录提示符行、`ESC[2K` 擦除、`\r` 归零列，随后的 integration
+/// 钩子事件（被剥离）与 PS1 会在该行重新打印唯一提示符。执行时登录提示符
+/// 必已渲染（探针与上传的往返远长于登录链），擦除目标行稳定存在。
 pub(super) fn source_command(path: &str) -> String {
     let quoted = shell_single_quoted(path);
-    format!(" source {quoted}; rm -f -- {quoted}\n")
+    format!(" source {quoted}; rm -f -- {quoted}; printf '\\033[1A\\033[2K\\r'\n")
 }
 
 /// 返回交互式 Shell 中实际注入的命令。PowerShell 直接在内存中解码脚本，
@@ -516,11 +523,11 @@ mod tests {
     #[test]
     fn source_command_carries_the_delete_responsibility() {
         let command = source_command("/tmp/nocterm-ssh-x.rc");
-        // 脚本守卫 return 也不能跳过删除：rm 必须在 source 之后同命令执行。
+        // 脚本守卫 return 也不能跳过删除：rm 必须在 source 之后同命令执行；
+        // 尾部 printf 在远端擦除残留登录提示符，避免连接后出现两行提示符。
         assert_eq!(
             command,
-            " source '/tmp/nocterm-ssh-x.rc'; rm -f -- '/tmp/nocterm-ssh-x.rc'
-"
+            " source '/tmp/nocterm-ssh-x.rc'; rm -f -- '/tmp/nocterm-ssh-x.rc'; printf '\\033[1A\\033[2K\\r'\n"
         );
     }
 }

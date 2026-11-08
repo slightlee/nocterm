@@ -87,6 +87,16 @@ impl IntegrationEchoSuppressor {
         {
             end += 1;
         }
+        // 注入命令尾部还有提示符清理 printf（见 bootstrap::source_command）；
+        // 同一行剩余部分同属内部命令，延伸到行尾一起隐藏，只保留回显换行。
+        while self
+            .pending
+            .as_bytes()
+            .get(end)
+            .is_some_and(|byte| !matches!(*byte, b'\r' | b'\n'))
+        {
+            end += 1;
+        }
         Some(start..end)
     }
 
@@ -1372,6 +1382,30 @@ mod tests {
             registry.visible_output("ssh-1", "echo ok\r\n"),
             "echo ok\r\n"
         );
+    }
+
+    #[test]
+    fn source_echo_suppression_hides_prompt_cleanup_printf_suffix() {
+        let registry = SshTerminalRegistry::default();
+        bind(&registry, "ws-1", "ssh-1");
+        let path = "/tmp/nocterm-ssh-nonce.rc";
+        registry.begin_integration_echo_suppression(
+            "ssh-1",
+            path,
+            Some("rm -f"),
+            suppression_deadline(),
+        );
+
+        // 注入命令尾部的 printf 清理序列同属内部命令：整段命令文本隐藏，
+        // 但回显换行必须透传，保持本地与远端的光标行一致。
+        let visible = registry.visible_output(
+            "ssh-1",
+            &format!(
+                "root@host:~#  source '{path}'; rm -f -- '{path}'; printf '\\033[1A\\033[2K\\r'\r\nroot@host:~# "
+            ),
+        );
+
+        assert_eq!(visible, "root@host:~# \r\nroot@host:~# ");
     }
 
     #[test]
