@@ -51,33 +51,39 @@ pub(super) fn local_shell_command() -> (CommandBuilder, LocalShellKind) {
     // 注入失败或未覆盖的 shell 静默降级到既有探针路径（#82）。
     #[cfg(not(windows))]
     {
-        // `new_default_prog` 解析出实际 shell 路径后，必须重建为显式程序构建器：
-        // portable-pty 禁止给默认程序构建器追加参数（bash --rcfile 会 panic）。
         let resolved =
             apply_default_term(apply_terminal_identity(CommandBuilder::new_default_prog()));
         let shell_path = resolved.get_shell();
-        let kind = detect_shell_kind(&shell_path);
-        let mut command = apply_terminal_identity(CommandBuilder::new(&shell_path));
-        // 重建后 TERM 重新装回：Finder/Dock 启动的 GUI 进程常缺 TERM。
-        if let Some(term) = resolved.get_env("TERM") {
-            command.env("TERM", term);
-        } else {
-            command.env("TERM", DEFAULT_TERM);
-        }
-        match kind {
-            LocalShellKind::Posix if shell_path.ends_with("zsh") => {
-                apply_zsh_integration(&mut command);
-            }
-            LocalShellKind::Posix if shell_path.ends_with("bash") => {
-                apply_bash_integration(&mut command);
-            }
-            LocalShellKind::Fish => {
-                apply_fish_integration(&mut command);
-            }
-            _ => {}
-        }
-        (command, kind)
+        configure_unix_shell(resolved, &shell_path)
     }
+}
+
+/// 在不破坏默认登录 Shell 语义的前提下注入本地集成脚本。
+/// `portable-pty` 只会为 default builder 设置登录式 argv0；zsh/fish 无需参数，
+/// 因此必须保留该 builder。bash 因 `--rcfile` 需要显式命令，只在这一分支重建；
+/// Bash 的登录 Shell 会忽略 `--rcfile`，不能在这里机械追加登录参数。
+#[cfg(not(windows))]
+fn configure_unix_shell(
+    mut command: CommandBuilder,
+    shell_path: &str,
+) -> (CommandBuilder, LocalShellKind) {
+    let kind = detect_shell_kind(shell_path);
+    match kind {
+        LocalShellKind::Posix if shell_path.ends_with("zsh") => {
+            apply_zsh_integration(&mut command);
+        }
+        LocalShellKind::Posix if shell_path.ends_with("bash") => {
+            let term = command.get_env("TERM").map(|value| value.to_os_string());
+            command = apply_terminal_identity(CommandBuilder::new(shell_path));
+            command.env("TERM", term.as_deref().unwrap_or(DEFAULT_TERM.as_ref()));
+            apply_bash_integration(&mut command);
+        }
+        LocalShellKind::Fish => {
+            apply_fish_integration(&mut command);
+        }
+        _ => {}
+    }
+    (command, kind)
 }
 
 /// zsh 集成注入（#82）：构造临时 ZDOTDIR，其中的 `.zshrc` 先 source 用户原始
@@ -195,7 +201,56 @@ pub(crate) fn shell_single_quoted(value: &str) -> String {
 
 #[cfg(all(test, not(windows)))]
 mod zsh_integration_tests {
-    use super::{build_zsh_wrapper, shell_single_quoted};
+    use super::{
+        DEFAULT_TERM, TERM_PROGRAM_VALUE, apply_default_term, apply_terminal_identity,
+        build_zsh_wrapper, configure_unix_shell, shell_single_quoted,
+    };
+    use portable_pty::CommandBuilder;
+    use std::ffi::OsStr;
+
+    fn default_shell(path: &str) -> CommandBuilder {
+        let mut command = CommandBuilder::new_default_prog();
+        command.env("SHELL", path);
+        apply_default_term(apply_terminal_identity(command))
+    }
+
+    #[test]
+    fn zsh_integration_preserves_portable_pty_login_shell_builder() {
+        let (command, _) = configure_unix_shell(default_shell("/bin/zsh"), "/bin/zsh");
+
+        assert!(command.is_default_prog());
+        assert_eq!(command.get_env("TERM"), Some(OsStr::new(DEFAULT_TERM)));
+        assert_eq!(
+            command.get_env("TERM_PROGRAM"),
+            Some(OsStr::new(TERM_PROGRAM_VALUE))
+        );
+        assert!(command.get_env("ZDOTDIR").is_some());
+    }
+
+    #[test]
+    fn fish_integration_preserves_portable_pty_login_shell_builder() {
+        let (command, _) = configure_unix_shell(default_shell("/usr/bin/fish"), "/usr/bin/fish");
+
+        assert!(command.is_default_prog());
+        assert!(command.get_env("XDG_CONFIG_HOME").is_some());
+    }
+
+    #[test]
+    fn bash_integration_rebuilds_an_explicit_shell_for_rcfile() {
+        let (command, _) = configure_unix_shell(default_shell("/bin/bash"), "/bin/bash");
+        let argv = command.get_argv();
+
+        assert!(!command.is_default_prog());
+        assert_eq!(
+            argv.first().map(|value| value.as_os_str()),
+            Some(OsStr::new("/bin/bash"))
+        );
+        assert_eq!(
+            argv.get(1).map(|value| value.as_os_str()),
+            Some(OsStr::new("--rcfile"))
+        );
+        assert_eq!(argv.len(), 3);
+    }
 
     #[test]
     fn wrapper_sources_user_config_before_integration_hooks() {
