@@ -96,6 +96,10 @@ describe('release workflow contract', () => {
     assert.match(workflow, /^ {2}workflow_dispatch:\n {4}inputs:\n {6}release_tag:/m);
     assert.match(workflow, /^permissions:\n {2}actions: read\n {2}contents: read$/m);
     assert.match(workflow, /release_sha: \$\{\{ steps\.release\.outputs\.release_sha \}\}/);
+    assert.match(
+      workflow,
+      /release_pr_number: \$\{\{ steps\.release\.outputs\.release_pr_number \}\}/
+    );
     assert.match(workflow, /ref: \$\{\{ github\.ref \}\}/);
     assert.match(workflow, /ref: \$\{\{ needs\.validate\.outputs\.release_sha \}\}/);
     assert.match(
@@ -131,6 +135,14 @@ describe('release workflow contract', () => {
     assert.match(
       workflow,
       /verify-draft-release:[\s\S]*?permissions:\n {6}contents: write[\s\S]*?Verify draft release assets/
+    );
+    assert.match(
+      workflow,
+      /verify-draft-release:[\s\S]*?issues: write[\s\S]*?pull-requests: write/
+    );
+    assert.match(
+      workflow,
+      /Verify draft release assets[\s\S]*?Mark release pull request as tagged[\s\S]*?PR_MERGE_SHA[\s\S]*?autorelease: pending[\s\S]*?autorelease: tagged/
     );
     assert.doesNotMatch(workflow, /gh release edit .*--draft=false/);
     assert.equal(tauriConfig.bundle.macOS.minimumSystemVersion, '14.0');

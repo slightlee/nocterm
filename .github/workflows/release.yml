@@ -24,6 +24,7 @@ jobs:
     outputs:
       release_sha: ${{ steps.release.outputs.release_sha }}
       release_version: ${{ steps.release.outputs.release_version }}
+      release_pr_number: ${{ steps.release.outputs.release_pr_number }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,8 +86,20 @@ jobs:
             echo "Tag $RELEASE_TAG does not match product version $RELEASE_VERSION." >&2
             exit 1
           fi
+
+          RELEASE_SUBJECT="$(git show -s --format=%s "$RELEASE_SHA")"
+          RELEASE_PREFIX="chore: prepare v$RELEASE_VERSION (#"
+          RELEASE_PR_NUMBER="${RELEASE_SUBJECT#"$RELEASE_PREFIX"}"
+          RELEASE_PR_NUMBER="${RELEASE_PR_NUMBER%)}"
+          if [ "$RELEASE_SUBJECT" = "$RELEASE_PR_NUMBER" ] ||
+            [[ ! "$RELEASE_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Release commit does not identify its merged release pull request." >&2
+            exit 1
+          fi
+
           echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "release_pr_number=$RELEASE_PR_NUMBER" >> "$GITHUB_OUTPUT"
 
   prepare-release:
     needs: validate
@@ -236,10 +249,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
       RELEASE_VERSION: ${{ needs.validate.outputs.release_version }}
+      RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+      RELEASE_PR_NUMBER: ${{ needs.validate.outputs.release_pr_number }}
     steps:
       - name: Verify draft release assets
         shell: bash
@@ -264,3 +281,31 @@ jobs:
               exit 1
             fi
           done
+      # Tag 与六个资产均验证成功后，才结束 Release Please 的待发布状态。
+      - name: Mark release pull request as tagged
+        shell: bash
+        run: |
+          PR_STATE="$(gh pr view "$RELEASE_PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
+          PR_TITLE="$(gh pr view "$RELEASE_PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json title --jq .title)"
+          PR_MERGE_SHA="$(gh pr view "$RELEASE_PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq .mergeCommit.oid)"
+          if [ "$PR_STATE" != "MERGED" ] ||
+            [ "$PR_TITLE" != "chore: prepare v$RELEASE_VERSION" ] ||
+            [ "$PR_MERGE_SHA" != "$RELEASE_SHA" ]; then
+            echo "Release pull request #$RELEASE_PR_NUMBER does not match $RELEASE_TAG." >&2
+            exit 1
+          fi
+
+          PR_LABELS="$(gh pr view "$RELEASE_PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')"
+          EDIT_ARGS=(pr edit "$RELEASE_PR_NUMBER" --repo "$GITHUB_REPOSITORY")
+          NEEDS_EDIT=false
+          if grep -Fxq "autorelease: pending" <<< "$PR_LABELS"; then
+            EDIT_ARGS+=(--remove-label "autorelease: pending")
+            NEEDS_EDIT=true
+          fi
+          if ! grep -Fxq "autorelease: tagged" <<< "$PR_LABELS"; then
+            EDIT_ARGS+=(--add-label "autorelease: tagged")
+            NEEDS_EDIT=true
+          fi
+          if [ "$NEEDS_EDIT" = "true" ]; then
+            gh "${EDIT_ARGS[@]}"
+          fi

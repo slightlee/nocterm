@@ -192,7 +192,7 @@ corepack pnpm release:build:windows
 
 脚本从根 `package.json` 读取产品版本，精确删除当前版本的旧 NSIS 源文件、规范副本和校验文件，再执行 Tauri 构建。只有构建成功且新源文件存在、非空时，才会在 `target/release/artifacts/` 生成符合上述命名规则的 NSIS 副本和同名 `.sha256` 校验文件。脚本当前只接受本机 Windows x64 产物；新增架构时必须先在对应平台验证 Tauri 原始命名和安装行为。
 
-推送有效发布 Tag 后，`.github/workflows/release.yml` 从 Tag 解引用后的固定提交构建三个原生产物：在 `macos-15` ARM64 Runner 通过 `pnpm release:build:macos` 构建 macOS aarch64 DMG，在 `macos-15-intel` Runner 通过同一脚本构建 macOS x86_64 DMG，并在 `windows-latest` 通过 `pnpm release:build:windows` 构建 Windows x86_64 NSIS。两个 macOS 构建都将最低运行版本固定为 macOS 14.0；Runner 系统版本只描述构建环境，不代表安装包只能在 macOS 15 运行。工作流创建或复用同 Tag 的 Draft Release，上传三个安装包及各自的 `.sha256`，最后核对六个资产齐全。自动化只准备 Draft，不公开发布；任一平台失败时 Draft 保持不可见，修复后可重跑并安全覆盖同名资产。
+推送有效发布 Tag 后，`.github/workflows/release.yml` 从 Tag 解引用后的固定提交构建三个原生产物：在 `macos-15` ARM64 Runner 通过 `pnpm release:build:macos` 构建 macOS aarch64 DMG，在 `macos-15-intel` Runner 通过同一脚本构建 macOS x86_64 DMG，并在 `windows-latest` 通过 `pnpm release:build:windows` 构建 Windows x86_64 NSIS。两个 macOS 构建都将最低运行版本固定为 macOS 14.0；Runner 系统版本只描述构建环境，不代表安装包只能在 macOS 15 运行。工作流创建或复用同 Tag 的 Draft Release，上传三个安装包及各自的 `.sha256`，最后核对六个资产齐全。验证成功后，工作流还会校验发布 Pull Request 的标题与合并提交，并将其 Release Please 标签从 `autorelease: pending` 切换为 `autorelease: tagged`；构建或资产验证失败时不得提前修改标签。自动化只准备 Draft，不公开发布；任一平台失败时 Draft 保持不可见，修复后可重跑并安全覆盖同名资产。
 
 每次分发至少记录：
 
