@@ -259,38 +259,13 @@ export function SshTerminal({ connection, active = true, onAddSelectionToAi }: S
     );
 
     /**
-     * bootstrap 诊断直接落到终端：可见执行的前置（集成注入）是否就绪一目了然。
-     * 依赖后端 open 响应的 integration 字段；字段缺失（旧后端）时保持沉默。
-     */
-    const reportIntegration = (opened: {
-      integrationShell: string | null;
-      integrationFallbackReason: string | null;
-    }) => {
-      if (opened.integrationShell) {
-        terminal.write(
-          `\x1b[90m[Nocterm] shell integration 已注入（${opened.integrationShell}），AI 命令将在本终端可见执行\x1b[0m\r\n`
-        );
-      } else if (opened.integrationFallbackReason) {
-        terminal.write(
-          `\x1b[90m[Nocterm] shell integration 未注入（${opened.integrationFallbackReason}），AI 命令将走隔离通道\x1b[0m\r\n`
-        );
-      } else {
-        terminal.write(
-          '\x1b[90m[Nocterm] shell integration 状态未知（旧后端），AI 命令将走隔离通道\x1b[0m\r\n'
-        );
-      }
-    };
-
-    /**
      * 先按后端已有的凭据尝试建连，只有后端明确返回 SSH_PASSWORD_REQUIRED 时才提示输入。
      * 由后端而不是前端的 credentialStatus 判定是否需要口令：连接列表里的凭据状态可能已过期，
      * 而后端每次都会重新查询会话缓存与系统凭据库。
      */
     const openWithInteractivePassword = async () => {
       try {
-        const opened = await openSshTerminal(connectionId, sessionId, terminal.cols, terminal.rows);
-        reportIntegration(opened);
-        return opened;
+        return await openSshTerminal(connectionId, sessionId, terminal.cols, terminal.rows);
       } catch (error) {
         if (getTerminalErrorCode(error) !== PASSWORD_REQUIRED_CODE) throw error;
       }
@@ -302,15 +277,7 @@ export function SshTerminal({ connection, active = true, onAddSelectionToAi }: S
         setSessionStatus(sessionId, 'closed');
         return null;
       }
-      const opened = await openSshTerminal(
-        connectionId,
-        sessionId,
-        terminal.cols,
-        terminal.rows,
-        secret
-      );
-      reportIntegration(opened);
-      return opened;
+      return openSshTerminal(connectionId, sessionId, terminal.cols, terminal.rows, secret);
     };
 
     /** 会话收尾的统一落点：失败与正常结束的状态迁移只在这里做一次。 */
