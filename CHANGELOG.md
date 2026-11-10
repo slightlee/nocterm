@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0-beta.3](https://github.com/slightlee/nocterm/compare/v0.3.0-beta.2...v0.3.0-beta.3) (2026-11-09)
+
+
+### Features
+
+* add ai provider brand icons ([#117](https://github.com/slightlee/nocterm/issues/117)) ([6117d47](https://github.com/slightlee/nocterm/commit/6117d4751c3dec6a37fee8268b88f33a332370db))
+
+
+### Bug Fixes
+
+* allow selecting extensionless SSH private keys ([#113](https://github.com/slightlee/nocterm/issues/113)) ([46aee7c](https://github.com/slightlee/nocterm/commit/46aee7c72a705c6c62e796242683234aff979f3b))
+* erase stale ssh login prompt after bootstrap injection ([#116](https://github.com/slightlee/nocterm/issues/116)) ([3ce7c05](https://github.com/slightlee/nocterm/commit/3ce7c0574eff259e80a4f7709eee6c4e9bd7f776))
+* finalize release pull request state ([#125](https://github.com/slightlee/nocterm/issues/125)) ([923df82](https://github.com/slightlee/nocterm/commit/923df829c36adca51cafe1c52209ff8584e2dfff)), closes [#124](https://github.com/slightlee/nocterm/issues/124)
+* keep ssh connection output clean ([#122](https://github.com/slightlee/nocterm/issues/122)) ([a8f5124](https://github.com/slightlee/nocterm/commit/a8f5124393d2448c175417fad8c2579a4ede166b)), closes [#119](https://github.com/slightlee/nocterm/issues/119)
+* preserve local login shell semantics ([#121](https://github.com/slightlee/nocterm/issues/121)) ([06f59d6](https://github.com/slightlee/nocterm/commit/06f59d6ef219efc0edce4b7a29496791afc5ec6c)), closes [#118](https://github.com/slightlee/nocterm/issues/118)
+
 ## [0.3.0-beta.2](https://github.com/slightlee/nocterm/compare/v0.3.0-beta.1...v0.3.0-beta.2) (2026-11-05)
 
 
