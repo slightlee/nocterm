@@ -509,15 +509,10 @@ impl TerminalExecution<'_> {
                         Some("SSH_PROMPT_CHANGED".to_string()),
                     )
                 } else {
-                    let visible_mode = if self.ssh_registry.marker_recovery_supported(terminal_id) {
-                        AiExecutionMode::SshVisibleMarker
-                    } else {
-                        AiExecutionMode::SshVisibleOsc
-                    };
                     ssh_visible_attempt = Some(SshVisibleAttempt {
                         terminal_id: terminal_id.clone(),
                     });
-                    (visible_mode, None)
+                    (AiExecutionMode::SshVisibleOsc, None)
                 }
             }
             AiTarget::Local { terminal_id, .. }
@@ -1782,12 +1777,11 @@ mod tests {
     }
 
     #[test]
-    fn marker_capable_ssh_route_records_the_marker_execution_strategy() {
+    fn prompt_ready_ssh_route_records_the_osc_execution_strategy() {
         let harness = Harness::new(None);
         harness
             .ssh_registry
             .register_integration("ssh-test", "nonce-marker");
-        harness.ssh_registry.enable_marker_recovery("ssh-test");
         harness.ssh_registry.record_integration_event(
             "ssh-test",
             &crate::state::Osc633Event::PromptStarted {
@@ -1814,7 +1808,7 @@ mod tests {
 
         assert_eq!(
             tracker.record().mode,
-            nocterm_domain::ai_execution::AiExecutionMode::SshVisibleMarker
+            nocterm_domain::ai_execution::AiExecutionMode::SshVisibleOsc
         );
         assert!(!harness.ssh_registry.input_gated("ssh-test"));
     }
@@ -1826,12 +1820,11 @@ mod tests {
             .gateway
             .set_ssh_visible_enabled(7, false)
             .expect("disable SSH visible execution");
-        // 即使 Prompt Ready 与 Marker 能力全部满足，连接级关闭仍必须在 dispatch
+        // 即使 Prompt Ready 已满足，连接级关闭仍必须在 dispatch
         // 前选择 independent exec，不能先写 PTY 再回退。
         harness
             .ssh_registry
             .register_integration("ssh-test", "nonce-marker");
-        harness.ssh_registry.enable_marker_recovery("ssh-test");
         harness.ssh_registry.record_integration_event(
             "ssh-test",
             &crate::state::Osc633Event::PromptStarted {

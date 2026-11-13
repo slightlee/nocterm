@@ -171,16 +171,15 @@ pub fn ssh_terminal_open(
         state
             .ssh_terminals()
             .register_integration(&terminal_id, &plan.nonce);
-        // Marker 完成恢复依赖 POSIX `eval` 包装器语义，只有 bash/zsh 启用。
-        if matches!(plan.shell, SshShellKind::Bash | SshShellKind::Zsh) {
-            state.ssh_terminals().enable_marker_recovery(&terminal_id);
-        }
         // integration 注入回显对用户是噪音：POSIX 匹配临时路径 + rm，
         // PowerShell 匹配内存解码调用；只隐藏一次，不解析提示符文本。
         // 抑制窗口有界：截止后注册表降级直通，钩子安装失败不会让终端假死。
         let echo_token = nocterm_infrastructure::ssh::bootstrap::integration_echo_token(plan);
-        let required_fragment =
-            (!matches!(plan.shell, SshShellKind::PowerShell)).then_some("rm -f");
+        let required_fragment = if matches!(plan.shell, SshShellKind::PowerShell) {
+            "FromBase64String"
+        } else {
+            "rm -f"
+        };
         state.ssh_terminals().begin_integration_echo_suppression(
             &terminal_id,
             &echo_token,
@@ -191,6 +190,19 @@ pub fn ssh_terminal_open(
         state
             .ssh_terminals()
             .register_integration_unavailable(&terminal_id, reason);
+    }
+
+    // 只有 nonce、抑制器和 generation 全部注册后才能写入 bootstrap。此前会话任务
+    // 在 open() 发出 ready 后立即注入，首个快速回显可能抢在抑制器之前进入 UI。
+    if let Err(error) = terminal_service.activate(&terminal_id) {
+        let _ = terminal_service.close(&terminal_id);
+        state
+            .ssh_terminals()
+            .unbind(&workspace_session_id, &terminal_id);
+        if holds_password_lease {
+            session_passwords.release(connection_id);
+        }
+        return Err(ErrorResponse::from(error));
     }
     let mut reader = opened.reader;
     let reader_terminal_id = terminal_id.clone();
@@ -234,14 +246,6 @@ pub fn ssh_terminal_open(
                             visible_data.push_str(
                                 &reader_registry
                                     .finish_integration_echo_on_osc(&reader_terminal_id),
-                            );
-                        }
-                        // nonce-bound A 与 D 都证明 Shell 已重新进入提示符阶段，均可
-                        // 结束 Marker fail-closed 状态；未 bootstrap 的 D 保留原有
-                        // Ctrl+C 中断恢复语义。
-                        if observation.nonce_bound || observation.command_finished {
-                            visible_data.push_str(
-                                &reader_registry.finish_marker_output_on_osc(&reader_terminal_id),
                             );
                         }
                     }

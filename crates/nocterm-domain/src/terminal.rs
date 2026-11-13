@@ -95,6 +95,12 @@ pub trait SshTerminalPort: Send + Sync {
         private_key: Option<&str>,
     ) -> Result<OpenedTerminal, SshTerminalError>;
 
+    /// 激活刚打开的交互会话。SSH Adapter 用它在调用方完成控制面注册后，按顺序
+    /// 写入一次性的 shell integration 与初始目录命令；普通测试替身无需额外动作。
+    fn activate(&self, _terminal_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+
     fn write(&self, terminal_id: &str, data: &str) -> Result<(), String>;
 
     fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), String>;

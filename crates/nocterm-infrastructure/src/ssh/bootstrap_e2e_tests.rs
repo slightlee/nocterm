@@ -312,6 +312,7 @@ fn bootstrap_full_flow_over_in_memory_ssh_server() {
     let opened = manager
         .open(&profile, 80, 24, Some("test"), None)
         .expect("open must succeed");
+    let terminal_id = opened.terminal_id.clone();
 
     // bootstrap 结论：集成计划为 bash（探针 + 上传全通过）。
     let plan = opened
@@ -320,8 +321,13 @@ fn bootstrap_full_flow_over_in_memory_ssh_server() {
         .expect("bootstrap must produce an integration plan");
     assert_eq!(plan.shell, SshShellKind::Bash);
 
-    // 等待 run_session 的 source 注入到达桩。
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // open 只准备会话，不得抢先向可见 PTY 注入；Host 注册 nonce 与抑制器后
+    // 显式 activate，建立可测试的 arm-before-write 顺序。
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(shared.lock().unwrap().shell_inputs.is_empty());
+    manager
+        .activate(&terminal_id)
+        .expect("activation must write bootstrap after arm");
 
     // 回传链路契约：桩模拟钩子生效后发出的 nonce-bound OSC 633 必须经
     // output_tx 到达 reader——这是命令层 Prompt Ready 证据的物理来源，此前
@@ -405,13 +411,19 @@ fn powershell_bootstrap_uses_second_probe_and_memory_injection() {
     let opened = manager
         .open(&test_profile(port), 80, 24, Some("test"), None)
         .expect("open must succeed");
+    let terminal_id = opened.terminal_id.clone();
     let plan = opened
         .integration
         .shell_integration
         .expect("PowerShell bootstrap must produce an integration plan");
     assert_eq!(plan.shell, SshShellKind::PowerShell);
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(shared.lock().unwrap().shell_inputs.is_empty());
+    manager
+        .activate(&terminal_id)
+        .expect("PowerShell activation must be explicit");
+    std::thread::sleep(std::time::Duration::from_millis(100));
     let shared = shared.lock().unwrap();
     assert_eq!(shared.probe_count, 2);
     assert!(shared.uploaded_rcs.is_empty());

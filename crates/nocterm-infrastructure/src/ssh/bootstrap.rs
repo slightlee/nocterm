@@ -139,11 +139,37 @@ pub(super) fn integration_command(plan: &SshShellIntegrationPlan) -> String {
     }
 }
 
+/// 构造一次性激活批次。integration 与初始目录必须处于同一逻辑行，确保 Host
+/// 为 bootstrap 注册的回显抑制器覆盖全部内部输入，不会在首个匹配行后泄漏 `cd`。
+/// 将目录切换放在提示符清理序列之后，使整行最终状态仍由 `cd` 决定。
+pub(super) fn activation_command(
+    plan: &SshShellIntegrationPlan,
+    initial_path: Option<&str>,
+) -> String {
+    let integration = integration_command(plan);
+    let Some(path) = initial_path else {
+        return integration;
+    };
+    let directory = initial_directory_command(path, Some(plan.shell));
+    let line_ending = if matches!(plan.shell, SshShellKind::PowerShell) {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    format!(
+        "{}; {}{line_ending}",
+        integration.trim_end_matches(['\r', '\n']),
+        directory.trim_end_matches(['\r', '\n'])
+    )
+}
+
 /// 注入回显过滤使用的唯一片段。只在 bootstrap 写入到首个换行期间生效，
 /// 不作为完成或 readiness 证据。
 pub fn integration_echo_token(plan: &SshShellIntegrationPlan) -> String {
     match plan.shell {
-        SshShellKind::PowerShell => "FromBase64String".to_string(),
+        // PowerShell 注入行也携带每会话 nonce。使用它而不是通用 API 名作为
+        // 主锚点，避免用户自己的 Base64 命令被误判成内部协议。
+        SshShellKind::PowerShell => plan.nonce.clone(),
         SshShellKind::Bash | SshShellKind::Zsh | SshShellKind::Fish => remote_rc_path(&plan.nonce),
     }
 }
@@ -447,7 +473,7 @@ mod tests {
         assert!(command.contains("[Convert]::FromBase64String("));
         assert!(!command.contains("/tmp/"));
         assert!(!command.contains("Remove-Item"));
-        assert_eq!(integration_echo_token(&plan), "FromBase64String");
+        assert_eq!(integration_echo_token(&plan), "abc123");
     }
 
     #[test]
@@ -460,6 +486,20 @@ mod tests {
             initial_directory_command("/srv/it's", Some(SshShellKind::Bash)),
             "cd '/srv/it'\\''s'\n"
         );
+    }
+
+    #[test]
+    fn activation_command_keeps_initial_directory_in_the_suppressed_line() {
+        let bash = activation_command(&plan(SshShellKind::Bash), Some("/srv/it's"));
+        assert_eq!(bash.matches('\n').count(), 1);
+        assert!(bash.contains("rm -f -- '/tmp/nocterm-ssh-abc123.rc'"));
+        assert!(bash.ends_with("; cd '/srv/it'\\''s'\n"));
+
+        let powershell =
+            activation_command(&plan(SshShellKind::PowerShell), Some("C:\\Users\\O'Brien"));
+        assert!(!powershell[..powershell.len() - 2].contains(['\r', '\n']));
+        assert!(powershell.contains("[Convert]::FromBase64String("));
+        assert!(powershell.ends_with("; Set-Location -LiteralPath 'C:\\Users\\O''Brien'\r\n"));
     }
 
     #[test]

@@ -42,9 +42,15 @@ const CLOSE_GRACE_TIMEOUT: Duration = Duration::from_secs(3);
 /// 独立 exec channel 从排队到远端接受命令的上限；同步调用方按同一预算等待。
 const EXEC_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const EXEC_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// 会话激活只向既有 PTY 写入两条以内的短命令，正常路径应在一个调度周期完成。
+const ACTIVATE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 会话任务能接收的控制指令，均由同步命令层通过通道投递。
 enum TerminalCommand {
+    /// Host 已完成 nonce、输出抑制器和终端绑定注册，现在允许写入 bootstrap。
+    Activate {
+        completion_tx: std::sync::mpsc::Sender<Result<(), String>>,
+    },
     /// 用户键入的字节流，原样写入远端 PTY 通道。
     Data(Vec<u8>),
     /// 终端尺寸调整，映射为 SSH 的 window-change 请求。
@@ -435,6 +441,35 @@ impl SshTerminalManager {
             .map_err(|_| SshError::new("SSH 终端已停止接收输入"))
     }
 
+    /// 在调用方完成输出控制面注册后激活会话，建立严格的 arm-before-write 顺序。
+    pub fn activate(&self, terminal_id: &str) -> Result<(), SshError> {
+        let command_tx = {
+            let terminals = self
+                .terminals
+                .lock()
+                .map_err(|_| SshError::new("SSH 终端状态锁已损坏"))?;
+            terminals
+                .get(terminal_id)
+                .ok_or_else(|| SshError::new("SSH 终端不存在或已关闭"))?
+                .command_tx
+                .clone()
+        };
+        let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+        command_tx
+            .send(TerminalCommand::Activate { completion_tx })
+            .map_err(|_| SshError::new("SSH 终端已停止接收激活请求"))?;
+        match completion_rx.recv_timeout(ACTIVATE_TIMEOUT) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(SshError::new(message)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                Err(SshError::new("SSH 终端激活超时"))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(SshError::new("SSH 终端在激活完成前意外关闭"))
+            }
+        }
+    }
+
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), SshError> {
         let terminals = self
             .terminals
@@ -527,6 +562,10 @@ impl SshTerminalPort for SshTerminalManager {
 
     fn write(&self, terminal_id: &str, data: &str) -> Result<(), String> {
         SshTerminalManager::write(self, terminal_id, data).map_err(|error| error.to_string())
+    }
+
+    fn activate(&self, terminal_id: &str) -> Result<(), String> {
+        SshTerminalManager::activate(self, terminal_id).map_err(|error| error.to_string())
     }
 
     fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -644,24 +683,7 @@ async fn run_session(
     let handle = Arc::new(tokio::sync::Mutex::new(handle));
     let mut execution_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
-    // bootstrap 成功时向登录 shell 注入集成钩子；POSIX source 临时 rc，
-    // PowerShell 在内存中解码脚本。注入先于 initial_path，保证目录切换触发的
-    // 首个完成事件已经携带 nonce。
-    if let Some(plan) = &shell_integration {
-        eprintln!(
-            "[nocterm-ssh-bootstrap] 向可见终端注入 integration：shell={}（terminal={terminal_id}）",
-            plan.shell.as_str()
-        );
-        let _ = write_half
-            .data_bytes(super::bootstrap::integration_command(plan).into_bytes())
-            .await;
-    }
-
-    // 若配置了远程初始目录，开壳后立即切换，等价旧实现的 `cd` 行为。
-    if let Some(path) = initial_path {
-        let command = super::bootstrap::initial_directory_command(&path, detected_shell);
-        let _ = write_half.data_bytes(command.into_bytes()).await;
-    }
+    let mut activation_started = false;
 
     loop {
         // 已完成的 AI 通道只留下极短的 JoinHandle；持续对话不会因为历史执行次数
@@ -685,6 +707,27 @@ async fn run_session(
                 Some(_) => {}
             },
             command = command_rx.recv() => match command {
+                Some(TerminalCommand::Activate { completion_tx }) => {
+                    if activation_started {
+                        let _ = completion_tx.send(Err("SSH 终端已经激活".to_string()));
+                        continue;
+                    }
+                    activation_started = true;
+                    let result = activate_session(
+                        &write_half,
+                        shell_integration.as_ref(),
+                        initial_path.as_deref(),
+                        detected_shell,
+                        &terminal_id,
+                    )
+                    .await;
+                    if result.is_err()
+                        && let Some(plan) = shell_integration.as_ref()
+                    {
+                        cleanup_prepared_integration(&handle, plan).await;
+                    }
+                    let _ = completion_tx.send(result);
+                }
                 Some(TerminalCommand::Data(bytes)) => {
                     let _ = write_half.data_bytes(bytes).await;
                 }
@@ -713,10 +756,56 @@ async fn run_session(
     for task in execution_tasks {
         task.abort();
     }
+    // Host 在激活前关闭或崩溃时，上传阶段已经创建的临时 rc 仍需尽力清理。
+    if !activation_started && let Some(plan) = shell_integration.as_ref() {
+        cleanup_prepared_integration(&handle, plan).await;
+    }
     // 尽力礼貌关闭通道并断开连接，忽略此时已不可达的错误。
     let _ = write_half.close().await;
     let handle = handle.lock().await;
     let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
+}
+
+/// 控制面已经就绪后才写入 bootstrap，避免首个 PTY 回显抢在抑制器注册之前。
+/// integration 与 initial_path 合成同一逻辑行，使一次性抑制器覆盖整个激活批次。
+async fn activate_session(
+    write_half: &russh::ChannelWriteHalf<client::Msg>,
+    shell_integration: Option<&SshShellIntegrationPlan>,
+    initial_path: Option<&str>,
+    detected_shell: Option<SshShellKind>,
+    terminal_id: &str,
+) -> Result<(), String> {
+    if let Some(plan) = shell_integration {
+        eprintln!(
+            "[nocterm-ssh-bootstrap] 向可见终端注入 integration：shell={}（terminal={terminal_id}）",
+            plan.shell.as_str()
+        );
+        write_half
+            .data_bytes(super::bootstrap::activation_command(plan, initial_path).into_bytes())
+            .await
+            .map_err(|error| format!("写入 SSH shell integration 失败：{error}"))?;
+    } else if let Some(path) = initial_path {
+        write_half
+            .data_bytes(
+                super::bootstrap::initial_directory_command(path, detected_shell).into_bytes(),
+            )
+            .await
+            .map_err(|error| format!("切换 SSH 初始目录失败：{error}"))?;
+    }
+    Ok(())
+}
+
+/// PowerShell 不创建远端文件；POSIX 临时 rc 在激活未开始或写入失败时由独立
+/// channel 尽力清理，避免 arm-before-write 拆分生命周期后产生新的残留窗口。
+async fn cleanup_prepared_integration(
+    handle: &Arc<tokio::sync::Mutex<Handle<ClientHandler>>>,
+    plan: &SshShellIntegrationPlan,
+) {
+    if matches!(plan.shell, SshShellKind::PowerShell) {
+        return;
+    }
+    let handle = handle.lock().await;
+    super::bootstrap::cleanup_rc(&handle, &super::bootstrap::remote_rc_path(&plan.nonce)).await;
 }
 
 /// 在已认证 Handle 上执行一次远程命令。该 channel 没有 PTY，输出只回传给

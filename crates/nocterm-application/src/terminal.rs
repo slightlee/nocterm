@@ -38,6 +38,12 @@ impl TerminalService {
             .map_err(terminal_error)
     }
 
+    /// 会话激活与普通用户写入分离，确保 Host 可以先注册输出控制面，再允许
+    /// Infrastructure 向远端 PTY 写入 bootstrap 字节。
+    pub fn activate(&self, terminal_id: &str) -> Result<(), AppError> {
+        self.backend.activate(terminal_id).map_err(terminal_error)
+    }
+
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), AppError> {
         self.backend
             .resize(terminal_id, cols, rows)

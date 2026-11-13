@@ -2,13 +2,13 @@
 
 > 状态：演进评审与实现记录；现行产品契约见 §0.3，历史方案不代表已验收
 >
-> 文档版本：0.8
+> 文档版本：0.9
 >
 > 评审基线：`main@1dfdaf5`
 >
 > 首次编写：2026-10-29
 >
-> 最近更新：2026-11-03（产品契约同步，未新增真实环境验收）
+> 最近更新：2026-11-12（SSH bootstrap 时序收敛并退役每命令 Marker）
 >
 > 适用范围：AI Tool Gateway、本地终端、SSH 终端、AI 面板、审批、审计与测试体系
 
@@ -19,7 +19,7 @@
 1. **路线 2 的轻量形态**：结构化 AI 命令执行卡和权威执行生命周期；
 2. **路线 3**：本地与 SSH 终端的 shell integration、提示符就绪和可信完成检测；
 3. SSH AI 命令在受支持环境中写入当前可见 PTY，命令与输出对用户实时可见；
-4. nonce-bound OSC 已证明 Prompt Ready 时允许 Marker 辅助完成恢复；integration 不可用时保留独立 SSH exec channel 兜底；
+4. nonce-bound OSC 同时承担 SSH Prompt Ready 与命令完成证据；integration 不可用时保留独立 SSH exec channel 兜底；
 5. 审批、执行、可观测、审计和失败恢复都以同一个后端执行状态机为事实来源。
 
 本文保留决策与实现演进记录，不替代现行产品契约或验收记录。历史规划中关于默认值、用户入口和分阶段状态的内容，若与 §0.3 冲突，均由 §0.3 的当前结论替代；历史真实验收结果不因此改变。各阶段必须单独建立 Issue、分支和 Pull Request，遵循 `docs/development.md` 的 Issue 先行、验证记录和 Squash merge 规则。
@@ -61,6 +61,7 @@
 - SSH 默认可见优先，当前版本没有手动切换执行模式的入口；AI composer 的“终端可见”图标按钮及前端 API 包装已移除。
 - 后端保留 connection 级内存 opt-out 模型及 `ai_ssh_visible_get` / `ai_ssh_visible_set` Tauri commands；状态不持久化，重启后恢复默认可见优先，不作为当前用户入口。
 - 路由以 `commands/ai_tool_approval.rs` 为准：先验证四元绑定，失效时以 `AI_TOOL_TARGET_INVALID` 在 dispatch 前失败；绑定有效后，后端 opt-out 或 Prompt 不可用时回退 independent exec。Prompt 初检通过但原子预占失败时，若检测到 gate 已占用则以 `SSH_TERMINAL_BUSY` 失败，否则以 `SSH_PROMPT_CHANGED` 回退；不能声称 gate busy 一定回退。
+- SSH bootstrap 改为显式激活：`open()` 只准备 integration，Host 注册 nonce 与回显抑制器后才发送 `activate`，禁止 ready 后抢先写 PTY。SSH 每命令 Marker 包装器已经退役，新执行统一记录为 `ssh_visible_osc`；历史 ledger 中的 `ssh_visible_marker` 仅为兼容读取保留。
 - 执行卡依据权威 ledger 展示实际模式与降级原因；independent exec 不继承可见 Shell 的临时目录、环境变量或虚拟环境。已 dispatch 的命令不得通过回退重复执行。
 - 本节同步产品决策与源码事实，不代表真实 macOS/Windows 客户端、Provider 或远程 Shell 矩阵已通过验收；各阶段既有未验证记录继续有效。
 
@@ -819,6 +820,8 @@ Marker 只用于已取得该证据后的完成恢复，不参与 readiness 判�
 OSC 控制序列必须在 UTF-8 解码和 xterm 事件之前剥离，但 completion 事件需要进入控制面。
 
 ### 10.8 Marker 完成恢复
+
+> 现状（2026-11-12）：SSH 每命令 Marker 已退役，以下内容仅保留为历史设计记录，不能作为当前实现或验收依据。本地终端的 Marker 探针不受影响。
 
 Marker 只在以下前置条件全部满足时使用：
 
