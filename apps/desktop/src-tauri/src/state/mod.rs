@@ -8,7 +8,6 @@ pub(crate) use local_terminal::{local_completion_status, sanitize_local_command_
 #[cfg(test)]
 pub(crate) use osc633::Osc633Event;
 pub(crate) use osc633::Osc633Scanner;
-pub(crate) use ssh_terminal::INTEGRATION_ECHO_SUPPRESSION_WINDOW;
 pub use ssh_terminal::SshTerminalRegistry;
 
 use crate::commands::{
