@@ -60,7 +60,7 @@
 - 本地终端继续沿用原有可见 PTY 执行；此次入口调整不改变本地执行路径。
 - SSH 默认可见优先，当前版本没有手动切换执行模式的入口；AI composer 的“终端可见”图标按钮及前端 API 包装已移除。
 - 后端保留 connection 级内存 opt-out 模型及 `ai_ssh_visible_get` / `ai_ssh_visible_set` Tauri commands；状态不持久化，重启后恢复默认可见优先，不作为当前用户入口。
-- 路由以 `commands/ai_tool_approval.rs` 为准：先验证四元绑定，失效时以 `AI_TOOL_TARGET_INVALID` 在 dispatch 前失败；绑定有效后，后端 opt-out 或 Prompt 不可用时回退 independent exec。Prompt 初检通过但原子预占失败时，若检测到 gate 已占用则以 `SSH_TERMINAL_BUSY` 失败，否则以 `SSH_PROMPT_CHANGED` 回退；不能声称 gate busy 一定回退。
+- 路由以 `commands/ai_tool_approval.rs` 为准：dispatch 入口先做会话内重绑（connection ID 固定为授权对象，terminal ID/generation 跟随 workspace session 当前绑定，2026-11-15），跨连接或终端未恢复时仍以 `AI_TOOL_TARGET_INVALID` 在 dispatch 前失败；绑定有效后，后端 opt-out 或 Prompt 不可用时回退 independent exec。Prompt 初检通过但原子预占失败时，若检测到 gate 已占用则以 `SSH_TERMINAL_BUSY` 失败，否则以 `SSH_PROMPT_CHANGED` 回退；不能声称 gate busy 一定回退。
 - SSH bootstrap 采用 pty+exec spawn 预载（2026-11-15 修订，回归 §10.3 原始设计）：集成随远端 shell 启动加载，向可见 PTY 写入的字节数为零；`activate` 仅在降级路径（不支持的 shell 且配置了初始目录）敲入一条 `cd`。历史上一度采用的「敲入 source + 客户端回显抑制器」方案已连同抑制器整体删除。SSH 每命令 Marker 包装器已经退役，新执行统一记录为 `ssh_visible_osc`；历史 ledger 中的 `ssh_visible_marker` 仅为兼容读取保留。
 - 执行卡依据权威 ledger 展示实际模式与降级原因；independent exec 不继承可见 Shell 的临时目录、环境变量或虚拟环境。已 dispatch 的命令不得通过回退重复执行。
 - 本节同步产品决策与源码事实，不代表真实 macOS/Windows 客户端、Provider 或远程 Shell 矩阵已通过验收；各阶段既有未验证记录继续有效。

@@ -117,8 +117,10 @@ pub struct AiGatewayAccess {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AiTarget {
-    /// SSH 目标绑定任务发起时的精确终端：independent exec 沿用 connectionId，
-    /// 可见执行（Stage 4）必须重新校验 terminal + generation 仍然匹配。
+    /// SSH 目标的用户意图是"这个终端面板"：connection_id 固定为授权时的连接，
+    /// terminal_id/generation 表示绑定时刻的终端实例，并在每次 dispatch 时经
+    /// `refresh_target` 跟随 workspace session 的当前绑定（会话内重绑）；
+    /// dispatch 的 verify_binding 仍以注册表为权威，跨连接一律拒绝。
     Ssh {
         connection_id: i64,
         workspace_session_id: String,
@@ -174,6 +176,74 @@ impl AiGatewayState {
                     cancellation: Arc::clone(&entry.cancellation),
                 })
             })
+    }
+
+    /// 会话内重绑（机会性）：dispatch 时让绑定目标跟随 workspace session 的
+    /// 当前终端身份。
+    ///
+    /// AI 绑定的用户意图是"这个终端面板"（workspace session + 连接），而不是
+    /// 某一次底层连接实例；终端断开重连后 terminal_id/generation 都会变化，
+    /// 固定快照会让进行中的会话永久失效。规则：
+    /// - SSH：解析当前绑定，仅当 connection_id 与授权时一致才跟随更新——
+    ///   面板被切到其他连接属于未授权目标，保持旧值交由 verify_binding 拒绝；
+    /// - 本地：跟随当前 terminal_id；
+    /// - 解析失败（终端已关闭未重连、状态锁损坏）保持原值，由既有失败路径
+    ///   给出明确错误。本方法绝不产生新的失败语义。
+    pub fn refresh_target(
+        &self,
+        token: &str,
+        ssh_registry: &SshTerminalRegistry,
+        local_registry: &LocalTerminalRegistry,
+    ) {
+        let Some(current) = self.bindings.lock().ok().and_then(|bindings| {
+            bindings
+                .get(token)
+                .map(|entry| entry.binding.target.clone())
+        }) else {
+            return;
+        };
+        let refreshed = match &current {
+            AiTarget::Ssh {
+                connection_id,
+                workspace_session_id,
+                ..
+            } => {
+                match ssh_registry.resolve(workspace_session_id) {
+                    // 同连接重连：跟随新的终端身份。
+                    Ok(Some((terminal_id, generation, bound_connection)))
+                        if bound_connection == *connection_id =>
+                    {
+                        Some(AiTarget::Ssh {
+                            connection_id: *connection_id,
+                            workspace_session_id: workspace_session_id.clone(),
+                            terminal_id,
+                            terminal_generation: generation,
+                        })
+                    }
+                    // 跨连接或终端不存在：不跟随，维持旧快照。
+                    _ => None,
+                }
+            }
+            AiTarget::Local { session_id, .. } => {
+                local_registry
+                    .terminal_for(session_id)
+                    .map(|terminal_id| AiTarget::Local {
+                        session_id: session_id.clone(),
+                        terminal_id,
+                    })
+            }
+        };
+        if let Some(new_target) = refreshed
+            && new_target != current
+            && let Ok(mut bindings) = self.bindings.lock()
+            && let Some(entry) = bindings.get_mut(token)
+        {
+            eprintln!(
+                "[nocterm-ai-target] 会话内重绑：{:?} -> {:?}",
+                current, new_target
+            );
+            entry.binding.target = new_target;
+        }
     }
 
     /// 激活一个新 turn 前先撤销旧快照；持续 Provider 只能复用传输，不能复用授权。
@@ -510,7 +580,10 @@ impl AppState {
 mod tests {
     use std::{sync::atomic::Ordering, time::Duration};
 
-    use super::{AiApprovalDecision, AiCommandPolicy, AiGatewayBinding, AiGatewayState, AiTarget};
+    use super::{
+        AiApprovalDecision, AiCommandPolicy, AiGatewayBinding, AiGatewayState, AiTarget,
+        LocalTerminalRegistry, SshTerminalRegistry,
+    };
 
     fn ssh_binding() -> AiGatewayBinding {
         AiGatewayBinding {
@@ -687,6 +760,128 @@ mod tests {
                 terminal_id: "ssh-test".into(),
                 terminal_generation: 1,
             }
+        );
+    }
+
+    #[test]
+    fn refresh_target_follows_reconnection_within_the_same_connection() {
+        let gateway = AiGatewayState::default();
+        let ssh_registry = SshTerminalRegistry::default();
+        ssh_registry.bind("remote:7:test", "ssh-test", 1).unwrap();
+        gateway.bind("task-one".into(), ssh_binding()).unwrap();
+
+        // 模拟同连接重连：同一 workspace session 换新终端、generation 递增。
+        ssh_registry
+            .bind("remote:7:test", "ssh-reconnected", 1)
+            .unwrap();
+        gateway.refresh_target("task-one", &ssh_registry, &LocalTerminalRegistry::default());
+
+        let access = gateway
+            .access_for("task-one")
+            .expect("read binding")
+            .expect("binding exists");
+        assert_eq!(
+            access.binding.target,
+            AiTarget::Ssh {
+                connection_id: 1,
+                workspace_session_id: "remote:7:test".into(),
+                terminal_id: "ssh-reconnected".into(),
+                terminal_generation: 2,
+            },
+            "reconnect must be followed within the same connection"
+        );
+    }
+
+    #[test]
+    fn refresh_target_never_follows_a_cross_connection_rebind() {
+        let gateway = AiGatewayState::default();
+        let ssh_registry = SshTerminalRegistry::default();
+        ssh_registry.bind("remote:7:test", "ssh-test", 1).unwrap();
+        gateway.bind("task-one".into(), ssh_binding()).unwrap();
+
+        // 面板被切到另一条连接：审批授权的是连接 1，跨连接绝不跟随。
+        ssh_registry
+            .bind("remote:7:test", "ssh-other-connection", 8)
+            .unwrap();
+        gateway.refresh_target("task-one", &ssh_registry, &LocalTerminalRegistry::default());
+
+        let access = gateway
+            .access_for("task-one")
+            .expect("read binding")
+            .expect("binding exists");
+        assert_eq!(
+            access.binding.target,
+            AiTarget::Ssh {
+                connection_id: 1,
+                workspace_session_id: "remote:7:test".into(),
+                terminal_id: "ssh-test".into(),
+                terminal_generation: 1,
+            },
+            "cross-connection rebind must keep the authorized connection frozen"
+        );
+    }
+
+    #[test]
+    fn refresh_target_keeps_the_stale_binding_when_the_terminal_is_closed() {
+        let gateway = AiGatewayState::default();
+        // 注册表没有 remote:7:test 的绑定：终端已关闭且未重连。
+        gateway.bind("task-one".into(), ssh_binding()).unwrap();
+
+        gateway.refresh_target(
+            "task-one",
+            &SshTerminalRegistry::default(),
+            &LocalTerminalRegistry::default(),
+        );
+
+        let access = gateway
+            .access_for("task-one")
+            .expect("read binding")
+            .expect("binding exists");
+        assert_eq!(
+            access.binding.target,
+            AiTarget::Ssh {
+                connection_id: 1,
+                workspace_session_id: "remote:7:test".into(),
+                terminal_id: "ssh-test".into(),
+                terminal_generation: 1,
+            },
+            "closed terminal must keep the stale snapshot for the existing failure path"
+        );
+    }
+
+    #[test]
+    fn refresh_target_follows_a_reopened_local_terminal() {
+        let gateway = AiGatewayState::default();
+        let local_registry = LocalTerminalRegistry::default();
+        local_registry.bind("local:default".to_string(), "local-terminal-1".to_string());
+        gateway
+            .bind(
+                "task-one".into(),
+                AiGatewayBinding {
+                    target: AiTarget::Local {
+                        session_id: "local:default".into(),
+                        terminal_id: "local-terminal-1".into(),
+                    },
+                    ..ssh_binding()
+                },
+            )
+            .unwrap();
+
+        // 本地终端重开后绑定到新 terminal id。
+        local_registry.bind("local:default".to_string(), "local-terminal-2".to_string());
+        gateway.refresh_target("task-one", &SshTerminalRegistry::default(), &local_registry);
+
+        let access = gateway
+            .access_for("task-one")
+            .expect("read binding")
+            .expect("binding exists");
+        assert_eq!(
+            access.binding.target,
+            AiTarget::Local {
+                session_id: "local:default".into(),
+                terminal_id: "local-terminal-2".into(),
+            },
+            "local reopen must be followed the same way"
         );
     }
 

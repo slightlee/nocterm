@@ -1813,6 +1813,142 @@ mod tests {
         assert!(!harness.ssh_registry.input_gated("ssh-test"));
     }
 
+    /// 会话内重绑回归：SSH 终端断开重连（同连接、新 terminal_id/generation）后，
+    /// 进行中的 AI 会话在 dispatch 刷新绑定后必须继续可见执行，而不是被
+    /// AI_TOOL_TARGET_INVALID 永久拒绝；执行 ledger 也要记录实际使用的终端。
+    #[test]
+    fn dispatch_follows_ssh_reconnection_instead_of_failing_target_validation() {
+        let harness = Harness::new(None);
+        let binding = ssh_binding();
+        // 模拟同连接重连：同一 workspace session 换新终端、generation 递增。
+        harness
+            .ssh_registry
+            .bind("remote:7:test", "ssh-reconnected", 7)
+            .expect("reconnect to the same connection");
+        // 新终端自身的首条提示符事件置位 Prompt Ready（既有机制）。
+        harness
+            .ssh_registry
+            .register_integration("ssh-reconnected", "nonce-reconnected");
+        harness.ssh_registry.record_integration_event(
+            "ssh-reconnected",
+            &crate::state::Osc633Event::PromptStarted {
+                nonce: Some("nonce-reconnected".into()),
+            },
+        );
+
+        // dispatch 入口的机会性刷新：绑定跟随面板当前终端身份。
+        harness
+            .gateway
+            .bind("token-test".to_string(), binding.clone())
+            .unwrap();
+        harness.gateway.refresh_target(
+            "token-test",
+            &harness.ssh_registry,
+            &harness.local_registry,
+        );
+        let refreshed = harness
+            .gateway
+            .access_for("token-test")
+            .expect("read binding")
+            .expect("binding exists");
+        let access = AiGatewayAccess {
+            binding: refreshed.binding.clone(),
+            cancellation: Arc::new(AtomicBool::new(false)),
+        };
+        let (execution, mut tracker) = harness.execution(&refreshed.binding, "rebind-follow");
+
+        // 终端桩不可写导致执行最终失败，但路由必须已按新终端选定可见模式，
+        // 且不得出现目标校验失败。
+        let _ = execution.run(
+            &access,
+            &mut tracker,
+            nocterm_domain::ai_audit::AiAuditTool::SshExec,
+            "uptime",
+            AiAuditApproval::Approved,
+            Instant::now() + Duration::from_secs(5),
+            None,
+        );
+
+        assert_eq!(
+            tracker.record().mode,
+            nocterm_domain::ai_execution::AiExecutionMode::SshVisibleOsc,
+            "the ongoing session must keep using visible execution after reconnect"
+        );
+        assert_ne!(
+            tracker.record().error_code.as_deref(),
+            Some("AI_TOOL_TARGET_INVALID"),
+            "reconnection must not invalidate the ongoing session"
+        );
+        assert_eq!(
+            tracker.record().target,
+            nocterm_domain::ai_execution::AiExecutionTarget::Ssh {
+                workspace_session_id: "remote:7:test".into(),
+                terminal_id: "ssh-reconnected".into(),
+                terminal_generation: 2,
+                connection_id: 7,
+            },
+            "the execution ledger must record the terminal actually used"
+        );
+    }
+
+    /// 本地终端重开的对称回归：刷新后 dispatch 跟随新 terminal_id。
+    #[test]
+    fn dispatch_follows_a_reopened_local_terminal() {
+        let harness = Harness::new(None);
+        let binding = local_binding();
+        harness
+            .local_registry
+            .bind("local:one".to_string(), "local-1".to_string());
+
+        // 模拟本地终端重开：同一 session 换新 terminal id。
+        harness
+            .local_registry
+            .bind("local:one".to_string(), "local-2".to_string());
+        harness
+            .gateway
+            .bind("token-local".to_string(), binding.clone())
+            .unwrap();
+        harness.gateway.refresh_target(
+            "token-local",
+            &harness.ssh_registry,
+            &harness.local_registry,
+        );
+        let refreshed = harness
+            .gateway
+            .access_for("token-local")
+            .expect("read binding")
+            .expect("binding exists");
+        let access = AiGatewayAccess {
+            binding: refreshed.binding.clone(),
+            cancellation: Arc::new(AtomicBool::new(false)),
+        };
+        let (execution, mut tracker) = harness.execution(&refreshed.binding, "local-reopen");
+
+        let _ = execution.run(
+            &access,
+            &mut tracker,
+            nocterm_domain::ai_audit::AiAuditTool::LocalTerminalExec,
+            "uptime",
+            AiAuditApproval::Approved,
+            Instant::now() + Duration::from_secs(5),
+            None,
+        );
+
+        assert_ne!(
+            tracker.record().error_code.as_deref(),
+            Some("AI_TOOL_TARGET_INVALID"),
+            "local reopen must not invalidate the ongoing session"
+        );
+        assert_eq!(
+            tracker.record().target,
+            nocterm_domain::ai_execution::AiExecutionTarget::Local {
+                workspace_session_id: "local:one".into(),
+                terminal_id: "local-2".into(),
+            },
+            "the execution ledger must record the terminal actually used"
+        );
+    }
+
     #[test]
     fn explicitly_disabled_ssh_visible_route_records_independent_exec() {
         let harness = Harness::new(None);
