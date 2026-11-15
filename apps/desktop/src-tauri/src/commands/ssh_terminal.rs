@@ -1,8 +1,7 @@
-use std::{io::Read, thread, time::Instant};
+use std::{io::Read, thread};
 
 use nocterm_application::error::AppError;
 use nocterm_domain::connection::{AuthenticationMethod, ConnectionProfile};
-use nocterm_domain::terminal::SshShellKind;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
@@ -14,7 +13,7 @@ use crate::{
         error::ErrorResponse,
         ssh_terminal::{SshTerminalExit, SshTerminalOpenResponse, SshTerminalOutput},
     },
-    state::{AppState, INTEGRATION_ECHO_SUPPRESSION_WINDOW, Osc633Scanner},
+    state::{AppState, Osc633Scanner},
 };
 
 /// 用户输入被 AI 门控时返回的稳定错误码；前端据此提示"AI 命令执行中"。
@@ -167,30 +166,28 @@ pub fn ssh_terminal_open(
             }
         };
     // bootstrap 成功后注册 nonce；只有匹配 nonce 的事件才能作为 Prompt Ready 证据。
+    // 集成由 pty+exec spawn 预载（随 shell 启动加载），此处无需任何回显抑制。
     if let Some(plan) = &opened.shell_integration {
         state
             .ssh_terminals()
             .register_integration(&terminal_id, &plan.nonce);
-        // Marker 完成恢复依赖 POSIX `eval` 包装器语义，只有 bash/zsh 启用。
-        if matches!(plan.shell, SshShellKind::Bash | SshShellKind::Zsh) {
-            state.ssh_terminals().enable_marker_recovery(&terminal_id);
-        }
-        // integration 注入回显对用户是噪音：POSIX 匹配临时路径 + rm，
-        // PowerShell 匹配内存解码调用；只隐藏一次，不解析提示符文本。
-        // 抑制窗口有界：截止后注册表降级直通，钩子安装失败不会让终端假死。
-        let echo_token = nocterm_infrastructure::ssh::bootstrap::integration_echo_token(plan);
-        let required_fragment =
-            (!matches!(plan.shell, SshShellKind::PowerShell)).then_some("rm -f");
-        state.ssh_terminals().begin_integration_echo_suppression(
-            &terminal_id,
-            &echo_token,
-            required_fragment,
-            Instant::now() + INTEGRATION_ECHO_SUPPRESSION_WINDOW,
-        );
     } else if let Some(reason) = opened.integration_fallback_reason {
         state
             .ssh_terminals()
             .register_integration_unavailable(&terminal_id, reason);
+    }
+
+    // activate 对 spawn 预载路径是 no-op；仅降级路径（无 integration 且配置了
+    // 初始目录）会向可见 PTY 敲入一条 cd。保持调用以统一时序与错误归径。
+    if let Err(error) = terminal_service.activate(&terminal_id) {
+        let _ = terminal_service.close(&terminal_id);
+        state
+            .ssh_terminals()
+            .unbind(&workspace_session_id, &terminal_id);
+        if holds_password_lease {
+            session_passwords.release(connection_id);
+        }
+        return Err(ErrorResponse::from(error));
     }
     let mut reader = opened.reader;
     let reader_terminal_id = terminal_id.clone();
@@ -214,46 +211,27 @@ pub fn ssh_terminal_open(
                     break;
                 }
                 Ok(length) => {
-                    // 先剥离 shell integration 控制序列：它们不参与解码、过滤与 UI 转发。
+                    // 先剥离 shell integration 控制序列：它们不参与解码与 UI 转发。
                     let (stripped, events) = osc_scanner.feed(&buffer[..length]);
-                    let mut visible_data = String::new();
                     if !stripped.is_empty() {
                         let data = decoder.push(&stripped);
                         if !data.is_empty() {
                             // 同一网络块可能同时含最后一段输出和 CommandFinished；必须先
                             // 发布数据再推进完成状态，否则执行线程会先返回并丢掉尾部输出。
-                            visible_data =
-                                reader_registry.visible_output(&reader_terminal_id, &data);
+                            // 集成经 spawn 预载，输出流中不存在内部注入回显，直接转发。
                             reader_registry.publish(&reader_terminal_id, &data);
+                            let _ = app.emit(
+                                "ssh-terminal-output",
+                                SshTerminalOutput {
+                                    terminal_id: reader_terminal_id.clone(),
+                                    connection_id,
+                                    data,
+                                },
+                            );
                         }
                     }
                     for event in &events {
-                        let observation =
-                            reader_registry.record_integration_event(&reader_terminal_id, event);
-                        if observation.nonce_bound {
-                            visible_data.push_str(
-                                &reader_registry
-                                    .finish_integration_echo_on_osc(&reader_terminal_id),
-                            );
-                        }
-                        // nonce-bound A 与 D 都证明 Shell 已重新进入提示符阶段，均可
-                        // 结束 Marker fail-closed 状态；未 bootstrap 的 D 保留原有
-                        // Ctrl+C 中断恢复语义。
-                        if observation.nonce_bound || observation.command_finished {
-                            visible_data.push_str(
-                                &reader_registry.finish_marker_output_on_osc(&reader_terminal_id),
-                            );
-                        }
-                    }
-                    if !visible_data.is_empty() {
-                        let _ = app.emit(
-                            "ssh-terminal-output",
-                            SshTerminalOutput {
-                                terminal_id: reader_terminal_id.clone(),
-                                connection_id,
-                                data: visible_data,
-                            },
-                        );
+                        reader_registry.record_integration_event(&reader_terminal_id, event);
                     }
                 }
             }
