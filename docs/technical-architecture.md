@@ -321,9 +321,9 @@ SSH 默认可见优先；当前版本没有手动切换执行模式的入口，A
 
 可见优先只改变路由偏好：路由器先验证任务绑定的 workspace session、terminal ID、terminal generation 与 connection ID，绑定失效以 `AI_TOOL_TARGET_INVALID` 在 dispatch 前失败，不回退或换终端。绑定有效后，后端 opt-out 或 Prompt 未就绪会选择独立 exec；Prompt Ready 检查通过后若原子预占失败，检测到 gate 已占用则以 `SSH_TERMINAL_BUSY` 在 dispatch 前失败，否则以 `SSH_PROMPT_CHANGED` 回退独立 exec。因此 gate busy 不保证回退，分支顺序以 `commands/ai_tool_approval.rs` 为准。成功预占后才向可见 SSH PTY 写入命令。权威 execution ledger 记录实际模式与稳定降级原因，执行卡据此展示，不从用户开关或 Provider 叙述推断。独立 exec 不写入可见终端，也不继承可见 Shell 临时 `cd`、环境变量或虚拟环境。通用命令和系统信息、进程、端口、日志、Docker 等结构化工具共享该路由，不存在绕过可见策略的第二套执行编排。
 
-远端 bash/zsh/fish 通过 0600 临时脚本准备 nonce-bound OSC，Windows OpenSSH PowerShell 通过内存脚本准备且不创建远端文件。`open()` 只完成探针与脚本准备，不得向可见 PTY 注入；Host 必须先注册 terminal generation、expected nonce 和 bootstrap 回显抑制器，再通过内部 `activate` 指令写入 integration 与初始目录，建立严格的 arm-before-write 顺序。激活写入失败会关闭本次终端并清理临时资源，不得静默返回可用。
+SSH 集成采用 **pty+exec spawn 预载**（回归演进方案 §10.3 原始设计）：探针与临时文件上传全部走独立 exec channel；支持的 shell 用 `request_pty + exec` 启动带预载的交互 shell（bash `--rcfile`、zsh `ZDOTDIR`、fish `-C`、PowerShell `-EncodedCommand`），集成随 shell 启动加载，向可见 PTY 写入的字节数为零。登录链由预载内容复刻（bash 在 rc 内按登录顺序 source /etc/profile 与首个命中的用户登录文件；zsh 经 ZDOTDIR 目录链式加载四件套后恢复原值；fish 走 `-C` 在用户配置之后加载），不修改用户持久配置。sshd 只对 shell 请求打印 MOTD 与 Last login，exec 路径在 POSIX rc 内补偿显示；普通用户因 lastlog 权限无法补齐 Last login 行，是已确认接受的行为差异。临时脚本 0600、随机路径、读取后自删除，会话异常关闭时由独立 channel 兜底清理；spawn 被远端拒绝（ForceCommand、受限 shell 等）时降级普通 `request_shell` 并记录 fallback reason，不得让 `open()` 失败。
 
-bootstrap 回显抑制具有 128 KiB 缓冲上限与 5 秒优先窗口，并由首个可信 nonce-bound OSC 提前结束。POSIX source/rm 只有在完整逻辑行到达后才能关闭抑制器；超限或超时后只按本会话随机路径加固定命令结构精确剔除，可信 OSC 也不得原样交还含精确锚点的未终结尾部。PowerShell 使用每会话 nonce 与 `FromBase64String` 双重约束，不能因通用 API 名误吞用户命令。
+**架构不变量（评审基线）**：可见 PTY 的输入只允许两类字节——用户键盘输入、已授权 AI 可见执行的命令本体。一切机制性内容（bootstrap、初始目录切换、marker）必须走 spawn 预载或独立 exec channel，禁止进入 PTY 输入路径；任何新增的 PTY 写入调用在评审中按此规则审查。历史上"敲入 source + 客户端文本匹配抑制回显"的方案因终端折行、ANSI 重绘与跨块到达必然泄漏，已随其抑制器整体删除。内部 `activate` 仅在降级路径（不支持的 shell 且配置了初始目录）向可见 PTY 敲入一条 `cd`；预载路径下它是 no-op，激活失败会关闭本次终端，不得静默返回可用。
 
 SSH 可见执行直接把已批准的原命令写入 PTY，只以 nonce-bound OSC D/A 判断完成与 Prompt Ready，不再生成每命令 Marker 包装器或解析包装器回显。OSC 缺失时取消或超时只发送 Ctrl+C；取得可信完成信号前保持 gate，不猜测成功或恢复 Prompt Ready，后续请求按既有路由降级 independent exec。
 

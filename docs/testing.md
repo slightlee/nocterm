@@ -81,6 +81,13 @@ git diff --cached --check
 9. 大量 UTF-8 中文输出不出现 `�`，两个相同连接标签不串线；
 10. 在 SSH 会话和传输仍运行时退出应用，确认 task、连接和临时资源释放。
 11. 在已连接的 SSH 终端选中输出后右键，确认只复制选区；清除选区后右键，确认剪贴板内容只粘贴一次。
+12. spawn 预载真机清单（2026-11-15 起，集成由 pty+exec 随 shell 启动加载，不向可见 PTY 敲入机制性命令）：
+    - 连接后终端不含 `source`/`rm -f`/随机 `/tmp/nocterm-ssh-*` 路径等注入回显（含窗口窄、长提示符折行场景）；
+    - 登录信息补偿：动态/静态 MOTD 正常显示；root 或可读 lastlog 的账号显示 Last login 行（普通用户该行缺失为已确认接受差异）；
+    - `who`/`last`/`lastlog` 对本会话照常记录；`echo $PATH`、用户别名与提示符与原生 `ssh` 登录一致；
+    - 初始目录、tmux/vim/嵌套 shell、Ctrl+C/Ctrl+Z、resize、远端 `exit` 全部正常；
+    - AI 可见执行：Prompt Ready 正常置位，命令与退出码可见，无注入噪音；
+    - spawn 被拒（ForceCommand 环境）时降级普通登录 shell，AI 命令走独立 exec，无报错中断。
 
 macOS 和 Windows 必须分别测试；一种认证方式通过不能替代其他认证方式。
 

@@ -61,7 +61,7 @@
 - SSH 默认可见优先，当前版本没有手动切换执行模式的入口；AI composer 的“终端可见”图标按钮及前端 API 包装已移除。
 - 后端保留 connection 级内存 opt-out 模型及 `ai_ssh_visible_get` / `ai_ssh_visible_set` Tauri commands；状态不持久化，重启后恢复默认可见优先，不作为当前用户入口。
 - 路由以 `commands/ai_tool_approval.rs` 为准：先验证四元绑定，失效时以 `AI_TOOL_TARGET_INVALID` 在 dispatch 前失败；绑定有效后，后端 opt-out 或 Prompt 不可用时回退 independent exec。Prompt 初检通过但原子预占失败时，若检测到 gate 已占用则以 `SSH_TERMINAL_BUSY` 失败，否则以 `SSH_PROMPT_CHANGED` 回退；不能声称 gate busy 一定回退。
-- SSH bootstrap 改为显式激活：`open()` 只准备 integration，Host 注册 nonce 与回显抑制器后才发送 `activate`，禁止 ready 后抢先写 PTY。SSH 每命令 Marker 包装器已经退役，新执行统一记录为 `ssh_visible_osc`；历史 ledger 中的 `ssh_visible_marker` 仅为兼容读取保留。
+- SSH bootstrap 采用 pty+exec spawn 预载（2026-11-15 修订，回归 §10.3 原始设计）：集成随远端 shell 启动加载，向可见 PTY 写入的字节数为零；`activate` 仅在降级路径（不支持的 shell 且配置了初始目录）敲入一条 `cd`。历史上一度采用的「敲入 source + 客户端回显抑制器」方案已连同抑制器整体删除。SSH 每命令 Marker 包装器已经退役，新执行统一记录为 `ssh_visible_osc`；历史 ledger 中的 `ssh_visible_marker` 仅为兼容读取保留。
 - 执行卡依据权威 ledger 展示实际模式与降级原因；independent exec 不继承可见 Shell 的临时目录、环境变量或虚拟环境。已 dispatch 的命令不得通过回退重复执行。
 - 本节同步产品决策与源码事实，不代表真实 macOS/Windows 客户端、Provider 或远程 Shell 矩阵已通过验收；各阶段既有未验证记录继续有效。
 
@@ -723,22 +723,23 @@ IntegrationBootstrapping
 不能因为 SSH channel 接受 `request_shell` 或 wrapper `exec` 就标记 Prompt Ready。必须观察首个有效的、
 当前 nonce 对应的 Prompt 事件，或其他正面就绪证据。
 
-### 10.3 启动时注入方案
+### 10.3 启动时注入方案（2026-11-15 修订：spawn 预载终态）
 
-目标是不修改用户持久配置。可行流程：
+目标是不修改用户持久配置，且**不向可见 PTY 写入任何机制性字节**（「敲入 source + 客户端回显抑制器」方案已删除——终端折行、ANSI 重绘与跨块到达使其不可靠）。终态流程：
 
 1. 认证完成后，通过短生命周期独立 channel 探测登录 shell；
-2. 受支持 shell 使用 `request_pty + exec bootstrap` 启动交互 shell；
-3. 为当前 terminal generation 生成随机 nonce；
-4. 如 shell 需要临时 rc，使用随机路径、`umask 077` 和最小权限；
-5. 临时 rc 先加载用户原配置，再以不覆盖用户 hook 的方式追加 Nocterm integration；
-6. integration 读取后立即自删除临时文件；
-7. 启动超时、权限不足、ForceCommand 或 shell 不兼容时关闭尝试 channel；
-8. 重新打开普通 `request_shell`，记录 capability 和 fallback reason；
+2. 为当前 terminal generation 生成随机 nonce；
+3. 受支持 shell 构造 spawn 预载计划并上传临时文件（随机路径、`umask 077`、最小权限）：bash 单文件 rc、zsh ZDOTDIR 目录三件套、fish 单文件 rc；PowerShell 无临时文件，脚本整体 UTF-16LE+Base64 编码进启动命令；
+4. `request_pty + exec` 启动交互 shell：bash `--rcfile`、zsh `ZDOTDIR`、fish `-C 'source'`、PowerShell `-EncodedCommand`；
+5. 登录语义由预载内容复刻：bash rc 按登录顺序 source /etc/profile 与首个命中的用户登录文件；zsh 目录链式加载用户四件套并恢复 ZDOTDIR；fish 经 `-C` 在用户配置之后加载钩子；钩子一律在用户配置之后安装；
+6. 登录显示补偿：POSIX rc 内 cat 动态/静态 motd 并在 lastlog 可读时补 Last login 行（sshd 仅对 shell 请求打印两者）；已确认接受的行为差异——普通用户缺 Last login 行（lastlog 权限 root:utmp 0664）、`shopt login_shell` 为 OFF、退出显示 "exit" 而非 "logout"；
+7. integration 读取后自删除临时文件；启动失败、上传中断或会话异常关闭时由独立 channel 兜底清理；
+8. spawn 被远端拒绝（ForceCommand、受限 shell、无应答）时关闭尝试通道、清理已上传文件、重新打开普通 `request_shell`，记录 capability 和 fallback reason（`spawn_unavailable` 等）；
 9. 断连和应用退出时清理可识别的临时资源；
-10. 任何路径都不得把凭据、token、命令或完整环境写入临时脚本。
+10. 任何路径都不得把凭据、token、命令或完整环境写入临时脚本；
+11. 架构不变量：可见 PTY 输入只允许用户键盘字节与已授权可见执行命令本体。
 
-`set_env` 受 sshd `AcceptEnv` 影响，不应成为唯一传递机制。
+`set_env` 受 sshd `AcceptEnv` 影响，不应成为唯一传递机制。实测基线（Ubuntu 22.04 + OpenSSH 8.9，2026-11-15）：spawn 预载后 PATH 与真实登录逐字符一致，`who`/`last`/`lastlog` 对 pty+exec 会话照常记录；CentOS/Aliyun Linux 与 Windows 真机验收见 §16.4。
 
 ### 10.4 nonce 的安全语义
 
