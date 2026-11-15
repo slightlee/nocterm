@@ -16,7 +16,7 @@ use tauri::AppHandle;
 
 use crate::{
     commands::ai_tool_gateway::GatewayServices,
-    state::{AiGatewayState, AppState},
+    state::{AiGatewayState, AppState, LocalTerminalRegistry, SshTerminalRegistry},
 };
 
 use super::{
@@ -98,6 +98,9 @@ fn handle_gateway(mut stream: TcpStream, dispatcher: Arc<McpRequestDispatcher>) 
 pub struct McpRequestDispatcher {
     gateway: Arc<AiGatewayState>,
     services: GatewayServices,
+    /// 会话内重绑需要解析终端注册表的当前绑定（见 `AiGatewayState::refresh_target`）。
+    ssh_terminals: Arc<SshTerminalRegistry>,
+    local_terminals: Arc<LocalTerminalRegistry>,
 }
 
 fn normalize_request_id(id: &Value) -> Result<String, &'static str> {
@@ -117,12 +120,19 @@ impl McpRequestDispatcher {
         Self {
             gateway: Arc::clone(state.ai_gateway()),
             services: GatewayServices::new(app, state),
+            ssh_terminals: Arc::clone(state.ssh_terminals()),
+            local_terminals: Arc::clone(state.local_terminals()),
         }
     }
 
     /// 返回完整 MCP JSON-RPC 响应；notification 没有响应，调用方必须只转发副作用。
     pub(crate) fn dispatch(&self, token: &str, request: &Value) -> Option<Value> {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
+        // 会话内重绑先于授权快照：终端断开重连后，本次调用直接跟随面板的当前
+        // 终端身份，进行中的 AI 会话不再因旧 terminal_id/generation 快照失效。
+        // 机会性刷新（不可跟随时不改动），授权与校验语义由后续流程保持不变。
+        self.gateway
+            .refresh_target(token, &self.ssh_terminals, &self.local_terminals);
         let access = match self.gateway.access_for(token) {
             Ok(Some(access)) => access,
             Ok(None) => {
