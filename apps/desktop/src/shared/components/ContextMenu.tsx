@@ -12,6 +12,8 @@ import styles from './ContextMenu.module.css';
 
 export interface ContextMenuItem {
   label: string;
+  /** 禁用操作也需解释原因；使用原生 title，不改变菜单布局或可访问名称。 */
+  title?: string;
   icon?: ReactNode;
   danger?: boolean;
   disabled?: boolean;
@@ -92,6 +94,7 @@ export function ContextMenu({ items, children, compact = false }: ContextMenuPro
                     aria-label={item.label}
                     className={`${styles.item} ${item.danger ? styles.danger : ''}`}
                     disabled={item.disabled}
+                    title={item.title}
                     key={item.label}
                     onClick={() => {
                       setPosition(null);

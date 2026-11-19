@@ -283,6 +283,42 @@
   color: var(--accent-blue);
 }
 
+/* 编辑标签复用文件面板的类型图标；外层容器只约束尺寸，
+   图标的描边与类型配色由 SFTP 面板的样式类自身保证。 */
+.editorSourceBadge {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.editorSourceBadge svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 未保存沿用全应用警告语言（橙），避免与会话状态点（绿/红）和选中蓝混淆。 */
+.editorDirtyDot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--accent-orange);
+  border-radius: 50%;
+}
+
+/* 保存中用轻量旋转环替代 dirty 点；完成后按最新内容恢复 dirty 或清除。 */
+.editorSavingIndicator {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border: 1.5px solid var(--term-border);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: terminal-spin 0.8s linear infinite;
+}
+
 .tabSelect {
   display: flex;
   min-width: 0;

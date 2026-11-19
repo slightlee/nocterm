@@ -1,5 +1,6 @@
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { ContextMenu, type ContextMenuItem } from '../../../shared/components/ContextMenu';
+import { getFileEditBlockReason } from '../model/file-edit-policy';
 import type {
   CreateEditState,
   FileKind,
@@ -13,7 +14,8 @@ import styles from './SFTPView.module.css';
 
 type SftpMenuItem = ContextMenuItem | 'separator';
 
-function FileIcon({ kind }: { kind: FileKind }) {
+/** 文件类型图标：文件面板与顶部编辑标签共用，描边与类型配色由自身样式类保证。 */
+export function FileIcon({ kind }: { kind: FileKind }) {
   const iconClassName = `${styles.fileIcon} ${styles[`fileIcon-${kind}`]}`;
 
   if (kind === 'parent') {
@@ -59,7 +61,7 @@ function RefreshIcon() {
 function MenuIcon({
   name,
 }: {
-  name: 'upload' | 'download' | 'copy' | 'enter' | 'delete' | 'rename' | 'folder';
+  name: 'upload' | 'download' | 'copy' | 'enter' | 'delete' | 'rename' | 'folder' | 'edit';
 }) {
   const icons = {
     upload: (
@@ -108,6 +110,8 @@ function MenuIcon({
         <path d="M9.5 13.5h5" />
       </>
     ),
+    // 编辑与重命名的铅笔图标区分：编辑不带底部横线，为纯铅笔轮廓。
+    edit: <path d="M14.5 4.5 19.5 9.5 10 19H5v-5z" />,
   };
 
   return (
@@ -201,6 +205,10 @@ interface FilePaneProps {
   onSelectAll: () => void;
   onClearSelection: () => void;
   onOpenDir: (path: string) => void;
+  /** 本地和远程均可提供；缺省时文件行无编辑行为。 */
+  onEditFile?: (row: FileRow) => void;
+  /** 已知不支持的文件双击时只提示原因，不打开标签或发出读取请求。 */
+  onEditBlocked?: (reason: string) => void;
   onOpenParent: () => void;
   onRefresh: () => void;
   onSort: (key: SortKey) => void;
@@ -263,6 +271,8 @@ function FilePane({
   onSelectAll,
   onClearSelection,
   onOpenDir,
+  onEditFile,
+  onEditBlocked,
   onOpenParent,
   onRefresh,
   onSort,
@@ -283,8 +293,18 @@ function FilePane({
   const selectedRows = rows.filter((row) => selectedNames.has(row.name));
   const actionRowsFor = (row: FileRow) =>
     selectedNames.has(row.name) && selectedRows.length > 0 ? selectedRows : [row];
+  const editFile = (row: FileRow) => {
+    if (!onEditFile) return;
+    const reason = getFileEditBlockReason(row);
+    if (reason) {
+      onEditBlocked?.(reason);
+      return;
+    }
+    onEditFile(row);
+  };
   const buildRowMenuItems = (row: FileRow): SftpMenuItem[] => {
     const actionRows = actionRowsFor(row);
+    const editBlockReason = getFileEditBlockReason(row);
     const items: Array<SftpMenuItem | null> = [
       showEnterAction && row.isDir
         ? {
@@ -293,6 +313,16 @@ function FilePane({
             onSelect: () => {
               if (row.path) onOpenDir(row.path);
             },
+          }
+        : null,
+      // 右键、双击与悬停共用预判；未知类型仍交给后端按实际内容判定。
+      onEditFile && !row.isDir
+        ? {
+            label: '编辑',
+            title: editBlockReason ?? undefined,
+            icon: <MenuIcon name="edit" />,
+            disabled: editBlockReason !== null,
+            onSelect: () => editFile(row),
           }
         : null,
       {
@@ -462,8 +492,17 @@ function FilePane({
                     }}
                     onDoubleClick={() => {
                       if (row.isDir && row.path) onOpenDir(row.path);
+                      else if (!row.isDir) editFile(row);
                     }}
-                    title={row.isDir ? openTitle : row.name}
+                    // 列表只解释已知限制，不能通过逐文件读取影响目录加载。
+                    title={
+                      row.isDir
+                        ? openTitle
+                        : onEditFile
+                          ? (getFileEditBlockReason(row) ??
+                            (scope === 'local' ? '双击编辑本地文件' : '双击编辑远程文件'))
+                          : row.name
+                    }
                   >
                     <span className={styles.nameCell}>
                       <FileIcon kind={row.kind} />
@@ -506,9 +545,10 @@ function FilePane({
 
 interface LocalFilePaneProps extends FilePaneProps {
   onUpload: (rows: FileRow[]) => void;
+  onEditFile?: (row: FileRow) => void;
 }
 
-export function LocalFilePane({ onUpload, ...props }: LocalFilePaneProps) {
+export function LocalFilePane({ onUpload, onEditFile, ...props }: LocalFilePaneProps) {
   return (
     <FilePane
       {...props}
@@ -522,15 +562,17 @@ export function LocalFilePane({ onUpload, ...props }: LocalFilePaneProps) {
       transferSelectedLabel={(count) => `上传选中 ${count} 项`}
       transferIcon="upload"
       onTransfer={onUpload}
+      onEditFile={onEditFile}
     />
   );
 }
 
 interface RemoteFilePaneProps extends FilePaneProps {
   onDownload: (rows: FileRow[]) => void;
+  onEditFile?: (row: FileRow) => void;
 }
 
-export function RemoteFilePane({ onDownload, ...props }: RemoteFilePaneProps) {
+export function RemoteFilePane({ onDownload, onEditFile, ...props }: RemoteFilePaneProps) {
   return (
     <FilePane
       {...props}
@@ -545,6 +587,7 @@ export function RemoteFilePane({ onDownload, ...props }: RemoteFilePaneProps) {
       transferIcon="download"
       showEnterAction
       onTransfer={onDownload}
+      onEditFile={onEditFile}
     />
   );
 }

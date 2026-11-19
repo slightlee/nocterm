@@ -21,6 +21,7 @@ mod ai_validation;
 pub mod codex_app_server;
 pub mod connection;
 pub mod credential;
+pub mod file_editor;
 pub mod grok_acp_server;
 pub mod health;
 pub mod local_terminal;

@@ -81,6 +81,15 @@
   /* 实心强调色按钮上的文字（两主题同为白） */
   --ds-on-accent: #fff;
 
+  /* 编辑器语法色：浅色主题使用较深色值，保证小字号文本的可读性。 */
+  --ds-editor-comment: #667085;
+  --ds-editor-keyword: #7137b3;
+  --ds-editor-string: #216c46;
+  --ds-editor-number: #9a4d0f;
+  --ds-editor-property: #155e91;
+  --ds-editor-function: #344ea0;
+  --ds-editor-type: #176b70;
+
   /* ---- Background ---- */
   --ds-bg-1: #fff;
   --ds-bg-2: #fafafb;
@@ -910,6 +919,15 @@
   --ds-text-2: #8b949e;
   --ds-text-3: #6e7681;
   --ds-on-accent: #fff;
+
+  /* 深色主题使用柔和亮色，注释保持可读，避免过低对比度。 */
+  --ds-editor-comment: #919ba9;
+  --ds-editor-keyword: #c4a0e8;
+  --ds-editor-string: #99c89d;
+  --ds-editor-number: #dfb482;
+  --ds-editor-property: #8fbde0;
+  --ds-editor-function: #b1baf0;
+  --ds-editor-type: #88c9c5;
 
   /* Background（深色表面请用这组，不要用 gray-800+） */
   --ds-bg-1: #0d1117;

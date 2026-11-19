@@ -33,18 +33,27 @@ use std::{
 
 use nocterm_domain::connection::ConnectionProfile;
 use russh_sftp::client::SftpSession;
-use tokio::runtime::Runtime;
+use tokio::{
+    runtime::Runtime,
+    time::{Duration, timeout},
+};
 
 use error::map_sftp_error;
 use path::join_remote;
 use session::{SessionPool, connect_params, ensure_session, evict_session};
-use transfer::{do_download, do_upload};
+use transfer::{
+    RemoteCommitExpectation, do_download, do_read_remote_file, do_save_file, do_upload,
+};
 
 /// 单次读写的块大小。取 russh-sftp 默认 `max_packet_len`（256 KiB）留出协议头后的
 /// 安全值：下载路径在库内是**严格串行**的（同一时刻只有一个 SSH_FXP_READ 在途），
 /// 吞吐上限约为"块大小 ÷ RTT"，64 KiB 在 30 ms 链路上只有 ~2 MB/s，加大块能直接翻倍。
 /// 不取满 256 KiB 是因为 SFTP 数据包头与 SSH 通道窗口都要占额度，贴边容易被对端拒收。
 pub(super) const TRANSFER_CHUNK_BYTES: usize = 128 * 1024;
+
+/// 目录列举由多个 READDIR 请求串行组成；单请求 60 秒不能限制总时长，
+/// 因此对一次完整 listing 再加 45 秒总 deadline，避免 UI 无限 loading。
+const DIRECTORY_LISTING_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// 远程目录项：字段与命令层 `RemoteFileEntry` 对齐，避免跨层再做结构转换。
 #[derive(Debug, Clone)]
@@ -60,6 +69,31 @@ pub struct SftpEntry {
 pub struct SftpListing {
     pub path: String,
     pub entries: Vec<SftpEntry>,
+}
+
+/// 远程文件 stat 快照：size 与 mtime 均可能缺失（取决于服务端），字段语义与
+/// 目录条目一致。编辑功能以此为冲突校验基线——保存前重新 stat 并逐字段比对。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SftpFileStat {
+    pub size: Option<u64>,
+    pub modified_at: Option<u64>,
+}
+
+/// 编辑保存的预期快照：force 只跳过 size/mtime 冲突，类型与符号链接仍校验。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SftpSaveExpectation {
+    pub size: Option<u64>,
+    pub modified_at: Option<u64>,
+    pub force: bool,
+}
+
+/// 远程文件受限读取结果：`bytes` 为文件内容（长度受调用方上限约束），
+/// stat 字段取自读取前的同一次 stat，保证冲突基线与内容出自同一快照。
+#[derive(Debug, Clone)]
+pub struct RemoteFileRead {
+    pub bytes: Vec<u8>,
+    pub size: Option<u64>,
+    pub modified_at: Option<u64>,
 }
 
 /// SFTP 会话管理器：统一持有运行时与会话池，向命令层暴露同步操作接口。
@@ -127,6 +161,45 @@ impl SftpManager {
         })
     }
 
+    /// 对需要总时限的操作，把建连、子系统初始化和业务请求放在同一 deadline 内。
+    /// 超时会取消异步任务并剔除可能卡在半初始化状态的会话，避免后续请求复用坏句柄。
+    fn run_op_with_timeout<T, F, Fut>(
+        &self,
+        connection_id: i64,
+        params: session::ConnectParams,
+        total_timeout: Duration,
+        timeout_message: &'static str,
+        op: F,
+    ) -> Result<T, SftpError>
+    where
+        F: FnOnce(Arc<session::SftpConnection>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, SftpError>> + Send,
+        T: Send + 'static,
+    {
+        let sessions = self.sessions.clone();
+        self.run(async move {
+            let operation = async {
+                let connection = ensure_session(&sessions, connection_id, params).await?;
+                match op(connection).await {
+                    Ok(value) => Ok(value),
+                    Err(error) => {
+                        if error.evict {
+                            evict_session(&sessions, connection_id);
+                        }
+                        Err(error)
+                    }
+                }
+            };
+            match timeout(total_timeout, operation).await {
+                Ok(result) => result,
+                Err(_) => {
+                    evict_session(&sessions, connection_id);
+                    Err(SftpError::timed_out(timeout_message))
+                }
+            }
+        })
+    }
+
     /// 列举远程目录：返回服务端规范化后的绝对路径与排序前的原始条目集合。
     pub fn list_dir(
         &self,
@@ -137,9 +210,13 @@ impl SftpManager {
     ) -> Result<SftpListing, SftpError> {
         let params = connect_params(profile, password, private_key)?;
         let path = path.to_string();
-        self.run_op(profile.id, params, move |connection| async move {
-            do_list_dir(connection.as_ref(), &path).await
-        })
+        self.run_op_with_timeout(
+            profile.id,
+            params,
+            DIRECTORY_LISTING_TIMEOUT,
+            "远程目录读取或连接超过 45 秒，请检查网络、服务器状态或目录规模后重试",
+            move |connection| async move { do_list_dir(connection.as_ref(), &path).await },
+        )
     }
 
     /// 判断远程路径是否存在；跟随符号链接，父目录不可访问时以错误形式上抛。
@@ -158,6 +235,95 @@ impl SftpManager {
                 .try_exists(path)
                 .await
                 .map_err(map_sftp_error)
+        })
+    }
+
+    /// 读取远程文件 stat（不跟随最终符号链接）：供编辑保存前冲突校验使用。
+    /// 在线编辑拒绝符号链接，避免保存时把链接本身替换成普通文件。
+    pub fn stat_remote_file(
+        &self,
+        profile: &ConnectionProfile,
+        password: Option<&str>,
+        private_key: Option<&str>,
+        path: &str,
+    ) -> Result<SftpFileStat, SftpError> {
+        let params = connect_params(profile, password, private_key)?;
+        let path = path.to_string();
+        self.run_op(profile.id, params, move |connection| async move {
+            let metadata = connection
+                .sftp
+                .symlink_metadata(path)
+                .await
+                .map_err(map_sftp_error)?;
+            if metadata.is_symlink() {
+                return Err(SftpError::new(
+                    "fileSymlink",
+                    "目标是符号链接，请直接打开链接指向的真实文件",
+                ));
+            }
+            if metadata.is_dir() {
+                return Err(SftpError::new(
+                    "invalidPath",
+                    "目标是目录，无法作为文本编辑",
+                ));
+            }
+            Ok(SftpFileStat {
+                size: metadata.size,
+                modified_at: metadata.mtime.map(u64::from),
+            })
+        })
+    }
+
+    /// 受限读取远程文件内容（拒绝最终符号链接）：超过 `max_bytes` 直接拒绝而不载入
+    /// 内存，供在线编辑器打开文件；stat 快照与内容出自同一次操作。
+    pub fn read_remote_file(
+        &self,
+        profile: &ConnectionProfile,
+        password: Option<&str>,
+        private_key: Option<&str>,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<RemoteFileRead, SftpError> {
+        let params = connect_params(profile, password, private_key)?;
+        let path = path.to_string();
+        self.run_op(profile.id, params, move |connection| async move {
+            do_read_remote_file(connection.as_ref(), path, max_bytes).await
+        })
+    }
+
+    /// 编辑器保存单文件：完整写入远端临时文件后再比对预期快照并原子提交，
+    /// 把上传期间的外部修改也纳入冲突保护。
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_text(
+        &self,
+        profile: &ConnectionProfile,
+        password: Option<&str>,
+        private_key: Option<&str>,
+        remote_path: &str,
+        content: &[u8],
+        expectation: SftpSaveExpectation,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<SftpFileStat, SftpError> {
+        let params = connect_params(profile, password, private_key)?;
+        let remote_path = remote_path.to_string();
+        let content = content.to_vec();
+        self.run_op(profile.id, params, move |connection| async move {
+            let committed = do_save_file(
+                connection.as_ref(),
+                remote_path,
+                content,
+                RemoteCommitExpectation {
+                    size: expectation.size,
+                    modified_at: expectation.modified_at,
+                    force: expectation.force,
+                },
+                cancel,
+            )
+            .await?;
+            Ok(SftpFileStat {
+                size: committed.size,
+                modified_at: committed.modified_at,
+            })
         })
     }
 

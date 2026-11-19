@@ -6,18 +6,27 @@ import type {
 } from '../api/sftp-client';
 import type { FileKind, FileRow, SortKey, SortState } from '../types/sftp-types';
 
+/** 按扩展名归类文件类型：文件面板与顶部编辑标签共用同一分类规则。 */
+export function getFileKindForName(name: string): FileKind {
+  if (/\.(tar|gz|zip|rar|7z)$/i.test(name)) return 'archive';
+  if (name === '.env' || name.startsWith('.env.') || /\.env$/i.test(name)) return 'env';
+  if (/\.(log|out)$/i.test(name)) return 'log';
+  if (/\.(sh|ts|tsx|js|jsx|json|rs|py|go|java|yml|yaml|toml|conf|ini|xml|md)$/i.test(name))
+    return 'code';
+  return 'file';
+}
+
 function getFileKind(entry: LocalFileEntry | RemoteFileEntry): FileKind {
   if (entry.isDir) return 'folder';
-  if (/\.(tar|gz|zip|rar|7z)$/i.test(entry.name)) return 'archive';
-  if (entry.name === '.env' || /\.env$/i.test(entry.name)) return 'env';
-  if (/\.(sh|ts|tsx|js|jsx|json|rs|py|go|java)$/i.test(entry.name)) return 'code';
-  if (/\.log$/i.test(entry.name)) return 'log';
-  return 'file';
+  return getFileKindForName(entry.name);
 }
 
 function isNoctermTransferTempName(name: string): boolean {
   // 传输中的临时文件不展示给用户，避免误删或误判目录内容。
-  return /^\..+\.nocterm-(upload|download)-\d+-\d+\.(part|partial)$/.test(name);
+  return (
+    /^\..+\.nocterm-(upload|download)-\d+-\d+\.(part|partial)$/.test(name) ||
+    /^\..+\.nocterm-[a-f0-9]{32}\.part$/.test(name)
+  );
 }
 
 function formatSize(size: number | null): string {
@@ -129,6 +138,26 @@ export function selectRange(
 export function joinPath(parent: string, name: string): string {
   if (parent === '/') return `/${name}`;
   return `${parent.replace(/\/$/, '')}/${name}`;
+}
+
+/** 计算远程文件路径的父目录；根下文件返回 `/`，无父目录的裸路径返回 null。 */
+export function remoteParentPath(path: string): string | null {
+  const trimmed = path.replace(/\/+$/, '');
+  const index = trimmed.lastIndexOf('/');
+  if (index <= 0) return index === 0 ? '/' : null;
+  return trimmed.slice(0, index);
+}
+
+/**
+ * 判断 IPC 错误是否为保存冲突（远端文件基线校验未通过）。依赖命令级稳定错误码，
+ * 不得解析消息文本——编辑器据此区分「弹冲突三选」与「普通保存失败」。
+ */
+export function isRemoteChangedError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { code?: unknown }).code === 'SFTP_REMOTE_CHANGED'
+  );
 }
 
 export function validateNameInput(value: string | null): { name: string | null; error?: string } {

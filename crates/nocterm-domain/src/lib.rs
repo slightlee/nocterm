@@ -3,6 +3,7 @@ pub mod ai_conversation;
 pub mod ai_execution;
 pub mod connection;
 pub mod credential;
+pub mod file_edit;
 pub mod platform;
 pub mod settings;
 pub mod terminal;

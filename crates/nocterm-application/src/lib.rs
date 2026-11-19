@@ -3,6 +3,8 @@ pub mod ai_conversation;
 pub mod ai_execution;
 pub mod connection;
 pub mod error;
+pub mod file_edit;
+pub mod file_target;
 pub mod health;
 pub mod settings;
 pub mod terminal;

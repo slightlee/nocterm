@@ -4,6 +4,12 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ConnectionList } from '../../features/connections';
 import { AiPanel, useAiStore, type AiTerminalSelectionRequest } from '../../features/ai';
 import { useTerminalStore } from '../../features/terminal';
+import {
+  FileEditorCloseGuard,
+  SftpView,
+  useFileEditorStore,
+  useSftpStore,
+} from '../../features/sftp';
 import { PanelSideIcon } from '../../shared/components/PanelSideIcon';
 import { useTopWindowDoubleClick, useTopWindowDrag } from '../../shared/hooks/useWindowDrag';
 import { isWindowsDesktopRuntime } from '../../shared/lib/desktop-platform';
@@ -24,7 +30,12 @@ export function AppShell() {
   const [terminalSelectionRequest, setTerminalSelectionRequest] =
     useState<AiTerminalSelectionRequest | null>(null);
   const connectionRoute = location.pathname.startsWith('/connections');
-  const sidebarRoute = connectionRoute || location.pathname.startsWith('/sftp');
+  const sftpRoute = location.pathname.startsWith('/sftp');
+  const fileViewVisited = useSftpStore((state) => state.fileViewVisited);
+  const hasFileEditors = useFileEditorStore((state) => state.editors.length > 0);
+  // 只在真正进入过文件页后常驻；创建 SFTP 会话本身不会提前读本地主目录。
+  const sftpMounted = sftpRoute || fileViewVisited || hasFileEditors;
+  const sidebarRoute = connectionRoute || sftpRoute;
   const settingsRoute = location.pathname.startsWith('/settings');
   const handleTopWindowDrag = useTopWindowDrag();
   const handleTopWindowDoubleClick = useTopWindowDoubleClick();
@@ -54,6 +65,7 @@ export function AppShell() {
     const { sessions, openLocalSession } = useTerminalStore.getState();
     const localCount = sessions.filter((session) => session.kind === 'local').length;
     const name = localCount === 0 ? '本地终端' : `本地终端 ${localCount + 1}`;
+    useFileEditorStore.getState().activateEditor(null);
     openLocalSession(`local:extra:${crypto.randomUUID()}`, name);
     navigate('/connections');
   }, [navigate]);
@@ -72,6 +84,12 @@ export function AppShell() {
     window.addEventListener('resize', collapseWhenNeeded);
     return () => window.removeEventListener('resize', collapseWhenNeeded);
   }, []);
+
+  useEffect(() => {
+    // 任何入口进入终端页都要退出编辑展示：编辑标签失去激活态，
+    // 与「新建本地终端 / AI 面板切终端」的显式清理保持同一不变式。
+    if (connectionRoute) useFileEditorStore.getState().activateEditor(null);
+  }, [connectionRoute]);
 
   useEffect(() => {
     let disposed = false;
@@ -155,6 +173,7 @@ export function AppShell() {
         </header>
       ) : null}
       <div className={styles.app} onContextMenuCapture={suppressBrowserContextMenu}>
+        <FileEditorCloseGuard />
         {sidebarRoute ? (
           <div
             aria-hidden={sidebarCollapsed}
@@ -191,7 +210,15 @@ export function AppShell() {
           >
             <TerminalWorkspace onAddSelectionToAi={addTerminalSelectionToAi} />
           </div>
-          {!connectionRoute ? (
+          {/* 首次进入文件页后常驻；切换路由只隐藏，不销毁文件浏览和 CodeMirror 状态。 */}
+          {sftpMounted ? (
+            <div
+              className={`${styles.terminalWorkspace} ${sftpRoute ? '' : styles.hiddenWorkspace}`}
+            >
+              <SftpView visible={sftpRoute} />
+            </div>
+          ) : null}
+          {!sidebarRoute ? (
             <Outlet
               context={{
                 sidebarCollapsed,
@@ -205,6 +232,7 @@ export function AppShell() {
         <AiPanel
           activeView={connectionRoute ? 'terminal' : 'sftp'}
           onActivateTerminal={(sessionId) => {
+            useFileEditorStore.getState().activateEditor(null);
             activateTerminal(sessionId);
             navigate('/connections');
           }}

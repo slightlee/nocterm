@@ -19,6 +19,14 @@ type SftpErrorCode =
   | 'localPermissionDenied'
   | 'localPathInvalid'
   | 'localWriteFailed'
+  | 'fileTooLarge'
+  | 'fileNotText'
+  | 'remoteChanged'
+  | 'remoteReadChanged'
+  | 'localFileChanged'
+  | 'localReadChanged'
+  | 'fileSymlink'
+  | 'remoteTargetChanged'
   | 'unknown';
 
 interface ParsedSftpError {
@@ -50,6 +58,14 @@ const SFTP_ERROR_MESSAGES: Record<SftpErrorCode, string> = {
   localPermissionDenied: '没有访问该本地目录的权限，请检查目录权限后重试。',
   localPathInvalid: '本地路径不存在或不是目录，请检查路径后重试。',
   localWriteFailed: '写入本地文件失败：原目标已保留，请检查磁盘空间和目录权限后重试。',
+  fileTooLarge: '文件超过在线编辑上限（2 MiB），请使用其他编辑器处理。',
+  fileNotText: '文件是二进制或非 UTF-8 编码，不支持在线编辑。',
+  remoteChanged: '远端文件已被修改或删除，可选择覆盖远端、加载远端版本或取消保存。',
+  remoteReadChanged: '远端文件在打开期间发生变化，请重试打开。',
+  localFileChanged: '本地文件已被修改或删除，可选择覆盖、加载最新版本或取消保存。',
+  localReadChanged: '本地文件在打开期间发生变化，请重试打开。',
+  fileSymlink: '目标是符号链接，请直接打开链接指向的真实文件。',
+  remoteTargetChanged: '连接已变更，请复制未保存内容后关闭并重新打开文件。',
   unknown: '远程文件操作失败，请检查连接配置或稍后重试。',
 };
 
@@ -128,7 +144,17 @@ export function getSftpErrorMessage(err: unknown): string {
     SFTP_LOCAL_READ_BUSY: 'localReadBusy',
     SFTP_LOCAL_PERMISSION_DENIED: 'localPermissionDenied',
     SFTP_LOCAL_READ_INTERRUPTED: 'localReadFailed',
-    SFTP_LOCAL_WRITE_FAILED: 'permissionDenied',
+    SFTP_LOCAL_WRITE_FAILED: 'localWriteFailed',
+    SFTP_FILE_TOO_LARGE: 'fileTooLarge',
+    SFTP_FILE_NOT_TEXT: 'fileNotText',
+    SFTP_REMOTE_CHANGED: 'remoteChanged',
+    SFTP_REMOTE_TARGET_CHANGED: 'remoteTargetChanged',
+    SFTP_FILE_SYMLINK: 'fileSymlink',
+    SFTP_REMOTE_PERMISSION_DENIED: 'permissionDenied',
+    SFTP_LOCAL_FILE_CHANGED: 'localFileChanged',
+    SFTP_REMOTE_READ_CHANGED: 'remoteReadChanged',
+    SFTP_LOCAL_READ_CHANGED: 'localReadChanged',
+    SFTP_LOCAL_FILE_SYMLINK: 'fileSymlink',
     SFTP_TRANSFER_FAILED: 'unknown',
   };
   if (codeMessages[code]) return SFTP_ERROR_MESSAGES[codeMessages[code]];

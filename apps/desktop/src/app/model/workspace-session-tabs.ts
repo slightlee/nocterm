@@ -1,6 +1,11 @@
 import type { TerminalSessionId } from '../../features/terminal';
 
-export type WorkspaceSessionTabKey = `terminal:${string}` | `sftp:${string}`;
+export type WorkspaceSessionTabKey = `terminal:${string}` | `sftp:${string}` | `editor:${string}`;
+
+export interface WorkspaceEditorDependency {
+  id: string;
+  source: { kind: 'local' } | { kind: 'remote'; connectionId: string };
+}
 
 export interface WorkspaceTabScrollMetrics {
   scrollLeft: number;
@@ -30,15 +35,69 @@ export function sftpWorkspaceTabKey(connectionId: string): WorkspaceSessionTabKe
   return `sftp:${connectionId}`;
 }
 
-/** 统一标签顺序保持稳定：终端按打开顺序排列，文件会话紧随其后。 */
+export function editorWorkspaceTabKey(id: string): WorkspaceSessionTabKey {
+  return `editor:${id}`;
+}
+
+/** 顺序与 DOM 一致：终端、文件管理、编辑器各自保持打开顺序。 */
 export function createWorkspaceSessionTabKeys(
   terminalIds: readonly TerminalSessionId[],
-  sftpConnectionIds: readonly string[]
+  sftpConnectionIds: readonly string[],
+  editorIds: readonly string[] = []
 ): WorkspaceSessionTabKey[] {
   return [
     ...terminalIds.map(terminalWorkspaceTabKey),
     ...sftpConnectionIds.map(sftpWorkspaceTabKey),
+    ...editorIds.map(editorWorkspaceTabKey),
   ];
+}
+
+/** 关闭远程管理器必须包含其编辑器；本地文件没有连接依赖。 */
+export function expandWorkspaceTabCloseKeys(
+  keys: readonly WorkspaceSessionTabKey[],
+  editors: readonly WorkspaceEditorDependency[]
+): WorkspaceSessionTabKey[] {
+  const expanded = new Set(keys);
+  for (const editor of editors) {
+    if (
+      editor.source.kind === 'remote' &&
+      expanded.has(sftpWorkspaceTabKey(editor.source.connectionId))
+    ) {
+      expanded.add(editorWorkspaceTabKey(editor.id));
+    }
+  }
+  return [...expanded];
+}
+
+/** “关闭其他”保留远程编辑器时也保留父管理器，避免依赖展开反向关掉目标。 */
+export function preserveWorkspaceEditorParent(
+  keys: readonly WorkspaceSessionTabKey[],
+  retainedKey: WorkspaceSessionTabKey,
+  editors: readonly WorkspaceEditorDependency[]
+): WorkspaceSessionTabKey[] {
+  const retained = editors.find((editor) => editorWorkspaceTabKey(editor.id) === retainedKey);
+  if (keys.includes(retainedKey) || retained?.source.kind !== 'remote') return [...keys];
+  const parentKey = sftpWorkspaceTabKey(retained.source.connectionId);
+  return keys.filter((key) => key !== parentKey);
+}
+
+/** 活动标签关闭后优先选左侧最近幸存者；没有左邻时再找右邻。 */
+export function resolveWorkspaceTabCloseFallback(
+  orderedKeys: readonly WorkspaceSessionTabKey[],
+  activeKey: WorkspaceSessionTabKey | null,
+  closedKeys: readonly WorkspaceSessionTabKey[]
+): WorkspaceSessionTabKey | null {
+  if (!activeKey || !closedKeys.includes(activeKey)) return activeKey;
+  const index = orderedKeys.indexOf(activeKey);
+  const closed = new Set(closedKeys);
+  return (
+    orderedKeys
+      .slice(0, index)
+      .reverse()
+      .find((key) => !closed.has(key)) ??
+    orderedKeys.slice(index + 1).find((key) => !closed.has(key)) ??
+    null
+  );
 }
 
 export function formatWorkspaceSessionNumber(value: number) {

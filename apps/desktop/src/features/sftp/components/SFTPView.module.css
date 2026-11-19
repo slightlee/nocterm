@@ -236,6 +236,28 @@
   background: var(--bg-primary);
 }
 
+/* 编辑器激活时双栏整体隐藏而非卸载：切换回文件管理标签即原样恢复。 */
+.managerHidden {
+  display: none;
+}
+
+/* 路由切到终端页时保持文件工作区常驻但不可见（等价 hiddenWorkspace 语义）。 */
+.hiddenView {
+  display: none;
+}
+
+/* CodeMirror 动态 chunk 的短暂加载占位，占满原主内容区，不扰动布局。 */
+.editorLoading {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  background: var(--bg-primary);
+}
+
 .filePane {
   min-width: 0;
   min-height: 0;

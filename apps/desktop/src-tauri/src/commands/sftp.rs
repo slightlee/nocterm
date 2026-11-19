@@ -7,6 +7,8 @@
 //!   再派生工作线程运行阻塞式 `upload`/`download`，主线程按节流读取累计字节发进度事件；
 //! - 上传落远程临时文件后由基础设施层原子提交；下载落本地暂存路径后由命令层
 //!   `replace_local_path` 原子替换（保留其备份/回滚语义与既有测试）；
+//! - 在线编辑 IPC 与用例位于 `file_editor`；本模块只向其提供凭据解析和传输生命周期守卫，
+//!   文本规则与本地/远程提交分别由 Application 与 Infrastructure 负责；
 //! - 错误统一归一化为携带前端稳定 `code` 的 `__NOCTERM_SFTP_ERROR__` 哨兵消息。
 
 use std::{
@@ -136,6 +138,35 @@ impl Drop for LocalDirectoryReadGuard {
 }
 
 impl SftpTransferState {
+    pub(super) fn has_running(&self, connection_id: i64) -> Result<bool, ErrorResponse> {
+        Ok(self
+            .controls
+            .lock()
+            .map_err(|_| error("SFTP_TRANSFER_FAILED", "传输状态不可用", true))?
+            .values()
+            .any(|control| control.connection_id == connection_id))
+    }
+    /// 编辑保存先登记再做 stat，连接关闭必须等待整个保存用例，而非仅上传阶段。
+    pub(super) fn begin_edit(&self, connection_id: i64) -> Result<SftpEditTask, ErrorResponse> {
+        let id = now_id("edit");
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.controls
+            .lock()
+            .map_err(|_| error("SFTP_TRANSFER_FAILED", "传输状态不可用", true))?
+            .insert(
+                id.clone(),
+                TransferControl {
+                    connection_id,
+                    cancel: cancel.clone(),
+                },
+            );
+        Ok(SftpEditTask {
+            id,
+            cancel,
+            controls: self.controls.clone(),
+        })
+    }
+
     /// 删除连接前必须先终止并等待其传输退出，避免凭据删除后留下远端临时文件。
     pub fn cancel_connection_and_wait(
         &self,
@@ -189,6 +220,20 @@ impl SftpTransferState {
     }
 }
 
+/// RAII 保证所有错误路径都注销保存任务，关连接的等待条件不会因提前返回而悬挂。
+pub(super) struct SftpEditTask {
+    id: String,
+    pub cancel: Arc<AtomicBool>,
+    controls: Arc<Mutex<HashMap<String, TransferControl>>>,
+}
+impl Drop for SftpEditTask {
+    fn drop(&mut self) {
+        if let Ok(mut controls) = self.controls.lock() {
+            controls.remove(&self.id);
+        }
+    }
+}
+
 impl Drop for SftpTransferState {
     fn drop(&mut self) {
         if let Ok(controls) = self.controls.lock() {
@@ -211,7 +256,7 @@ fn now_id(prefix: &str) -> String {
 
 /// 读取连接资料与对应认证凭据：密码/私钥按需从密钥串取出，Agent 方式无需额外凭据。
 /// 返回所有权数据以便移动进后台传输线程，避免跨线程借用命令层状态。
-fn read_credentials(
+pub(super) fn read_credentials(
     state: &AppState,
     connection_id: i64,
 ) -> Result<(ConnectionProfile, Option<String>, Option<String>), ErrorResponse> {
@@ -344,9 +389,12 @@ async fn run_local_directory_read(
     let (cancel_timeout, wait_for_cancel) = std::sync::mpsc::sync_channel(1);
 
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = guard;
-        let _ = sender.blocking_send(read(dir));
+        let result = read(dir);
+        // 结果可见之前先释放路径；立即刷新时不应撞上已经完成的读取守卫。
+        // 若底层 read 仍阻塞，guard 始终留在该线程，超时不会放开并发读取。
+        drop(guard);
         let _ = cancel_timeout.send(());
+        let _ = sender.blocking_send(result);
     });
     thread::spawn(move || {
         if wait_for_cancel.recv_timeout(timeout).is_err() {
@@ -796,6 +844,12 @@ pub fn cancel_file_transfer(
     Ok(())
 }
 
+// 编辑 IPC 的兼容测试仍从本模块调用，业务实现已迁至专用用例和 Adapter。
+#[cfg(test)]
+use super::file_editor::{LocalFileBaseline, sftp_read_local_file, sftp_write_local_file};
+#[cfg(test)]
+const SFTP_EDIT_MAX_BYTES: u64 = nocterm_application::file_edit::EDIT_MAX_BYTES;
+
 #[tauri::command(async)]
 pub fn upload_local_to_remote(
     app: AppHandle,
@@ -992,6 +1046,21 @@ mod tests {
         read_local_directory, replace_local_path, run_local_directory_read, temp_name, valid_name,
     };
 
+    /// 构造仅本组测试使用的临时目录并在结束时清理；任务标识保证唯一。
+    fn edit_scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(now_id(&format!("nocterm-edit-test-{tag}")));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("创建测试目录");
+        dir
+    }
+
+    /// 序列化本地编辑测试的文件元数据，供冲突断言复用。
+    fn edit_baseline(path: &std::path::Path) -> super::LocalFileBaseline {
+        super::sftp_read_local_file(path.to_string_lossy().into_owned())
+            .expect("读取测试基线")
+            .baseline
+    }
+
     #[test]
     fn local_directory_read_returns_entries_and_releases_path_guard() {
         let root = std::env::temp_dir().join(now_id("nocterm-sftp-list-test"));
@@ -1066,6 +1135,227 @@ mod tests {
         assert_eq!(join_remote("/", "docs"), "/docs");
         assert_eq!(parent_remote("/var/data/"), Some("/var".to_string()));
         assert_eq!(parent_remote("/"), None);
+    }
+
+    #[test]
+    fn local_read_returns_identity_path_and_baseline() {
+        let root = edit_scratch_dir("read");
+        let target = root.join("deploy.sh");
+        fs::write(&target, "#!/bin/sh\n").expect("写入脚本");
+
+        let result = super::sftp_read_local_file(target.to_string_lossy().into_owned())
+            .expect("读取本地文本");
+        assert_eq!(result.content, "#!/bin/sh\n");
+        // 身份路径必须规范化为绝对路径，前端以此为标签身份。
+        assert!(std::path::Path::new(&result.identity_path).is_absolute());
+        assert_eq!(result.baseline.size, 10);
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn local_read_rejects_a_file_above_the_limit() {
+        let root = edit_scratch_dir("oversized");
+        let target = root.join("huge.log");
+        fs::write(
+            &target,
+            vec![b'x'; (super::SFTP_EDIT_MAX_BYTES + 1) as usize],
+        )
+        .expect("写入超限文件");
+
+        let failure = serde_json::to_value(
+            super::sftp_read_local_file(target.to_string_lossy().into_owned()).unwrap_err(),
+        )
+        .expect("序列化超限错误");
+        assert_eq!(failure["code"], "SFTP_FILE_TOO_LARGE");
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn local_save_rejects_null_bytes_and_preserves_the_original() {
+        let root = edit_scratch_dir("nul-save");
+        let target = root.join("notes.txt");
+        fs::write(&target, "original").expect("写入原文件");
+        let baseline = edit_baseline(&target);
+
+        let failure = serde_json::to_value(
+            super::sftp_write_local_file(
+                target.to_string_lossy().into_owned(),
+                "new\0content".to_string(),
+                Some(baseline.size),
+                Some(baseline.modified_seconds),
+                Some(baseline.modified_nanos),
+                false,
+            )
+            .unwrap_err(),
+        )
+        .expect("序列化二进制错误");
+        assert_eq!(failure["code"], "SFTP_FILE_NOT_TEXT");
+        assert_eq!(fs::read_to_string(&target).expect("读取原文件"), "original");
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn local_save_conflict_and_overwrite_roundtrip() {
+        let root = edit_scratch_dir("save");
+        let target = root.join("config.yml");
+        fs::write(&target, "port: 8080\n").expect("写入初版");
+
+        let read =
+            super::sftp_read_local_file(target.to_string_lossy().into_owned()).expect("读取初版");
+        let baseline = &read.baseline;
+
+        // 基线一致时保存成功并返回新基线。
+        let saved = super::sftp_write_local_file(
+            target.to_string_lossy().into_owned(),
+            "port: 9090\n".to_string(),
+            Some(baseline.size),
+            Some(baseline.modified_seconds),
+            Some(baseline.modified_nanos),
+            false,
+        )
+        .expect("基线一致的保存");
+        assert_eq!(
+            fs::read_to_string(&target).expect("读取保存结果"),
+            "port: 9090\n"
+        );
+        // "port: 9090\n" 为 11 字节；断言保存结果与内容长度一致。
+        assert_eq!(saved.size, 11);
+        assert!(saved.modified_seconds >= baseline.modified_seconds);
+
+        // 外部把文件改回相同大小（内容不同）后，旧基线保存必须报冲突。
+        fs::write(&target, "port: 7777\n").expect("模拟外部修改");
+        let conflict = serde_json::to_value(
+            super::sftp_write_local_file(
+                target.to_string_lossy().into_owned(),
+                "port: 9090\n".to_string(),
+                Some(saved.size),
+                Some(saved.modified_seconds),
+                Some(saved.modified_nanos),
+                false,
+            )
+            .unwrap_err(),
+        )
+        .expect("序列化冲突错误");
+        assert_eq!(conflict["code"], "SFTP_LOCAL_FILE_CHANGED");
+        // 冲突不得破坏原文件内容。
+        assert_eq!(
+            fs::read_to_string(&target).expect("冲突后原文件"),
+            "port: 7777\n"
+        );
+
+        // force 只跳过冲突，正常完成覆盖。
+        super::sftp_write_local_file(
+            target.to_string_lossy().into_owned(),
+            "port: 9090\n".to_string(),
+            Some(saved.size),
+            Some(saved.modified_seconds),
+            Some(saved.modified_nanos),
+            true,
+        )
+        .expect("强制覆盖保存");
+        assert_eq!(
+            fs::read_to_string(&target).expect("强制覆盖结果"),
+            "port: 9090\n"
+        );
+
+        // 成功路径不残留任何隐藏暂存/备份文件。
+        let leftovers: Vec<_> = fs::read_dir(&root)
+            .expect("枚举目录")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty(), "不应残留暂存文件: {leftovers:?}");
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn local_save_rejects_unwritable_target_and_preserves_original() {
+        let root = edit_scratch_dir("readonly");
+        let target = root.join("locked.txt");
+        fs::write(&target, "original").expect("写入原文件");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o444)).expect("设置只读权限");
+            let denied = serde_json::to_value(
+                super::sftp_write_local_file(
+                    target.to_string_lossy().into_owned(),
+                    "changed".to_string(),
+                    None,
+                    None,
+                    None,
+                    false,
+                )
+                .unwrap_err(),
+            )
+            .expect("序列化权限错误");
+            assert_eq!(denied["code"], "SFTP_LOCAL_PERMISSION_DENIED");
+            assert_eq!(
+                fs::read_to_string(&target).expect("只读目标未被改写"),
+                "original"
+            );
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o644))
+                .expect("恢复权限以便清理");
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = &target;
+        }
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn local_save_preserves_unix_permission_bits() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let root = edit_scratch_dir("perm");
+            let target = root.join("script.sh");
+            fs::write(&target, "echo hi\n").expect("写入脚本");
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o755))
+                .expect("设置可执行权限");
+
+            let baseline = edit_baseline(&target);
+            super::sftp_write_local_file(
+                target.to_string_lossy().into_owned(),
+                "echo bye\n".to_string(),
+                Some(baseline.size),
+                Some(baseline.modified_seconds),
+                Some(baseline.modified_nanos),
+                false,
+            )
+            .expect("保存脚本");
+
+            let mode = fs::metadata(&target)
+                .expect("读取保存后元数据")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o755, "保存必须保留权限位");
+
+            fs::remove_dir_all(root).ok();
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows 权限模型不同：只读语义由只读拒绝测试覆盖。
+        }
+    }
+
+    #[test]
+    fn local_read_rejects_missing_file_with_stable_code() {
+        let root = edit_scratch_dir("missing");
+        let missing = serde_json::to_value(
+            super::sftp_read_local_file(root.join("nope.txt").to_string_lossy().into_owned())
+                .unwrap_err(),
+        )
+        .expect("序列化缺失错误");
+        assert_eq!(missing["code"], "SFTP_LOCAL_PATH_INVALID");
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

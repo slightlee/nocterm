@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createWorkspaceSessionTabKeys,
+  editorWorkspaceTabKey,
+  expandWorkspaceTabCloseKeys,
+  preserveWorkspaceEditorParent,
+  resolveWorkspaceTabCloseFallback,
   formatWorkspaceSessionNumber,
   groupWorkspaceSessionIndexItems,
   resolveWorkspaceTabOverflow,
@@ -20,6 +24,51 @@ describe('workspace session tabs', () => {
 
   it('keeps equal raw ids distinct across terminal and file sessions', () => {
     expect(terminalWorkspaceTabKey('1')).not.toBe(sftpWorkspaceTabKey('1'));
+  });
+
+  it('appends editors without colliding with manager or terminal ids', () => {
+    expect(createWorkspaceSessionTabKeys(['1'], ['1'], ['1'])).toEqual([
+      'terminal:1',
+      'sftp:1',
+      'editor:1',
+    ]);
+    expect(editorWorkspaceTabKey('1')).not.toBe(sftpWorkspaceTabKey('1'));
+  });
+
+  const editors = [
+    { id: 'remote', source: { kind: 'remote' as const, connectionId: '1' } },
+    { id: 'other', source: { kind: 'remote' as const, connectionId: '2' } },
+    { id: 'local', source: { kind: 'local' as const } },
+  ];
+
+  it('expands parent closure only to dependent remote editors and deduplicates keys', () => {
+    expect(expandWorkspaceTabCloseKeys(['sftp:1', 'editor:remote'], editors)).toEqual([
+      'sftp:1',
+      'editor:remote',
+    ]);
+    expect(expandWorkspaceTabCloseKeys(['editor:local'], editors)).toEqual(['editor:local']);
+  });
+
+  it('retains a remote editor parent only when the target editor survives', () => {
+    expect(preserveWorkspaceEditorParent(['sftp:1', 'sftp:2'], 'editor:remote', editors)).toEqual([
+      'sftp:2',
+    ]);
+    expect(
+      preserveWorkspaceEditorParent(['sftp:1', 'editor:remote'], 'editor:remote', editors)
+    ).toEqual(['sftp:1', 'editor:remote']);
+    expect(preserveWorkspaceEditorParent(['sftp:1'], 'editor:local', editors)).toEqual(['sftp:1']);
+  });
+
+  it('falls back to the previous surviving visual tab, then next, then empty', () => {
+    const keys = createWorkspaceSessionTabKeys(['1'], ['1'], ['remote', 'local']);
+    expect(
+      resolveWorkspaceTabCloseFallback(keys, 'editor:remote', ['sftp:1', 'editor:remote'])
+    ).toBe('terminal:1');
+    expect(resolveWorkspaceTabCloseFallback(keys, 'terminal:1', ['terminal:1', 'sftp:1'])).toBe(
+      'editor:remote'
+    );
+    expect(resolveWorkspaceTabCloseFallback(keys, 'editor:local', keys)).toBeNull();
+    expect(resolveWorkspaceTabCloseFallback(keys, 'sftp:1', ['editor:remote'])).toBe('sftp:1');
   });
 
   it('formats visual terminal numbers with a stable two-digit width', () => {

@@ -63,11 +63,17 @@ export function markCredentialBound(
 export function connectionRequiresReconnect(
   previous: Pick<
     ConnectionProfile,
-    'host' | 'port' | 'username' | 'authentication' | 'remoteInitialPath'
+    'host' | 'port' | 'username' | 'authentication' | 'remoteInitialPath' | 'privateKeyPath'
   >,
   next: Pick<
     ConnectionCreateRequest,
-    'host' | 'port' | 'username' | 'authentication' | 'remoteInitialPath'
+    | 'host'
+    | 'port'
+    | 'username'
+    | 'authentication'
+    | 'remoteInitialPath'
+    | 'privateKeyPath'
+    | 'password'
   >
 ) {
   return (
@@ -75,6 +81,8 @@ export function connectionRequiresReconnect(
     next.port !== previous.port ||
     next.username !== previous.username ||
     next.authentication !== previous.authentication ||
+    Boolean(next.password) ||
+    (next.privateKeyPath ?? '') !== (previous.privateKeyPath ?? '') ||
     (next.remoteInitialPath ?? '') !== (previous.remoteInitialPath ?? '')
   );
 }
