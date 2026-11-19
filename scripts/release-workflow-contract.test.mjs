@@ -88,6 +88,15 @@ describe('release workflow contract', () => {
     assert.equal(nsisConfig.displayLanguageSelector, false);
   });
 
+  it('keeps a compact macOS DMG window with the app on the left', () => {
+    const tauriConfig = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+    const dmgConfig = tauriConfig.bundle.macOS.dmg;
+
+    assert.deepEqual(dmgConfig.windowSize, { width: 660, height: 400 });
+    assert.deepEqual(dmgConfig.appPosition, { x: 180, y: 170 });
+    assert.deepEqual(dmgConfig.applicationFolderPosition, { x: 480, y: 170 });
+  });
+
   it('builds both desktop platforms from tags and only prepares a draft release', () => {
     const workflow = readWorkflow('.github/workflows/release.yml');
     const tauriConfig = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));

@@ -57,6 +57,12 @@ git diff --cached --check
 8. macOS 从“帮助”打开项目主页和报告问题，确认只进入预期的 GitHub 地址；
 9. 退出后确认 Nocterm 创建的终端和 Provider 子进程均已结束。
 
+### 4.3 macOS DMG 安装窗口
+
+1. 本机执行 `CI=true corepack pnpm release:build:macos`，确认构建成功且 DMG 内包含 `.DS_Store`；
+2. 首次打开新生成的 DMG，确认 Finder 窗口为 660×400 逻辑点、图标大小为 128 点，Nocterm 位于左侧、Applications 位于右侧；高分屏截图的像素尺寸可能不同，不能直接作为窗口逻辑尺寸；
+3. GitHub Actions 生成 aarch64 和 x86_64 产物后，分别打开两个 DMG 核对同一布局，并验证拖入 Applications 后应用可以启动。本机模拟 `CI=true` 不能替代 Runner 产物验收。
+
 ## 5. 本地终端
 
 1. 新建两个本地终端，确认默认 Shell、输入、输出和标签隔离；

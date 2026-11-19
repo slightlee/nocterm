@@ -97,6 +97,37 @@ export function buildMacosReleaseArtifact({ repositoryRoot, version, architectur
   };
 }
 
+/** 前端与 DMG 顺序构建；注入执行器以验证 CI 环境透传及 Finder 布局开关。 */
+export function buildMacosDmg({ pnpmCli, environment = process.env, runStep }) {
+  if (!pnpmCli) throw new Error('无法定位 pnpm CLI，请通过 corepack pnpm 执行本命令');
+
+  // 通过当前 pnpm CLI 直接调用，避免 PATH 中其他版本导致 ERR_PNPM_BAD_PM_VERSION。
+  runStep([pnpmCli, '--filter', '@nocterm/desktop', 'build'], environment);
+  // 前端已经构建；跳过 beforeBuildCommand，避免 Tauri 再经 PATH 嵌套调用 pnpm。
+  runStep(
+    [
+      pnpmCli,
+      '--filter',
+      '@nocterm/desktop',
+      'exec',
+      'tauri',
+      'build',
+      '--config',
+      '{"bundle":{"active":true},"build":{"beforeBuildCommand":""}}',
+      '--bundles',
+      'dmg',
+      '--ci',
+    ],
+    {
+      ...environment,
+      MACOSX_DEPLOYMENT_TARGET: environment.MACOSX_DEPLOYMENT_TARGET ?? MACOS_DEPLOYMENT_TARGET,
+      // Tauri 在 CI=true 时默认跳过 Finder AppleScript，导致 DMG 丢失窗口和图标布局。
+      // 只覆盖 DMG 子进程的官方开关，保留 CI 标记及其余构建环境。
+      TAURI_BUNDLER_DMG_IGNORE_CI: 'true',
+    }
+  );
+}
+
 export function main() {
   // 产物必须在目标系统原生构建，本脚本不允许用其他平台伪装 macOS 结果。
   if (process.platform !== 'darwin') {
@@ -111,42 +142,17 @@ export function main() {
     repositoryRoot: REPOSITORY_ROOT,
     version,
     architecture: process.arch,
-    runBuild: () => {
-      // 前端构建与 Tauri 都通过当前 pnpm CLI（npm_execpath）直接调用：
-      // 任何经 PATH 解析的嵌套 pnpm 都可能命中其他版本（如全局 pnpm 12），
-      // 在 Corepack 环境下会因版本不一致直接报 ERR_PNPM_BAD_PM_VERSION。
-      execFileSync(process.execPath, [pnpmCli, '--filter', '@nocterm/desktop', 'build'], {
-        cwd: REPOSITORY_ROOT,
-        stdio: 'inherit',
-      });
-      // 前端产物已由上一步生成；显式跳过 beforeBuildCommand，
-      // 避免 Tauri 内部再经 PATH 调用 pnpm 触发同样的版本冲突。
-      execFileSync(
-        process.execPath,
-        [
-          pnpmCli,
-          '--filter',
-          '@nocterm/desktop',
-          'exec',
-          'tauri',
-          'build',
-          '--config',
-          '{"bundle":{"active":true},"build":{"beforeBuildCommand":""}}',
-          '--bundles',
-          'dmg',
-          '--ci',
-        ],
-        {
-          cwd: REPOSITORY_ROOT,
-          stdio: 'inherit',
-          env: {
-            ...process.env,
-            MACOSX_DEPLOYMENT_TARGET:
-              process.env.MACOSX_DEPLOYMENT_TARGET ?? MACOS_DEPLOYMENT_TARGET,
-          },
-        }
-      );
-    },
+    runBuild: () =>
+      buildMacosDmg({
+        pnpmCli,
+        runStep: (args, environment) => {
+          execFileSync(process.execPath, args, {
+            cwd: REPOSITORY_ROOT,
+            stdio: 'inherit',
+            env: environment,
+          });
+        },
+      }),
   });
 
   console.log(`Tauri source artifact: ${result.sourcePath} (${result.sourceSize} bytes)`);
