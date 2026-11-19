@@ -17,6 +17,7 @@
  *   --sidebar-*     侧栏
  *   --icon-bg-*     图标底色
  *   --code-block-*  AI 代码块
+ *   --editor-*      文件编辑器语法色
  *
  * 不要在组件中使用 --ds-*（原始 token），以便换肤只改 tokens + 本文件。
  *
@@ -83,6 +84,15 @@
   --text-secondary: var(--ds-text-2);
   --text-tertiary: var(--ds-text-3);
   --text-on-accent: var(--ds-on-accent);
+
+  /* ---- File Editor Syntax ---- */
+  --editor-comment: var(--ds-editor-comment);
+  --editor-keyword: var(--ds-editor-keyword);
+  --editor-string: var(--ds-editor-string);
+  --editor-number: var(--ds-editor-number);
+  --editor-property: var(--ds-editor-property);
+  --editor-function: var(--ds-editor-function);
+  --editor-type: var(--ds-editor-type);
 
   /* ---- AI Gradient ---- */
   --ai-start: var(--ds-purple-600);

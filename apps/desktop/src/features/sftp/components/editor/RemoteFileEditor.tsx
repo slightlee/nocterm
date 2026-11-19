@@ -48,6 +48,7 @@ export function FileEditorView({ file, onChange, onSave }: FileEditorViewProps) 
           <CodeMirrorEditor
             key={file.id}
             value={file.content}
+            fileName={file.name}
             onChange={onChange}
             onSave={onSave}
             readOnly={closePending}

@@ -1,7 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
+import { detectEditorLanguage, type EditorLanguage } from '../../model/editor-language';
+import { loadEditorLanguage } from '../../model/editor-language-loader';
+import { editorSyntaxHighlighting } from '../../model/editor-highlight';
 import {
   documentExtensions,
   externalDocumentTransaction,
@@ -56,6 +59,7 @@ const editorTheme = EditorView.theme({
 
 interface CodeMirrorEditorProps {
   value: string;
+  fileName: string;
   /** 用户输入引起的内容变化；外部值更新（切换文件/重载远端版本）不触发。 */
   onChange: (value: string) => void;
   /** 编辑器聚焦时的 Ctrl/Cmd+S 保存入口。 */
@@ -69,6 +73,7 @@ interface CodeMirrorEditorProps {
  */
 export function CodeMirrorEditor({
   value,
+  fileName,
   onChange,
   onSave,
   readOnly = false,
@@ -80,6 +85,9 @@ export function CodeMirrorEditor({
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const readOnlyConfigRef = useRef(new Compartment());
+  const languageConfigRef = useRef(new Compartment());
+  const language = detectEditorLanguage(fileName, value);
+  const [failedLanguage, setFailedLanguage] = useState<EditorLanguage | null>(null);
 
   // 提交后同步最新回调，编辑器实例始终通过 ref 调用，避免闭包捕获过期 props。
   useEffect(() => {
@@ -95,8 +103,10 @@ export function CodeMirrorEditor({
       extensions: [
         basicSetup,
         editorTheme,
+        editorSyntaxHighlighting,
         documentExtensions(initialDocRef.current),
         readOnlyConfigRef.current.of([]),
+        languageConfigRef.current.of([]),
         // Mod-S 拦截放在最高优先级：编辑器聚焦时保存回传优先于一切默认键位。
         Prec.highest(
           keymap.of([
@@ -140,6 +150,31 @@ export function CodeMirrorEditor({
   }, [value]);
 
   useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    let active = true;
+    const configuration = languageConfigRef.current;
+    // 切换语言只替换扩展，保留当前文档、选区与撤销历史，且不会产生 docChanged。
+    view.dispatch({ effects: configuration.reconfigure([]) });
+    if (!language) return;
+    void loadEditorLanguage(language).then(
+      (extension) => {
+        // 用户可能已关闭、切换文件或改写 shebang；迟到结果不能写入旧实例。
+        if (!active) return;
+        view.dispatch({ effects: configuration.reconfigure(extension) });
+        setFailedLanguage(null);
+      },
+      () => {
+        // 高亮失败不阻止编辑和保存，但必须明确告知用户当前为纯文本显示。
+        if (active) setFailedLanguage(language);
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [language]);
+
+  useEffect(() => {
     viewRef.current?.dispatch({
       effects: readOnlyConfigRef.current.reconfigure([
         EditorState.readOnly.of(readOnly),
@@ -148,5 +183,14 @@ export function CodeMirrorEditor({
     });
   }, [readOnly]);
 
-  return <div ref={hostRef} className={styles.editorHost} />;
+  return (
+    <>
+      {language && failedLanguage === language && (
+        <div className={styles.editorNotice} role="status">
+          语法高亮加载失败，当前按纯文本编辑，仍可正常编辑和保存。
+        </div>
+      )}
+      <div ref={hostRef} className={styles.editorHost} />
+    </>
+  );
 }
