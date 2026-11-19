@@ -184,6 +184,8 @@ corepack pnpm release:build:macos
 
 脚本从根 `package.json` 读取产品版本，只接受宿主原生架构（Apple Silicon 生成 aarch64，Intel 生成 x86_64），精确删除当前版本的旧 DMG 源文件、规范副本和校验文件，再执行 Tauri 构建。只有构建成功且新源文件存在、非空时，才会在 `target/release/artifacts/` 生成符合上述命名规则的 DMG 副本和同名 `.sha256` 校验文件；未显式指定时最低运行版本固定为 macOS 14.0，与 CI 一致。脚本当前只接受本机 macOS aarch64 与 x86_64 产物；新增架构时必须先在对应平台验证 Tauri 原始命名和安装行为。
 
+DMG 构建子进程设置 `TAURI_BUNDLER_DMG_IGNORE_CI=true`，保留 `CI` 环境标记，同时让 Tauri 在 CI 中执行 Finder 布局脚本并写入 `.DS_Store`。`tauri.conf.json` 显式固定安装窗口为 660×400 逻辑点，App 在左、Applications 在右，图标使用当前 Tauri 的默认 128 点大小。本机与两个 macOS Runner 共用此路径；Finder 自动化失败时构建必须失败，不以跳过布局作为降级方案。分发前按 `docs/testing.md` 的 DMG 检查核对实际产物。
+
 Tauri 的 Windows NSIS 默认文件名使用 `x64`，不直接作为发布产物。在 Windows x64 本机生成最终 NSIS 产物时，在仓库根目录执行：
 
 ```powershell

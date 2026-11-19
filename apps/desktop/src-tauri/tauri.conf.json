@@ -43,6 +43,11 @@
       "icons/icon.ico"
     ],
     "macOS": {
+      "dmg": {
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 }
+      },
       "files": {
         "resources/zh-Hans.lproj/InfoPlist.strings": "Resources/zh-Hans.lproj/InfoPlist.strings"
       },
