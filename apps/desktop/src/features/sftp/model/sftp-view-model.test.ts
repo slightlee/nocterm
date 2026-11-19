@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  canEditRemoteEntry,
   getFileKindForName,
   isRemoteChangedError,
   joinPath,
@@ -138,14 +137,6 @@ describe('sftp view model', () => {
     expect(validateNameInput('a/b').error).toContain('路径分隔符');
     expect(validateNameInput('..').error).toContain('相对路径');
     expect(validateNameInput('tab\tname').error).toContain('Tab');
-  });
-
-  it('allows editing only regular files within the size cap', () => {
-    // 目录永远不可编辑；已知大小超限时拒绝；大小未知时放行（后端权威校验）。
-    expect(canEditRemoteEntry({ isDir: true, sizeBytes: 1 })).toBe(false);
-    expect(canEditRemoteEntry({ isDir: false, sizeBytes: 2 * 1024 * 1024 })).toBe(true);
-    expect(canEditRemoteEntry({ isDir: false, sizeBytes: 2 * 1024 * 1024 + 1 })).toBe(false);
-    expect(canEditRemoteEntry({ isDir: false, sizeBytes: null })).toBe(true);
   });
 
   it('resolves the remote parent path for nested and root-level files', () => {

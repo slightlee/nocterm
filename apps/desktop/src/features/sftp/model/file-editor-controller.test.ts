@@ -28,6 +28,32 @@ beforeEach(() => {
 });
 
 describe('file editor requests', () => {
+  it.each<FileEditorSource>([
+    { kind: 'local', path: '/tmp/disguised.txt' },
+    { kind: 'remote', connectionId: 'A', path: '/srv/disguised.txt' },
+  ])('removes a rejected $kind tab while preserving the active draft', async (rejectedSource) => {
+    const model = controller();
+    await model.openFile(source);
+    model.changeContent(fileEditorId(source), 'unsaved draft');
+    const failure = { code: 'SFTP_FILE_NOT_TEXT', message: 'binary content' };
+    if (rejectedSource.kind === 'local') vi.mocked(api.readLocalFile).mockRejectedValue(failure);
+    else vi.mocked(api.readRemoteFile).mockRejectedValue(failure);
+
+    await model.openFile(rejectedSource);
+
+    const state = useFileEditorStore.getState();
+    expect(state.editors).toHaveLength(1);
+    expect(state.activeEditorId).toBe(fileEditorId(source));
+    expect(state.editors[0]).toMatchObject({
+      content: 'unsaved draft',
+      dirty: true,
+      status: 'ready',
+    });
+    expect(hooks.showToast).toHaveBeenCalledWith(expect.stringContaining('不支持在线编辑'));
+    expect(api.saveLocalFile).not.toHaveBeenCalled();
+    expect(api.saveRemoteFile).not.toHaveBeenCalled();
+  });
+
   it('keeps edits made during save and notifies the original source', async () => {
     const pending = deferred<api.RemoteSaveResult>();
     vi.mocked(api.saveRemoteFile).mockReturnValue(pending.promise);

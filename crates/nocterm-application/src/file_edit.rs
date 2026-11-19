@@ -43,7 +43,7 @@ impl<P: TextFilePort> FileEditService<P> {
 }
 
 pub fn validate_content(bytes: &[u8]) -> Result<(), AppError> {
-    // UTF-8 合法也可能包含 NUL；这类文件不交给文本编辑器往返改写。
+    // 大小先于内容检查；读写和 force 共用规则，失败时不能触及保存事务。
     if bytes.len() as u64 > EDIT_MAX_BYTES {
         return Err(AppError::new(
             "SFTP_FILE_TOO_LARGE",
@@ -51,16 +51,43 @@ pub fn validate_content(bytes: &[u8]) -> Result<(), AppError> {
             false,
         ));
     }
-    if bytes.contains(&0) || std::str::from_utf8(bytes).is_err() {
+    if bytes.contains(&0) || std::str::from_utf8(bytes).is_err() || has_binary_header(bytes) {
         return Err(not_text());
     }
     Ok(())
 }
 
+/// 识别常见容器签名，补足“合法 UTF-8 且无 NUL”仍可能是二进制的情况。
+/// 这是有限格式识别，不按扩展名判断，也不尝试有损解码或自动转换内容。
+fn has_binary_header(bytes: &[u8]) -> bool {
+    // 仅在检测时跳过 BOM，真正返回和保存的文本仍保留原始 BOM。
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    const HEADERS: &[&[u8]] = &[
+        b"%PDF-",
+        b"GIF87a",
+        b"GIF89a",
+        b"PK\x03\x04",
+        b"PK\x05\x06",
+        b"PK\x07\x08",
+        b"!<arch>\n",
+        b"\x7fELF",
+        b"\x89PNG\r\n\x1a\n",
+        b"\xff\xd8\xff",
+        b"\x1f\x8b",
+        b"7z\xbc\xaf\x27\x1c",
+        b"Rar!\x1a\x07",
+    ];
+    if HEADERS.iter().any(|header| bytes.starts_with(header)) {
+        return true;
+    }
+    // RIFF 本身不足以判定，必须同时匹配固定偏移上的实际媒体格式。
+    bytes.starts_with(b"RIFF") && matches!(bytes.get(8..12), Some(b"WEBP" | b"WAVE" | b"AVI "))
+}
+
 fn not_text() -> AppError {
     AppError::new(
         "SFTP_FILE_NOT_TEXT",
-        "文件不是合法 UTF-8 文本，不支持在线编辑",
+        "文件是二进制或非 UTF-8 编码，不支持在线编辑",
         false,
     )
 }
@@ -72,6 +99,64 @@ fn app_error(error: FileEditError) -> AppError {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn rejects_binary_formats_that_can_otherwise_pass_utf8_validation() {
+        // PDF、GIF 和容器头可能全部为合法 UTF-8，不能只靠 NUL 或编码拒绝。
+        let fixtures: &[&[u8]] = &[
+            b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n",
+            b"GIF89aAAAAAAAAAA",
+            b"PK\x03\x04AAAAAAAAAA",
+            b"!<arch>\nAAAAAAAAAA",
+            b"RIFFAAAAWEBPVP8 AAAAAAAA",
+        ];
+        for bytes in fixtures {
+            assert!(std::str::from_utf8(bytes).is_ok());
+            assert!(!bytes.contains(&0));
+            assert_eq!(
+                validate_content(bytes).unwrap_err().code,
+                "SFTP_FILE_NOT_TEXT"
+            );
+        }
+        assert_eq!(
+            validate_content(b"\xef\xbb\xbf%PDF-1.7\n%%EOF")
+                .unwrap_err()
+                .code,
+            "SFTP_FILE_NOT_TEXT"
+        );
+    }
+
+    #[test]
+    fn preserves_supported_text_without_extension_assumptions() {
+        for bytes in [
+            b"".as_slice(),
+            "配置=中文\r\n".as_bytes(),
+            b"#!/bin/sh\nprintf 'hello\\n'\n",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"><path /></svg>",
+            b"\xef\xbb\xbf<svg />",
+            b"MZ_CONFIG=production\nRIFF is a container format\n",
+        ] {
+            assert!(validate_content(bytes).is_ok());
+        }
+    }
+
+    #[test]
+    fn force_cannot_write_a_binary_header_as_text() {
+        let service = FileEditService(RejectWrite(AtomicBool::new(false)));
+        let version = FileVersion {
+            size: None,
+            modified_seconds: None,
+            modified_nanos: None,
+        };
+        assert_eq!(
+            service
+                .write("disguised.txt", "%PDF-1.7\n%%EOF", version, true)
+                .unwrap_err()
+                .code,
+            "SFTP_FILE_NOT_TEXT"
+        );
+        assert!(!service.0.0.load(Ordering::Relaxed));
+    }
     struct RejectWrite(AtomicBool);
     impl TextFilePort for RejectWrite {
         fn read(

@@ -1,6 +1,6 @@
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { ContextMenu, type ContextMenuItem } from '../../../shared/components/ContextMenu';
-import { canEditRemoteEntry } from '../model/sftp-view-model';
+import { getFileEditBlockReason } from '../model/file-edit-policy';
 import type {
   CreateEditState,
   FileKind,
@@ -205,8 +205,10 @@ interface FilePaneProps {
   onSelectAll: () => void;
   onClearSelection: () => void;
   onOpenDir: (path: string) => void;
-  /** 仅远程 pane 提供：双击/右键编辑打开远程文件；缺省时文件行无编辑行为。 */
+  /** 本地和远程均可提供；缺省时文件行无编辑行为。 */
   onEditFile?: (row: FileRow) => void;
+  /** 已知不支持的文件双击时只提示原因，不打开标签或发出读取请求。 */
+  onEditBlocked?: (reason: string) => void;
   onOpenParent: () => void;
   onRefresh: () => void;
   onSort: (key: SortKey) => void;
@@ -270,6 +272,7 @@ function FilePane({
   onClearSelection,
   onOpenDir,
   onEditFile,
+  onEditBlocked,
   onOpenParent,
   onRefresh,
   onSort,
@@ -290,8 +293,18 @@ function FilePane({
   const selectedRows = rows.filter((row) => selectedNames.has(row.name));
   const actionRowsFor = (row: FileRow) =>
     selectedNames.has(row.name) && selectedRows.length > 0 ? selectedRows : [row];
+  const editFile = (row: FileRow) => {
+    if (!onEditFile) return;
+    const reason = getFileEditBlockReason(row);
+    if (reason) {
+      onEditBlocked?.(reason);
+      return;
+    }
+    onEditFile(row);
+  };
   const buildRowMenuItems = (row: FileRow): SftpMenuItem[] => {
     const actionRows = actionRowsFor(row);
+    const editBlockReason = getFileEditBlockReason(row);
     const items: Array<SftpMenuItem | null> = [
       showEnterAction && row.isDir
         ? {
@@ -302,12 +315,14 @@ function FilePane({
             },
           }
         : null,
-      // 在线编辑仅对远程文件开放；大小/编码校验交由后端权威判定并返回稳定错误码。
+      // 右键、双击与悬停共用预判；未知类型仍交给后端按实际内容判定。
       onEditFile && !row.isDir
         ? {
             label: '编辑',
+            title: editBlockReason ?? undefined,
             icon: <MenuIcon name="edit" />,
-            onSelect: () => onEditFile(row),
+            disabled: editBlockReason !== null,
+            onSelect: () => editFile(row),
           }
         : null,
       {
@@ -477,17 +492,15 @@ function FilePane({
                     }}
                     onDoubleClick={() => {
                       if (row.isDir && row.path) onOpenDir(row.path);
-                      else if (!row.isDir && onEditFile) onEditFile(row);
+                      else if (!row.isDir) editFile(row);
                     }}
-                    // 能力提示只教新交互（双击编辑），约束类说明不在行上预置：
-                    // 超限等拦截由后端在尝试时给出权威且带出路的提示，行内缓存的大小不作为判定依据。
+                    // 列表只解释已知限制，不能通过逐文件读取影响目录加载。
                     title={
                       row.isDir
                         ? openTitle
-                        : onEditFile && canEditRemoteEntry(row)
-                          ? scope === 'local'
-                            ? '双击编辑本地文件'
-                            : '双击编辑远程文件'
+                        : onEditFile
+                          ? (getFileEditBlockReason(row) ??
+                            (scope === 'local' ? '双击编辑本地文件' : '双击编辑远程文件'))
                           : row.name
                     }
                   >

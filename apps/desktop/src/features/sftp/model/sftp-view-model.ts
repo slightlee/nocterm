@@ -140,19 +140,6 @@ export function joinPath(parent: string, name: string): string {
   return `${parent.replace(/\/$/, '')}/${name}`;
 }
 
-/** 在线编辑的字节上限，与 Rust 命令层 `SFTP_EDIT_MAX_BYTES`（2 MiB）保持一致。 */
-export const SFTP_EDIT_MAX_BYTES = 2 * 1024 * 1024;
-
-/**
- * 判断远程条目能否进入在线编辑：仅普通文件可编辑，已知大小时不得超过编辑上限。
- * 大小未知（服务端未报告）时放行——后端读取时会再做权威校验并给出稳定错误码。
- */
-export function canEditRemoteEntry(entry: Pick<FileRow, 'isDir' | 'sizeBytes'>): boolean {
-  if (entry.isDir) return false;
-  if (entry.sizeBytes == null) return true;
-  return entry.sizeBytes <= SFTP_EDIT_MAX_BYTES;
-}
-
 /** 计算远程文件路径的父目录；根下文件返回 `/`，无父目录的裸路径返回 null。 */
 export function remoteParentPath(path: string): string | null {
   const trimmed = path.replace(/\/+$/, '');

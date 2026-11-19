@@ -160,6 +160,7 @@ function SFTPView({ visible = true }: { visible?: boolean }) {
             onClearSelection={resetLocalSelection}
             onOpenDir={(path) => void loadLocalDirectory(path)}
             onEditFile={(row) => void fileEditor.openFile({ kind: 'local', path: row.path ?? '' })}
+            onEditBlocked={showToast}
             onRefresh={() => void loadLocalDirectory(localPath || localListing?.path, true)}
             onSort={(key) => setLocalSort((current) => nextSortState(current, key))}
             onUpload={(rows) => void fileOperations.upload(rows)}
@@ -224,6 +225,7 @@ function SFTPView({ visible = true }: { visible?: boolean }) {
                 connectionId: activeSession.connectionId,
               });
             }}
+            onEditBlocked={showToast}
           />
         </main>
       )}
