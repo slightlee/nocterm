@@ -23,6 +23,15 @@ impl SftpError {
         }
     }
 
+    /// 整个 SFTP 操作超过总时限：保留 timeout 错误码，同时剔除会话释放未完成的句柄。
+    pub(super) fn timed_out(message: impl Into<String>) -> Self {
+        Self {
+            code: "timeout",
+            message: message.into(),
+            evict: true,
+        }
+    }
+
     /// 连接断开类错误：向前端归为 `unknown`，同时标记剔除以便下次自动重连。
     pub(super) fn lost(message: impl Into<String>) -> Self {
         Self {

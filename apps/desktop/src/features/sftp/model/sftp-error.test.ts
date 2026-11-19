@@ -41,4 +41,50 @@ describe('sftp error messages', () => {
       })
     ).toContain('检查目录权限');
   });
+
+  it('explains the online editing rejection reasons', () => {
+    expect(
+      getSftpErrorMessage({ code: 'SFTP_FILE_TOO_LARGE', message: '编辑内容超过在线编辑上限' })
+    ).toContain('在线编辑上限');
+    expect(
+      getSftpErrorMessage({ code: 'SFTP_FILE_NOT_TEXT', message: '文件是二进制内容' })
+    ).toContain('不支持在线编辑');
+  });
+
+  it('explains a remote conflict raised by the editor save path', () => {
+    expect(
+      getSftpErrorMessage({ code: 'SFTP_REMOTE_CHANGED', message: '远端文件已被修改或删除' })
+    ).toContain('已被修改或删除');
+  });
+
+  it('translates an oversized remote file reported by the infrastructure layer', () => {
+    expect(
+      getSftpErrorMessage({
+        code: 'SFTP_REMOTE_READ_FAILED',
+        message: '__NOCTERM_SFTP_ERROR__\tfileTooLarge\t',
+      })
+    ).toContain('在线编辑上限');
+  });
+
+  it('distinguishes open-time file changes from save conflicts', () => {
+    expect(
+      getSftpErrorMessage({ code: 'SFTP_LOCAL_FILE_CHANGED', message: '本地文件已被修改' })
+    ).toContain('已被修改或删除');
+    expect(
+      getSftpErrorMessage({ code: 'SFTP_LOCAL_READ_CHANGED', message: '读取期间发生变化' })
+    ).toContain('打开期间发生变化');
+    expect(
+      getSftpErrorMessage({
+        code: 'SFTP_REMOTE_READ_FAILED',
+        message: '__NOCTERM_SFTP_ERROR__\tremoteReadChanged\t',
+      })
+    ).toContain('打开期间发生变化');
+    expect(
+      getSftpErrorMessage({ code: 'SFTP_LOCAL_FILE_SYMLINK', message: '目标是符号链接' })
+    ).toContain('符号链接');
+    // 磁盘满或暂存提交失败必须提示本地写入，不得误报为远端权限不足。
+    expect(getSftpErrorMessage({ code: 'SFTP_LOCAL_WRITE_FAILED', message: '保存失败' })).toContain(
+      '写入本地文件失败'
+    );
+  });
 });

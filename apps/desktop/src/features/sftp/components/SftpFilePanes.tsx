@@ -1,5 +1,6 @@
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { ContextMenu, type ContextMenuItem } from '../../../shared/components/ContextMenu';
+import { canEditRemoteEntry } from '../model/sftp-view-model';
 import type {
   CreateEditState,
   FileKind,
@@ -13,7 +14,8 @@ import styles from './SFTPView.module.css';
 
 type SftpMenuItem = ContextMenuItem | 'separator';
 
-function FileIcon({ kind }: { kind: FileKind }) {
+/** 文件类型图标：文件面板与顶部编辑标签共用，描边与类型配色由自身样式类保证。 */
+export function FileIcon({ kind }: { kind: FileKind }) {
   const iconClassName = `${styles.fileIcon} ${styles[`fileIcon-${kind}`]}`;
 
   if (kind === 'parent') {
@@ -59,7 +61,7 @@ function RefreshIcon() {
 function MenuIcon({
   name,
 }: {
-  name: 'upload' | 'download' | 'copy' | 'enter' | 'delete' | 'rename' | 'folder';
+  name: 'upload' | 'download' | 'copy' | 'enter' | 'delete' | 'rename' | 'folder' | 'edit';
 }) {
   const icons = {
     upload: (
@@ -108,6 +110,8 @@ function MenuIcon({
         <path d="M9.5 13.5h5" />
       </>
     ),
+    // 编辑与重命名的铅笔图标区分：编辑不带底部横线，为纯铅笔轮廓。
+    edit: <path d="M14.5 4.5 19.5 9.5 10 19H5v-5z" />,
   };
 
   return (
@@ -201,6 +205,8 @@ interface FilePaneProps {
   onSelectAll: () => void;
   onClearSelection: () => void;
   onOpenDir: (path: string) => void;
+  /** 仅远程 pane 提供：双击/右键编辑打开远程文件；缺省时文件行无编辑行为。 */
+  onEditFile?: (row: FileRow) => void;
   onOpenParent: () => void;
   onRefresh: () => void;
   onSort: (key: SortKey) => void;
@@ -263,6 +269,7 @@ function FilePane({
   onSelectAll,
   onClearSelection,
   onOpenDir,
+  onEditFile,
   onOpenParent,
   onRefresh,
   onSort,
@@ -293,6 +300,14 @@ function FilePane({
             onSelect: () => {
               if (row.path) onOpenDir(row.path);
             },
+          }
+        : null,
+      // 在线编辑仅对远程文件开放；大小/编码校验交由后端权威判定并返回稳定错误码。
+      onEditFile && !row.isDir
+        ? {
+            label: '编辑',
+            icon: <MenuIcon name="edit" />,
+            onSelect: () => onEditFile(row),
           }
         : null,
       {
@@ -462,8 +477,19 @@ function FilePane({
                     }}
                     onDoubleClick={() => {
                       if (row.isDir && row.path) onOpenDir(row.path);
+                      else if (!row.isDir && onEditFile) onEditFile(row);
                     }}
-                    title={row.isDir ? openTitle : row.name}
+                    // 能力提示只教新交互（双击编辑），约束类说明不在行上预置：
+                    // 超限等拦截由后端在尝试时给出权威且带出路的提示，行内缓存的大小不作为判定依据。
+                    title={
+                      row.isDir
+                        ? openTitle
+                        : onEditFile && canEditRemoteEntry(row)
+                          ? scope === 'local'
+                            ? '双击编辑本地文件'
+                            : '双击编辑远程文件'
+                          : row.name
+                    }
                   >
                     <span className={styles.nameCell}>
                       <FileIcon kind={row.kind} />
@@ -506,9 +532,10 @@ function FilePane({
 
 interface LocalFilePaneProps extends FilePaneProps {
   onUpload: (rows: FileRow[]) => void;
+  onEditFile?: (row: FileRow) => void;
 }
 
-export function LocalFilePane({ onUpload, ...props }: LocalFilePaneProps) {
+export function LocalFilePane({ onUpload, onEditFile, ...props }: LocalFilePaneProps) {
   return (
     <FilePane
       {...props}
@@ -522,15 +549,17 @@ export function LocalFilePane({ onUpload, ...props }: LocalFilePaneProps) {
       transferSelectedLabel={(count) => `上传选中 ${count} 项`}
       transferIcon="upload"
       onTransfer={onUpload}
+      onEditFile={onEditFile}
     />
   );
 }
 
 interface RemoteFilePaneProps extends FilePaneProps {
   onDownload: (rows: FileRow[]) => void;
+  onEditFile?: (row: FileRow) => void;
 }
 
-export function RemoteFilePane({ onDownload, ...props }: RemoteFilePaneProps) {
+export function RemoteFilePane({ onDownload, onEditFile, ...props }: RemoteFilePaneProps) {
   return (
     <FilePane
       {...props}
@@ -545,6 +574,7 @@ export function RemoteFilePane({ onDownload, ...props }: RemoteFilePaneProps) {
       transferIcon="download"
       showEnterAction
       onTransfer={onDownload}
+      onEditFile={onEditFile}
     />
   );
 }

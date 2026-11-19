@@ -1,0 +1,74 @@
+/*
+ * 文件编辑器主视图样式：激活编辑标签时占满主内容区（替代双栏网格）。
+ * 双栏管理器通过 .managerHidden 隐藏而非销毁，编辑器关闭即原样恢复。
+ * 头部只保留身份信息，不放动作按钮：保存走 Ctrl/Cmd+S，关闭走标签 ×，
+ * 未保存状态走标签橙色圆点；CodeMirror 内部配色走组件内的
+ * EditorView.theme 并引用语义 token，适配深浅主题。
+ */
+
+.editorPanel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.editorHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-secondary);
+  background: var(--bg-secondary);
+}
+
+.editorTitles {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.editorName {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.editorPath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.editorMessage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.editorNotice {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* CodeMirror 宿主：撑满剩余空间，内部滚动交给编辑器的 .cm-scroller。 */
+.editorHost {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}

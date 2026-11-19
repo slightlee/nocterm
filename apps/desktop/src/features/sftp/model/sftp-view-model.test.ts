@@ -1,14 +1,46 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canEditRemoteEntry,
+  getFileKindForName,
+  isRemoteChangedError,
   joinPath,
   nextSortState,
+  remoteParentPath,
   selectRange,
   sortRows,
+  toLocalRows,
   validateNameInput,
 } from './sftp-view-model';
 
 describe('sftp view model', () => {
+  it('hides active random staging files while preserving recovery backups', () => {
+    const names = [
+      '.config.nocterm-0123456789abcdef0123456789abcdef.part',
+      '.config.nocterm-0123456789abcdef0123456789abcdef.backup',
+      'config',
+    ];
+    const rows = toLocalRows({
+      path: '/tmp',
+      parent: '/',
+      entries: names.map((name) => ({
+        name,
+        path: `/tmp/${name}`,
+        isDir: false,
+        size: 3,
+        modifiedAt: 1,
+      })),
+    });
+    expect(rows.map((row) => row.name)).toEqual(names.slice(1));
+  });
+  it('classifies common editable and output file names consistently', () => {
+    expect(getFileKindForName('deploy.sh')).toBe('code');
+    expect(getFileKindForName('config.yaml')).toBe('code');
+    expect(getFileKindForName('nohup.out')).toBe('log');
+    expect(getFileKindForName('.env.production')).toBe('env');
+    expect(getFileKindForName('archive.tar.gz')).toBe('archive');
+  });
+
   it('joins root and nested remote paths without duplicate separators', () => {
     expect(joinPath('/', 'docs')).toBe('/docs');
     expect(joinPath('/var/data/', 'report.txt')).toBe('/var/data/report.txt');
@@ -106,5 +138,29 @@ describe('sftp view model', () => {
     expect(validateNameInput('a/b').error).toContain('路径分隔符');
     expect(validateNameInput('..').error).toContain('相对路径');
     expect(validateNameInput('tab\tname').error).toContain('Tab');
+  });
+
+  it('allows editing only regular files within the size cap', () => {
+    // 目录永远不可编辑；已知大小超限时拒绝；大小未知时放行（后端权威校验）。
+    expect(canEditRemoteEntry({ isDir: true, sizeBytes: 1 })).toBe(false);
+    expect(canEditRemoteEntry({ isDir: false, sizeBytes: 2 * 1024 * 1024 })).toBe(true);
+    expect(canEditRemoteEntry({ isDir: false, sizeBytes: 2 * 1024 * 1024 + 1 })).toBe(false);
+    expect(canEditRemoteEntry({ isDir: false, sizeBytes: null })).toBe(true);
+  });
+
+  it('resolves the remote parent path for nested and root-level files', () => {
+    expect(remoteParentPath('/etc/nginx/nginx.conf')).toBe('/etc/nginx');
+    expect(remoteParentPath('/a.txt')).toBe('/');
+    expect(remoteParentPath('/etc/hosts/')).toBe('/etc');
+    // 无父目录的裸路径与根目录本身没有父目录，返回 null 交由调用方拒绝。
+    expect(remoteParentPath('hosts')).toBeNull();
+    expect(remoteParentPath('/')).toBeNull();
+  });
+
+  it('recognizes the remote-changed conflict error by its stable code', () => {
+    expect(isRemoteChangedError({ code: 'SFTP_REMOTE_CHANGED', message: 'x' })).toBe(true);
+    expect(isRemoteChangedError({ code: 'SFTP_REMOTE_WRITE_FAILED', message: 'x' })).toBe(false);
+    expect(isRemoteChangedError(new Error('boom'))).toBe(false);
+    expect(isRemoteChangedError('SFTP_REMOTE_CHANGED')).toBe(false);
   });
 });

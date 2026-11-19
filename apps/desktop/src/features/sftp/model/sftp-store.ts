@@ -21,13 +21,16 @@ interface SftpState {
   activeId: string | null;
   localPath: string;
   runningTransfers: Record<string, string>;
+  /** 首次真正进入 SFTP 文件页后置位，避免仅创建会话就提前读取本地目录。 */
+  fileViewVisited: boolean;
   selectionSummary: {
     scope: 'local' | 'remote' | null;
     count: number;
     totalSize: number | null;
   };
-  openSession: (connection: ConnectionProfile) => void;
+  openSession: (connection: ConnectionProfile, activate?: boolean) => void;
   setLocalPath: (path: string) => void;
+  markFileViewVisited: () => void;
   setCurrentPath: (connectionId: string, path: string) => void;
   setSessionStatus: (
     connectionId: string,
@@ -63,20 +66,21 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
   activeId: null,
   localPath: '~',
   runningTransfers: {},
+  fileViewVisited: false,
   selectionSummary: {
     scope: null,
     count: 0,
     totalSize: null,
   },
 
-  openSession: (connection) => {
+  openSession: (connection, activate = true) => {
     const nextSession = toSftpSession(connection);
     const connectionId = String(connection.id);
     set((state) => {
       const exists = state.sessions.some((session) => session.connectionId === connectionId);
 
       return {
-        activeId: connectionId,
+        activeId: activate ? connectionId : state.activeId,
         sessions: exists
           ? state.sessions.map((session) =>
               session.connectionId === connectionId
@@ -107,6 +111,8 @@ export const useSftpStore = create<SftpState>()((set, get) => ({
 
   // 本地面板由所有文件会话共享；保留最后成功目录，避免路由重挂载后回到用户主目录。
   setLocalPath: (localPath) => set({ localPath }),
+
+  markFileViewVisited: () => set({ fileViewVisited: true }),
 
   setCurrentPath: (connectionId, path) => {
     set((state) => ({

@@ -73,6 +73,7 @@ pub fn connection_create(
 #[tauri::command]
 pub fn connection_update(
     state: State<'_, AppState>,
+    transfers: State<'_, SftpTransferState>,
     request: ConnectionCreateRequest,
     credential: Option<CredentialInputRequest>,
 ) -> Result<ConnectionResponse, ErrorResponse> {
@@ -99,10 +100,43 @@ pub fn connection_update(
         })
         .transpose()?;
     let request = validate_private_key_path(request)?;
+    // 配置修改不能与文件保存交错；立即拒绝繁忙连接，不阻塞桌面事件循环。
+    let target = state
+        .file_targets()
+        .connection(id)
+        .map_err(ErrorResponse::from)?;
+    let mut target = target.try_lock().map_err(|_| {
+        ErrorResponse::from(AppError::new(
+            "SFTP_FILE_OPERATION_BUSY",
+            "文件仍在读写，请完成后再修改连接",
+            true,
+        ))
+    })?;
+    let previous = state
+        .connection_service()
+        .get(id)
+        .map_err(ErrorResponse::from)?;
+    if transfers.has_running(id)? {
+        return Err(AppError::new(
+            "SFTP_FILE_OPERATION_BUSY",
+            "文件仍在传输或保存，请完成后再修改连接",
+            true,
+        )
+        .into());
+    }
+    let previous_revision = target.observe(&previous);
+    let credentials_changed = credential.is_some();
     let updated = state
         .connection_service()
         .update_with_credential(id, CreateConnection::from(request), credential)
         .map_err(ErrorResponse::from)?;
+    if credentials_changed {
+        target.invalidate();
+    }
+    if target.observe(&updated) != previous_revision {
+        state.sftp_manager().close_connection(id);
+        state.session_passwords().forget(id);
+    }
     Ok(ConnectionResponse::from(updated))
 }
 
@@ -156,6 +190,17 @@ pub fn connection_delete(
     transfers: State<'_, SftpTransferState>,
     id: i64,
 ) -> Result<(), ErrorResponse> {
+    let target = state
+        .file_targets()
+        .connection(id)
+        .map_err(ErrorResponse::from)?;
+    let mut target = target.try_lock().map_err(|_| {
+        ErrorResponse::from(AppError::new(
+            "SFTP_FILE_OPERATION_BUSY",
+            "文件仍在读写，请完成后再删除连接",
+            true,
+        ))
+    })?;
     // 凭据和连接资料删除后无法再清理远端临时文件，因此先等待相关传输完整退出。
     transfers.cancel_connection_and_wait(id, Duration::from_secs(5))?;
     // 关闭复用的进程内 SFTP 会话，释放底层 russh 连接。
@@ -166,10 +211,14 @@ pub fn connection_delete(
         .terminal_service()
         .close_connection(id)
         .map_err(ErrorResponse::from)?;
-    state
+    let result = state
         .connection_service()
         .delete_with_credentials(id)
-        .map_err(ErrorResponse::from)
+        .map_err(ErrorResponse::from);
+    if result.is_ok() {
+        target.invalidate();
+    }
+    result
 }
 
 #[tauri::command]

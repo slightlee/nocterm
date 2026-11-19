@@ -23,6 +23,16 @@ pub(super) struct ConnectParams {
     pub port: u16,
     pub username: String,
     pub auth: Auth,
+    target: SessionTarget,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SessionTarget {
+    host: String,
+    port: u16,
+    username: String,
+    authentication: &'static str,
+    private_key_path: Option<String>,
 }
 
 /// 池中的单个 SFTP 会话：持有 russh 连接句柄以维持底层连接，附带其上的 SFTP 会话。
@@ -30,6 +40,7 @@ pub(super) struct SftpConnection {
     /// 保活连接句柄；一旦释放，russh 会断开连接并关闭 SFTP 通道。
     _handle: Handle<ClientHandler>,
     pub sftp: SftpSession,
+    target: SessionTarget,
 }
 
 /// 会话池类型别名：按连接标识汇聚，供多个操作以 `Arc` 并发共享同一 SFTP 会话。
@@ -48,6 +59,13 @@ pub(super) fn connect_params(
         port: profile.port,
         username: profile.username.clone(),
         auth,
+        target: SessionTarget {
+            host: profile.host.clone(),
+            port: profile.port,
+            username: profile.username.clone(),
+            authentication: profile.authentication.as_str(),
+            private_key_path: profile.private_key_path.clone(),
+        },
     })
 }
 
@@ -63,16 +81,22 @@ pub(super) async fn ensure_session(
         .ok()
         .and_then(|pool| pool.get(&connection_id).cloned())
     {
-        return Ok(existing);
+        // 旧目录请求可能晚于配置更新完成；不能仅因数据库主键相同就复用旧服务器。
+        if existing.target == params.target {
+            return Ok(existing);
+        }
     }
     // 未命中则实际建连；建连在锁外进行，避免长时间持锁阻塞其它连接的操作。
     let connection = Arc::new(establish(params).await?);
     if let Ok(mut pool) = sessions.lock() {
         // 双重检查：并发建连时以先入者为准，丢弃本次多建的连接。
-        let entry = pool
-            .entry(connection_id)
-            .or_insert_with(|| connection.clone());
-        return Ok(entry.clone());
+        if let Some(existing) = pool.get(&connection_id)
+            && existing.target == connection.target
+        {
+            return Ok(existing.clone());
+        }
+        pool.insert(connection_id, connection.clone());
+        return Ok(connection);
     }
     Ok(connection)
 }
@@ -103,6 +127,7 @@ async fn establish(params: ConnectParams) -> Result<SftpConnection, SftpError> {
     Ok(SftpConnection {
         _handle: handle,
         sftp,
+        target: params.target,
     })
 }
 

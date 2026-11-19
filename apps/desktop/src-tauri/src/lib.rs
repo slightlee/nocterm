@@ -67,6 +67,7 @@ pub fn run() {
             }
             app.manage(SftpLocalDirectoryState::default());
             app.manage(SftpTransferState::default());
+            app.manage(platform::file_editor_close::FileEditorCloseState::default());
             // 任务栏图标在高缩放下被系统拉伸发糊：按窗口 DPI 显式设置大/小图标。
             #[cfg(target_os = "windows")]
             if let Some(window) = app.get_webview_window("main") {
@@ -132,10 +133,39 @@ pub fn run() {
             commands::sftp::download_remote_to_local,
             commands::sftp::cancel_file_transfer,
             commands::sftp::close_sftp_session,
+            commands::file_editor::sftp_read_remote_file,
+            commands::file_editor::sftp_write_remote_file,
+            commands::file_editor::sftp_read_local_file,
+            commands::file_editor::sftp_write_local_file,
+            commands::file_editor::file_editor_enable_close_guard,
+            commands::file_editor::file_editor_resolve_close,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Nocterm desktop application");
     app.run(|app_handle, event| {
+        match &event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } => {
+                if platform::file_editor_close::request_close(
+                    app_handle,
+                    platform::file_editor_close::CloseIntent::Window(label.clone()),
+                ) {
+                    api.prevent_close();
+                }
+            }
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                if platform::file_editor_close::request_close(
+                    app_handle,
+                    platform::file_editor_close::CloseIntent::Exit,
+                ) {
+                    api.prevent_exit();
+                }
+            }
+            _ => {}
+        }
         if matches!(event, tauri::RunEvent::Exit) {
             shutdown_sftp(app_handle);
         }

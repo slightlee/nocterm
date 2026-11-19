@@ -22,6 +22,7 @@ afterEach(() => {
     activeId: null,
     localPath: '~',
     runningTransfers: {},
+    fileViewVisited: false,
     selectionSummary: { scope: null, count: 0, totalSize: null },
   });
 });
@@ -96,6 +97,13 @@ describe('sftp session store', () => {
     store.closeSession('1');
 
     expect(useSftpStore.getState().localPath).toBe('C:\\work\\releases');
+  });
+
+  it('marks the file view visited without opening another session', () => {
+    expect(useSftpStore.getState().fileViewVisited).toBe(false);
+    useSftpStore.getState().markFileViewVisited();
+    expect(useSftpStore.getState().fileViewVisited).toBe(true);
+    expect(useSftpStore.getState().sessions).toHaveLength(0);
   });
 
   it('tracks running transfers by connection until they finish', () => {

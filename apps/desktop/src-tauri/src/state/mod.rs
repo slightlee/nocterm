@@ -19,6 +19,7 @@ use nocterm_application::{
     ai_conversation::AiConversationService,
     ai_execution::AiExecutionService,
     connection::ConnectionService,
+    file_target::FileTargetRegistry,
     health::HealthService,
     settings::SettingsService,
     terminal::{LocalTerminalService, TerminalService},
@@ -48,6 +49,7 @@ pub struct AppState {
     local_terminal_service: LocalTerminalService,
     /// 进程内 SFTP 会话管理器：与终端共用 russh 后端，承载远程文件浏览与传输。
     sftp_manager: Arc<SftpManager>,
+    file_targets: Arc<FileTargetRegistry>,
     /// 终端交互输入的登录口令缓存，仅内存驻留，供同连接的其他标签与 SFTP 复用。
     /// 用 `Arc` 是为了让终端的输出线程能持有一份句柄，在会话收尾时归还租约。
     session_passwords: Arc<SessionPasswords>,
@@ -502,6 +504,7 @@ impl AppState {
                 LocalTerminalManager::default(),
             )),
             sftp_manager: Arc::new(SftpManager::default()),
+            file_targets: Arc::new(FileTargetRegistry::default()),
             session_passwords: Arc::new(SessionPasswords::default()),
             ai_processes: Arc::new(AiProcessManager::default()),
             ai_provider_runtimes: Arc::new(PersistentProviderRuntimeRegistry::default()),
@@ -546,6 +549,10 @@ impl AppState {
     /// 返回共享的 SFTP 会话管理器，供远程文件命令复用同一会话池。
     pub fn sftp_manager(&self) -> &Arc<SftpManager> {
         &self.sftp_manager
+    }
+
+    pub fn file_targets(&self) -> &Arc<FileTargetRegistry> {
+        &self.file_targets
     }
 
     /// 返回会话级口令缓存：终端交互输入的口令由此供 SFTP 与后续终端标签复用。

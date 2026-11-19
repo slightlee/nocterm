@@ -13,7 +13,11 @@ import { AiPanelToggle } from '../../features/ai';
 import { useSettings } from '../../features/settings';
 import {
   disconnectSftpSession,
+  beginFileEditorClose,
+  FileIcon,
+  getFileKindForName,
   getSftpErrorMessage,
+  useFileEditorStore,
   useSftpFeedback,
   useSftpStore,
 } from '../../features/sftp';
@@ -22,6 +26,10 @@ import { PanelSideIcon } from '../../shared/components/PanelSideIcon';
 import { TabContextMenu } from '../../shared/components/TabContextMenu';
 import {
   createWorkspaceSessionTabKeys,
+  editorWorkspaceTabKey,
+  expandWorkspaceTabCloseKeys,
+  preserveWorkspaceEditorParent,
+  resolveWorkspaceTabCloseFallback,
   formatWorkspaceSessionNumber,
   resolveWorkspaceTabOverflow,
   sftpWorkspaceTabKey,
@@ -75,12 +83,31 @@ export function WorkspaceSessionTabs({
   const activateSftp = useSftpStore((state) => state.setActive);
   const closeSftp = useSftpStore((state) => state.closeSession);
   const hasRunningTransfers = useSftpStore((state) => state.hasRunningTransfers);
+  const editors = useFileEditorStore((state) => state.editors);
+  const activeEditorId = useFileEditorStore((state) => state.activeEditorId);
+  const activateEditor = useFileEditorStore((state) => state.activateEditor);
+  const closeEditors = useFileEditorStore((state) => state.closeEditors);
+  // 关闭确认与异步断开期间禁止叠加另一批关闭请求，避免确认状态互相覆盖。
+  const closingRef = useRef(false);
   const { toasts, confirmState, showToast, requestConfirm, closeConfirm } = useSftpFeedback();
   const tabViewportRef = useRef<HTMLDivElement>(null);
   const [tabOverflow, setTabOverflow] = useState({ left: false, right: false });
   const tabKeys = createWorkspaceSessionTabKeys(
     terminalSessions.map((session) => session.id),
-    sftpSessions.map((session) => session.connectionId)
+    sftpSessions.map((session) => session.connectionId),
+    editors.map((editor) => editor.id)
+  );
+  const activeKey =
+    activeEditorId !== null && activeView === 'sftp'
+      ? editorWorkspaceTabKey(activeEditorId)
+      : activeEditorId === null && activeView === 'terminal' && activeTerminalId !== null
+        ? terminalWorkspaceTabKey(activeTerminalId)
+        : activeEditorId === null && activeView === 'sftp' && activeSftpId !== null
+          ? sftpWorkspaceTabKey(activeSftpId)
+          : null;
+  const editorsByKey = useMemo(
+    () => new Map(editors.map((editor) => [editorWorkspaceTabKey(editor.id), editor])),
+    [editors]
   );
   const terminalSessionsByKey = useMemo(
     () =>
@@ -111,7 +138,7 @@ export function WorkspaceSessionTabs({
           label: `终端 ${number}`,
           searchText: `${session.username} ${session.host} ${session.port}`,
           status,
-          current: activeView === 'terminal' && session.id === activeTerminalId,
+          current: activeKey === terminalWorkspaceTabKey(session.id),
           title: `${session.name} · 终端 ${number} · ${session.username}@${session.host}:${session.port}`,
         };
       }
@@ -124,7 +151,7 @@ export function WorkspaceSessionTabs({
         label: session.name,
         searchText: 'local shell 本地终端',
         status,
-        current: activeView === 'terminal' && session.id === activeTerminalId,
+        current: activeKey === terminalWorkspaceTabKey(session.id),
         title: session.name,
       };
     }),
@@ -136,8 +163,24 @@ export function WorkspaceSessionTabs({
       label: '文件',
       searchText: `${session.username} ${session.host} ${session.port} ${session.currentPath}`,
       status: session.status,
-      current: activeView === 'sftp' && session.connectionId === activeSftpId,
+      current: activeKey === sftpWorkspaceTabKey(session.connectionId),
       title: `${session.connectionName} · 文件 · ${session.username}@${session.host}:${session.port}`,
+    })),
+    ...editors.map((editor): WorkspaceSessionIndexEntry => ({
+      key: editorWorkspaceTabKey(editor.id),
+      groupId: editor.source.kind === 'remote' ? `remote:${editor.source.connectionId}` : 'local',
+      groupLabel:
+        editor.source.kind === 'remote'
+          ? (sftpSessionsByKey.get(sftpWorkspaceTabKey(editor.source.connectionId))
+              ?.connectionName ?? '远程')
+          : '本地',
+      kind: 'file',
+      label: `${editor.source.kind === 'local' ? '本地' : '远程'} · ${editor.name}${editor.dirty ? ' · 未保存' : ''}`,
+      searchText: editor.source.path,
+      // 编辑器不扩展连接状态协议；加载映射为 connecting，其余为可用。
+      status: editor.status === 'loading' ? 'connecting' : 'connected',
+      current: activeKey === editorWorkspaceTabKey(editor.id),
+      title: `${editor.source.kind === 'local' ? '本地' : '远程'} · ${editor.source.path}`,
     })),
   ];
 
@@ -162,7 +205,7 @@ export function WorkspaceSessionTabs({
       observer.observe(viewport.firstElementChild);
     }
     return () => observer.disconnect();
-  }, [sftpSessions.length, terminalSessions.length, updateTabOverflow]);
+  }, [editors.length, sftpSessions.length, terminalSessions.length, updateTabOverflow]);
 
   useEffect(() => {
     // 新建或从侧栏切换会话时，活动标签必须始终回到横向可视区域。
@@ -175,7 +218,7 @@ export function WorkspaceSessionTabs({
     }
     const frame = window.requestAnimationFrame(updateTabOverflow);
     return () => window.cancelAnimationFrame(frame);
-  }, [activeSftpId, activeTerminalId, activeView, updateTabOverflow]);
+  }, [activeEditorId, activeSftpId, activeTerminalId, activeView, updateTabOverflow]);
 
   const handleTabWheel = (event: WheelEvent<HTMLDivElement>) => {
     if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
@@ -193,68 +236,155 @@ export function WorkspaceSessionTabs({
     });
   };
 
-  const activateSession = (key: WorkspaceSessionTabKey) => {
-    // 带类型前缀的 key 避免数据库连接 ID 在两个 Store 之间发生碰撞。
-    const terminalSession = terminalSessionsByKey.get(key);
-    if (terminalSession) {
-      activateTerminal(terminalSession.id);
-      navigate('/connections');
-      return;
-    }
+  const activateSession = useCallback(
+    (key: WorkspaceSessionTabKey) => {
+      // 所有入口（标签、索引、关闭回退）共享同一路由与 Store 激活顺序。
+      const editor = editorsByKey.get(key);
+      if (editor) {
+        // setActive 会清除编辑器选择，必须先选父连接再恢复目标编辑器。
+        if (editor.source.kind === 'remote') activateSftp(editor.source.connectionId);
+        activateEditor(editor.id);
+        navigate('/sftp');
+        return;
+      }
+      const terminalSession = terminalSessionsByKey.get(key);
+      if (terminalSession) {
+        activateEditor(null);
+        activateTerminal(terminalSession.id);
+        navigate('/connections');
+        return;
+      }
+      const sftpSession = sftpSessionsByKey.get(key);
+      if (sftpSession) {
+        activateSftp(sftpSession.connectionId);
+        activateEditor(null);
+        navigate('/sftp');
+      }
+    },
+    [
+      activateEditor,
+      activateSftp,
+      activateTerminal,
+      editorsByKey,
+      navigate,
+      sftpSessionsByKey,
+      terminalSessionsByKey,
+    ]
+  );
 
-    const sftpSession = sftpSessionsByKey.get(key);
-    if (sftpSession) {
-      activateSftp(sftpSession.connectionId);
-      navigate('/sftp');
-    }
+  const createLocalTerminal = () => {
+    activateEditor(null);
+    onCreateLocalTerminal();
+  };
+
+  const closeFromContextMenu = (keys: WorkspaceSessionTabKey[], target: WorkspaceSessionTabKey) => {
+    void handleCloseTabs(preserveWorkspaceEditorParent(keys, target, editors));
   };
 
   const handleCloseTabs = useCallback(
     async (keys: WorkspaceSessionTabKey[]) => {
-      const terminalIds = keys
-        .map((key) => terminalSessionsByKey.get(key)?.id)
-        .filter((id): id is string => id !== undefined);
-      const sftpIds = keys
-        .map((key) => sftpSessionsByKey.get(key)?.connectionId)
-        .filter((id): id is string => id !== undefined);
+      if (closingRef.current) return;
+      closingRef.current = true;
+      let releaseEditors: (() => void) | null = null;
+      try {
+        const expandedKeys = expandWorkspaceTabCloseKeys(
+          keys,
+          useFileEditorStore.getState().editors
+        );
+        const terminalIds = expandedKeys
+          .map((key) => terminalSessionsByKey.get(key)?.id)
+          .filter((id): id is string => id !== undefined);
+        const sftpIds = expandedKeys
+          .map((key) => sftpSessionsByKey.get(key)?.connectionId)
+          .filter((id): id is string => id !== undefined);
+        const closingEditors = () =>
+          useFileEditorStore
+            .getState()
+            .editors.filter((editor) => expandedKeys.includes(editorWorkspaceTabKey(editor.id)));
+        if (closingEditors().some((editor) => editor.status === 'saving')) {
+          showToast('文件正在保存，请等待保存完成后再关闭。');
+          return;
+        }
 
-      if (sftpIds.length > 0 && hasRunningTransfers(sftpIds)) {
-        const confirmed = await requestConfirm({
-          title: '关闭文件标签',
-          message:
-            sftpIds.length === 1
-              ? '该标签仍有文件正在传输，关闭会取消传输并断开连接。是否继续？'
-              : '待关闭标签中仍有文件正在传输，关闭会取消相关传输并断开连接。是否继续？',
-          confirmLabel: '关闭标签',
-          danger: true,
-        });
-        if (!confirmed) return;
-      }
+        if (sftpIds.length > 0 && hasRunningTransfers(sftpIds)) {
+          const confirmed = await requestConfirm({
+            title: '关闭文件标签',
+            message:
+              sftpIds.length === 1
+                ? '该标签仍有文件正在传输，关闭会取消传输并断开连接。是否继续？'
+                : '待关闭标签中仍有文件正在传输，关闭会取消相关传输并断开连接。是否继续？',
+            confirmLabel: '关闭标签',
+            danger: true,
+          });
+          if (!confirmed) return;
+        }
 
-      terminalIds.forEach((id) => closeTerminal(id));
-      let failureCount = 0;
-      for (const connectionId of sftpIds) {
-        try {
-          await disconnectSftpSession(connectionId);
-          closeSftp(connectionId);
-        } catch (error) {
-          failureCount += 1;
-          if (sftpIds.length === 1) {
-            showToast(`断开 SFTP 失败：${getSftpErrorMessage(error)}`);
+        releaseEditors = await beginFileEditorClose(
+          closingEditors().map((editor) => editor.id),
+          requestConfirm,
+          showToast
+        );
+        if (!releaseEditors) return;
+        const closedKeys: WorkspaceSessionTabKey[] = [];
+        const independentEditorIds = closingEditors()
+          .filter(
+            (editor) =>
+              editor.source.kind === 'local' || !sftpIds.includes(editor.source.connectionId)
+          )
+          .map((editor) => editor.id);
+        closeEditors(independentEditorIds);
+        closedKeys.push(...independentEditorIds.map(editorWorkspaceTabKey));
+        terminalIds.forEach((id) => closeTerminal(id));
+        closedKeys.push(...terminalIds.map(terminalWorkspaceTabKey));
+        let failureCount = 0;
+        for (const connectionId of sftpIds) {
+          try {
+            await disconnectSftpSession(connectionId);
+            // 断开失败必须保留整个父子组；只在后端确认成功后释放编辑内容。
+            const dependentIds = closingEditors()
+              .filter(
+                (editor) =>
+                  editor.source.kind === 'remote' && editor.source.connectionId === connectionId
+              )
+              .map((editor) => editor.id);
+            closeEditors(dependentIds);
+            closeSftp(connectionId);
+            closedKeys.push(
+              sftpWorkspaceTabKey(connectionId),
+              ...dependentIds.map(editorWorkspaceTabKey)
+            );
+          } catch (error) {
+            failureCount += 1;
+            if (sftpIds.length === 1) {
+              showToast(`断开 SFTP 失败：${getSftpErrorMessage(error)}`);
+            }
           }
         }
-      }
-      if (sftpIds.length > 1 && failureCount > 0) {
-        showToast(`有 ${failureCount} 个文件标签关闭失败，请重试。`);
+        if (sftpIds.length > 1 && failureCount > 0) {
+          showToast(`有 ${failureCount} 个文件标签关闭失败，请重试。`);
+        }
+        const fallback = resolveWorkspaceTabCloseFallback(tabKeys, activeKey, closedKeys);
+        if (activeKey && closedKeys.includes(activeKey)) {
+          if (fallback) activateSession(fallback);
+          else activateEditor(null);
+        }
+      } finally {
+        releaseEditors?.();
+        closingRef.current = false;
       }
     },
     [
+      activateEditor,
+      activateSession,
+      activeKey,
+      closeEditors,
       closeSftp,
       closeTerminal,
       hasRunningTransfers,
       requestConfirm,
       sftpSessionsByKey,
       showToast,
+      tabKeys,
       terminalSessionsByKey,
     ]
   );
@@ -265,12 +395,6 @@ export function WorkspaceSessionTabs({
 
     void onAppMenuAction((action) => {
       if (action !== 'close-current-tab') return;
-      const activeKey =
-        activeView === 'terminal' && activeTerminalId !== null
-          ? terminalWorkspaceTabKey(activeTerminalId)
-          : activeView === 'sftp' && activeSftpId !== null
-            ? sftpWorkspaceTabKey(activeSftpId)
-            : null;
       if (activeKey) void handleCloseTabs([activeKey]);
     })
       .then((dispose) => {
@@ -285,7 +409,7 @@ export function WorkspaceSessionTabs({
       disposed = true;
       unlisten?.();
     };
-  }, [activeSftpId, activeTerminalId, activeView, handleCloseTabs]);
+  }, [activeKey, handleCloseTabs]);
 
   return (
     <div className={styles.tabThemeScope} data-terminal-theme={terminalThemeId}>
@@ -316,7 +440,7 @@ export function WorkspaceSessionTabs({
           <button
             aria-label="新建本地终端"
             className={styles.panelToggle}
-            onClick={onCreateLocalTerminal}
+            onClick={createLocalTerminal}
             title="新建本地终端"
             type="button"
           >
@@ -354,7 +478,7 @@ export function WorkspaceSessionTabs({
             <div className={styles.remoteTabTrack}>
               <div aria-label="终端与文件会话" className={styles.sessionTabList} role="tablist">
                 {terminalSessions.map((session) => {
-                  const selected = activeView === 'terminal' && session.id === activeTerminalId;
+                  const selected = activeKey === terminalWorkspaceTabKey(session.id);
                   const currentStatus = terminalStatus(
                     session.id,
                     activeTerminalId,
@@ -378,7 +502,7 @@ export function WorkspaceSessionTabs({
                       ids={tabKeys}
                       key={key}
                       targetId={key}
-                      onClose={(keys) => void handleCloseTabs(keys)}
+                      onClose={(keys) => closeFromContextMenu(keys, key)}
                     >
                       <div
                         className={`${styles.tab} ${selected ? styles.active : ''}`}
@@ -388,10 +512,7 @@ export function WorkspaceSessionTabs({
                           aria-label={`切换到 ${accessibleName}`}
                           aria-selected={selected}
                           className={styles.tabSelect}
-                          onClick={() => {
-                            activateTerminal(session.id);
-                            navigate('/connections');
-                          }}
+                          onClick={() => activateSession(key)}
                           role="tab"
                           title={tabTitle}
                           type="button"
@@ -424,7 +545,7 @@ export function WorkspaceSessionTabs({
                 })}
 
                 {sftpSessions.map((session) => {
-                  const selected = activeView === 'sftp' && session.connectionId === activeSftpId;
+                  const selected = activeKey === sftpWorkspaceTabKey(session.connectionId);
                   const key = sftpWorkspaceTabKey(session.connectionId);
                   const title = `${session.connectionName} · 文件 · ${session.username}@${session.host}:${session.port}`;
                   return (
@@ -432,7 +553,7 @@ export function WorkspaceSessionTabs({
                       ids={tabKeys}
                       key={key}
                       targetId={key}
-                      onClose={(keys) => void handleCloseTabs(keys)}
+                      onClose={(keys) => closeFromContextMenu(keys, key)}
                     >
                       <div
                         className={`${styles.tab} ${styles.fileTab} ${selected ? styles.active : ''}`}
@@ -442,10 +563,7 @@ export function WorkspaceSessionTabs({
                           aria-label={`切换到 ${session.connectionName} 的文件管理`}
                           aria-selected={selected}
                           className={styles.tabSelect}
-                          onClick={() => {
-                            activateSftp(session.connectionId);
-                            navigate('/sftp');
-                          }}
+                          onClick={() => activateSession(key)}
                           role="tab"
                           title={title}
                           type="button"
@@ -467,13 +585,62 @@ export function WorkspaceSessionTabs({
                     </TabContextMenu>
                   );
                 })}
+                {editors.map((editor) => {
+                  const key = editorWorkspaceTabKey(editor.id);
+                  const selected = activeKey === key;
+                  const local = editor.source.kind === 'local';
+                  return (
+                    <TabContextMenu
+                      ids={tabKeys}
+                      key={key}
+                      targetId={key}
+                      onClose={(keys) => closeFromContextMenu(keys, key)}
+                    >
+                      <div
+                        className={`${styles.tab} ${styles.fileTab} ${selected ? styles.active : ''}`}
+                        data-no-window-drag="true"
+                      >
+                        <button
+                          aria-label={`切换到 ${local ? '本地' : '远程'}文件 ${editor.name}${editor.dirty ? '，未保存' : ''}`}
+                          aria-selected={selected}
+                          className={styles.tabSelect}
+                          onClick={() => activateSession(key)}
+                          role="tab"
+                          title={`${local ? '本地' : '远程'} · ${editor.source.path}`}
+                          type="button"
+                        >
+                          {/* 标签图标表达文件类型（与文件面板同一套分类），来源由悬浮提示说明。 */}
+                          <span aria-hidden="true" className={styles.editorSourceBadge}>
+                            <FileIcon kind={getFileKindForName(editor.name)} />
+                          </span>
+                          <span className={styles.tabName}>{editor.name}</span>
+                          {editor.status === 'saving' ? (
+                            <span aria-label="正在保存" className={styles.editorSavingIndicator} />
+                          ) : editor.dirty ? (
+                            <span aria-label="未保存" className={styles.editorDirtyDot} />
+                          ) : null}
+                        </button>
+                        <button
+                          aria-label={`关闭 ${editor.name}`}
+                          className={styles.tabClose}
+                          disabled={editor.status === 'saving'}
+                          onClick={() => void handleCloseTabs([key])}
+                          title={editor.status === 'saving' ? '正在保存' : '关闭编辑器'}
+                          type="button"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </TabContextMenu>
+                  );
+                })}
               </div>
 
               {!sidebarCollapsed && tabKeys.length > 0 ? (
                 <button
                   aria-label="新建本地终端"
                   className={styles.newLocalTabButton}
-                  onClick={onCreateLocalTerminal}
+                  onClick={createLocalTerminal}
                   title="新建本地终端"
                   type="button"
                 >

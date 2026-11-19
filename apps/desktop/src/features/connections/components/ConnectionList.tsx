@@ -22,7 +22,13 @@ import type { ConnectionProfile } from '../types/connection-types';
 import { useTerminalStore, type TerminalSession, type TerminalSessionId } from '../../terminal';
 import styles from './ConnectionList.module.css';
 import { onConnectionDialogRequested } from '../model/connection-events';
-import { useSftpStore } from '../../sftp';
+import {
+  useSftpStore,
+  useFileEditorStore,
+  withFileEditorClose,
+  withFileEditorTargetChange,
+  remoteEditorIds,
+} from '../../sftp';
 
 const ACTION_FEEDBACK_TIMEOUT_MS = 5_000;
 type RemoteTerminalSession = Extract<TerminalSession, { kind: 'remote' }>;
@@ -182,6 +188,7 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
     // 切回已有文件会话时保留当前目录、筛选和传输上下文。
     if (sftpSessionsByConnectionId.has(connectionId)) activateSftpSession(connectionId);
     else openSftpSession(connection);
+    useFileEditorStore.getState().activateEditor(null);
     navigate('/sftp');
   };
 
@@ -431,12 +438,18 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
                     }}
                     onDelete={() => {
                       if (window.confirm(`确定删除连接“${connection.name}”吗？`)) {
-                        void remove(connection.id)
-                          .then(() => {
+                        const id = String(connection.id);
+                        void withFileEditorClose(
+                          remoteEditorIds(id),
+                          async (options) => window.confirm(options.message),
+                          setActionError,
+                          async () => {
+                            await remove(connection.id);
                             closeConnectionSessions(connection.id);
-                            closeSftpSession(String(connection.id));
-                          })
-                          .catch(() => undefined);
+                            useFileEditorStore.getState().closeEditors(remoteEditorIds(id));
+                            closeSftpSession(id);
+                          }
+                        ).catch((error) => setActionError(normalizeConnectionError(error).message));
                       }
                     }}
                     onClone={() => void cloneConnection(connection)}
@@ -510,9 +523,15 @@ export function ConnectionList({ mode = 'terminal' }: { mode?: 'terminal' | 'sft
           onCreate={async (request) => {
             if (editing) {
               const requiresReconnect = connectionRequiresReconnect(editing, request);
-              const saved = await update({ ...request, id: editing.id });
+              const save = () => update({ ...request, id: editing.id });
+              const saved = requiresReconnect
+                ? await withFileEditorTargetChange(String(editing.id), save)
+                : await save();
               syncTerminalConnectionName(saved.id, saved.name);
               syncSftpConnectionName(String(saved.id), saved.name);
+              if (requiresReconnect && sftpSessionsByConnectionId.has(String(saved.id))) {
+                openSftpSession(saved, false);
+              }
               if (
                 requiresReconnect &&
                 sessions.some(

@@ -3,5 +3,6 @@
 #[cfg(target_os = "macos")]
 pub mod macos_menu;
 
+pub mod file_editor_close;
 #[cfg(target_os = "windows")]
 pub mod windows_icon;
