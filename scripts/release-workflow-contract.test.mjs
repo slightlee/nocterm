@@ -73,6 +73,8 @@ describe('release workflow contract', () => {
 
     assert.deepEqual(tauriConfig.bundle.icon, desktopIcons);
     assert.equal(tauriConfig.bundle.windows.nsis.installerIcon, 'icons/icon.ico');
+    // NSIS 卸载器使用独立图标配置，不能仅依赖安装器或应用图标。
+    assert.equal(tauriConfig.bundle.windows.nsis.uninstallerIcon, 'icons/icon.ico');
     for (const icon of desktopIcons) {
       const path = `apps/desktop/src-tauri/${icon}`;
       assert.equal(existsSync(path), true, `Missing desktop icon: ${path}`);
