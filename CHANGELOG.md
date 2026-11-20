@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0-beta.4](https://github.com/slightlee/nocterm/compare/v0.3.0-beta.3...v0.3.0-beta.4) (2026-11-20)
+
+
+### Features
+
+* add safe text editing for local and remote files ([#130](https://github.com/slightlee/nocterm/issues/130)) ([1df2e72](https://github.com/slightlee/nocterm/commit/1df2e725f99c004eee97f6b51e407d103c45dcd2))
+
+
+### Bug Fixes
+
+* preload ssh shell integration via pty exec spawn ([#127](https://github.com/slightlee/nocterm/issues/127)) ([c5a41a8](https://github.com/slightlee/nocterm/commit/c5a41a843e3ed5c883db34299cdaef2e65e10cfd))
+* preserve macos dmg layout in ci ([#131](https://github.com/slightlee/nocterm/issues/131)) ([c12367e](https://github.com/slightlee/nocterm/commit/c12367e3a6828967d421b7503332913a1c069629))
+* rebind ai sessions to the terminal after ssh reconnect ([#128](https://github.com/slightlee/nocterm/issues/128)) ([e882fcc](https://github.com/slightlee/nocterm/commit/e882fcc7130e68b9f6640be7c08d245f73ad5689))
+
 ## [0.3.0-beta.3](https://github.com/slightlee/nocterm/compare/v0.3.0-beta.2...v0.3.0-beta.3) (2026-11-09)
 
 
