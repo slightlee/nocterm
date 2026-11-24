@@ -10,6 +10,8 @@ use super::{
 
 fn identity() -> ProviderSessionIdentity {
     ProviderSessionIdentity {
+        model: None,
+        reasoning_effort: None,
         connection_id: Some(7),
         target_session_id: None,
         working_directory: None,
@@ -428,6 +430,46 @@ fn mcp_config_argument(args: &[String]) -> Value {
 
 /// MCP 配置必须只暴露 Nocterm bridge；未绑定终端时保持空清单。
 /// 任何额外的 MCP 服务器都可能让回答读取错误机器的信息，破坏目标绑定。
+#[test]
+fn claude_passes_explicit_model_as_one_option() {
+    let identity = ProviderSessionIdentity {
+        model: Some("vendor/model:small".into()),
+        reasoning_effort: Some("high".into()),
+        ..identity()
+    };
+    let plan = provider_adapter("claude-code")
+        .unwrap()
+        .prepare_launch(launch("test", None, &identity))
+        .unwrap();
+    let ProviderLaunchPlan::Headless(prepared) = plan else {
+        panic!("expected headless launch")
+    };
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|args| args == ["--model", "vendor/model:small"])
+    );
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|args| args == ["--effort", "high"])
+    );
+    let default_identity = ProviderSessionIdentity {
+        reasoning_effort: None,
+        ..identity
+    };
+    let ProviderLaunchPlan::Headless(default) = provider_adapter("claude-code")
+        .unwrap()
+        .prepare_launch(launch("test", None, &default_identity))
+        .unwrap()
+    else {
+        panic!("headless")
+    };
+    assert!(!default.args.iter().any(|arg| arg == "--effort"));
+}
+
 #[test]
 fn claude_mcp_config_only_exposes_the_nocterm_bridge() {
     let identity = identity();

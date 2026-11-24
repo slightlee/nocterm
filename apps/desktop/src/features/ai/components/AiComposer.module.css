@@ -76,6 +76,8 @@
 }
 
 .composerFooter {
+  /* 模型菜单以工具栏为锚点，在窄面板内仍能用满可用宽度。 */
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;

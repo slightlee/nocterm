@@ -2,7 +2,7 @@
 
 use std::{
     path::PathBuf,
-    process::{ChildStdin, Command, Stdio},
+    process::{ChildStdin, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -15,6 +15,7 @@ use std::{
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
+use super::models::{EFFORT_APPLY_FAILED, EFFORT_REQUEST_ID, EFFORT_UNAVAILABLE, apply_effort};
 use super::protocol::{
     BootstrapMessages, GROK_MCP_SDK_CALL_METHOD, cancel_notification, close_request,
     initialize_request, is_renderable_update, prompt_completion, prompt_request,
@@ -90,33 +91,12 @@ impl GrokAcpServer {
             timestamp,
             sequence,
         } = launch;
-        let prepared = prepare_grok_acp_launch(timestamp, sequence)?;
-        let mut process = Command::new(&provider_executable);
-        crate::commands::ai_process::hide_console_window(&mut process);
-        process
-            .args(&prepared.args)
-            .env_clear()
-            .envs(
-                prepared
-                    .environment
-                    .iter()
-                    .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
-            )
-            .current_dir(&prepared.current_directory)
+        let prepared = prepare_grok_acp_launch(timestamp, sequence, identity.model.as_deref())?;
+        let mut child = prepared
+            .command(&provider_executable)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        // env_clear 后仍让 Grok 所在目录优先，保证 npm shebang 与安装它的 Node
-        // 版本配套；其后保留探测同源的固定 PATH 超集。
-        if let Some(path) =
-            crate::commands::ai_provider::provider_environment_path(&provider_executable)
-        {
-            process.env("PATH", path);
-        }
-        // 白名单透传了用户的代理变量；模型网关可能在 localhost 或内网，
-        // 合并注入 NO_PROXY 保证私有网段直连，公网代理行为不变。
-        crate::commands::ai_provider::apply_local_network_bypass(&mut process);
-        let mut child = process
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("启动 Grok ACP 失败：{error}"))?;
         let Some(mut stdin) = child.stdin.take() else {
@@ -198,6 +178,25 @@ impl GrokAcpServer {
                 &startup_cancellation,
                 &mut handle_request,
             )?;
+            // 档位属于已绑定的 ACP 会话。在注册进程和发送首轮前等待 Grok 确认。
+            apply_effort(&identity, &initialized, &response, &session_id, |request| {
+                write_message(&mut stdin, request)?;
+                wait_for_response_collect_with_requests(
+                    &line_receiver,
+                    EFFORT_REQUEST_ID,
+                    "设置 Grok 思考强度",
+                    &mut pending,
+                    &startup_cancellation,
+                    |request| {
+                        handle_server_request(
+                            &mut stdin,
+                            request,
+                            bridge_token.as_deref(),
+                            &mcp_dispatcher,
+                        )
+                    },
+                )
+            })?;
             Ok(session_id)
         })();
         let acp_session_id = match bootstrap {
@@ -205,6 +204,9 @@ impl GrokAcpServer {
             Err(error) => {
                 terminate_child(&mut child);
                 stderr_relay.wait(Duration::from_millis(250));
+                if matches!(error.as_str(), EFFORT_APPLY_FAILED | EFFORT_UNAVAILABLE) {
+                    return Err(error);
+                }
                 return Err(redact_bridge_token(
                     prepared.redact(append_startup_diagnostics(error, &stderr_relay)),
                     bridge_token.as_deref(),
@@ -218,7 +220,7 @@ impl GrokAcpServer {
             stdin: Mutex::new(stdin),
             child: ManagedChild::new(child),
             active_turn: Mutex::new(None),
-            next_request_id: AtomicU64::new(3),
+            next_request_id: AtomicU64::new(EFFORT_REQUEST_ID + 1),
             alive: AtomicBool::new(true),
             bridge_token,
             gateway,

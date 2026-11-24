@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
+import type { AiReasoningEffort } from '../model/ai-reasoning';
 import type {
   AiExitEvent,
   AiCommandPolicy,
@@ -42,7 +43,9 @@ export function startAiSession(
   workingDirectory?: string,
   connectionId?: number,
   targetSessionId?: string,
-  commandPolicy: AiCommandPolicy = 'auto_safe'
+  commandPolicy: AiCommandPolicy = 'auto_safe',
+  model?: string,
+  reasoningEffort?: AiReasoningEffort
 ) {
   return invoke<{ sessionId: string }>('ai_session_start', {
     request: {
@@ -51,6 +54,8 @@ export function startAiSession(
       provider,
       prompt,
       continuationPrompt,
+      model,
+      reasoningEffort,
       workingDirectory,
       connectionId,
       targetSessionId,

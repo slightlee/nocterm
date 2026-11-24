@@ -60,25 +60,65 @@ sessions = false
 /// 内联凭据只进入子进程环境；生成的 TOML 不保存模型密钥或认证 Header。
 pub(super) fn create_runtime_config(
     runtime_directory: &Path,
+    selected_model: Option<&str>,
 ) -> Result<Vec<(OsString, OsString)>, String> {
-    let source = original_home().map(|home| home.join("config.toml"));
-    let source_contents = source
-        .as_deref()
-        .filter(|path| path.is_file())
-        .map(fs::read_to_string)
-        .transpose()
-        .map_err(|error| format!("读取 Grok 模型配置失败：{error}"))?;
+    let source_contents = read_source_config()?;
     let environment_default = std::env::var("GROK_DEFAULT_MODEL")
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let (contents, environment) =
-        project_model_config(source_contents.as_deref(), environment_default.as_deref())?;
+    let (contents, environment) = project_model_config(
+        source_contents.as_deref(),
+        selected_model.or(environment_default.as_deref()),
+    )?;
     write_private_file(
         &runtime_directory.join("config.toml"),
         contents.as_bytes(),
         "Grok 隔离配置",
     )?;
     Ok(environment)
+}
+
+fn read_source_config() -> Result<Option<String>, String> {
+    let source = original_home().map(|home| home.join("config.toml"));
+    source
+        .as_deref()
+        .filter(|path| path.is_file())
+        .map(fs::read_to_string)
+        .transpose()
+        .map_err(|error| format!("读取 Grok 模型配置失败：{error}"))
+}
+
+/// 目录仅补齐模型配置键和显示名；凭据、端点及可执行认证不离开配置边界。
+/// 不把配置里的上游 model 当作调用 ID，也不为未探测的模型猜测能力。
+pub(crate) fn read_grok_model_metadata() -> Result<Vec<(String, Option<String>)>, String> {
+    configured_model_metadata(read_source_config()?.as_deref())
+}
+
+fn configured_model_metadata(
+    source: Option<&str>,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let Some(source) = source else {
+        return Ok(Vec::new());
+    };
+    let config: Value = toml::from_str(source)
+        .map_err(|_| "Grok config.toml 格式无效，请先修正本机 Grok 配置".to_string())?;
+    let Some(models) = config.get("model") else {
+        return Ok(Vec::new());
+    };
+    let models = models.as_table().ok_or("Grok model 必须是 TOML 表")?;
+    models
+        .iter()
+        .map(|(id, model)| {
+            let model = model.as_table().ok_or("Grok 模型配置必须是 TOML 表")?;
+            Ok((
+                id.clone(),
+                model
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            ))
+        })
+        .collect()
 }
 
 fn project_model_config(

@@ -47,6 +47,13 @@ impl ProviderAdapter for ClaudeCodeAdapter {
             "".into(),
             "--strict-mcp-config".into(),
         ];
+        if let Some(model) = &launch.identity.model {
+            args.extend(["--model".into(), model.clone()]);
+        }
+        // 不改用户配置文件；省略参数时交回 CLI 默认，避免跨会话残留。
+        if let Some(effort) = &launch.identity.reasoning_effort {
+            args.extend(["--effort".into(), effort.clone()]);
+        }
         if has_bridge {
             args.extend(["--allowed-tools".into(), NOCTERM_MCP_ALLOWED_TOOLS.into()]);
         }

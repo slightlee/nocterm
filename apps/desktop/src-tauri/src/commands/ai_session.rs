@@ -83,6 +83,8 @@ pub(super) fn start_session(
         endpoint,
     });
     let identity = ProviderSessionIdentity {
+        model: request.model,
+        reasoning_effort: request.reasoning_effort,
         connection_id,
         target_session_id: workspace_session_id.clone(),
         working_directory: working_directory.clone(),

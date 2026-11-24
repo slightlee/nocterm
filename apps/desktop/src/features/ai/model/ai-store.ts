@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { AiReasoningEffort } from './ai-reasoning';
 
 import { aiConversationTargetKey, type AiConversationTarget } from './ai-target';
 import type { AiCommandPolicy, AiMessage, AiMessagePart, AiProviderId } from './ai-types';
@@ -7,6 +8,10 @@ export interface AiConversation {
   id: string;
   title: string;
   provider: AiProviderId;
+  /** 空值随本机 CLI 默认模型。模型 ID 始终与 Provider 一起切换。 */
+  model?: string;
+  /** 会话内存选项，不写入历史数据库。空值交给 Agent 的生效配置。 */
+  reasoningEffort?: AiReasoningEffort;
   commandPolicy?: AiCommandPolicy;
   /** 旧版历史没有目标，只允许查看，不能静默绑定到当前终端。 */
   target: AiConversationTarget | null;
@@ -18,6 +23,8 @@ export interface AiConversation {
 interface AiTargetComposerState {
   draft: string;
   provider: AiProviderId;
+  model?: string;
+  reasoningEffort?: AiReasoningEffort;
   commandPolicy: AiCommandPolicy;
 }
 
@@ -29,7 +36,13 @@ interface AiState {
   composers: Record<string, AiTargetComposerState>;
   setOpen: (open: boolean) => void;
   toggle: () => void;
-  setProvider: (targetKey: string, conversationId: string | null, provider: AiProviderId) => void;
+  setProvider: (
+    targetKey: string,
+    conversationId: string | null,
+    provider: AiProviderId,
+    model?: string,
+    reasoningEffort?: AiReasoningEffort
+  ) => void;
   setCommandPolicy: (
     targetKey: string,
     conversationId: string | null,
@@ -44,7 +57,9 @@ interface AiState {
   createConversation: (
     target: AiConversationTarget,
     provider: AiProviderId,
-    commandPolicy: AiCommandPolicy
+    commandPolicy: AiCommandPolicy,
+    model?: string,
+    reasoningEffort?: AiReasoningEffort
   ) => string;
   deleteConversation: (id: string) => void;
   selectConversation: (targetKey: string, id: string) => void;
@@ -103,13 +118,17 @@ export function resolveAiComposerState(
 const newConversation = (
   target: AiConversationTarget,
   provider: AiProviderId,
-  commandPolicy: AiCommandPolicy
+  commandPolicy: AiCommandPolicy,
+  model?: string,
+  reasoningEffort?: AiReasoningEffort
 ): AiConversation => {
   const now = Date.now();
   return {
     id: crypto.randomUUID(),
     title: '新会话',
     provider,
+    model,
+    reasoningEffort,
     commandPolicy,
     target,
     messages: [],
@@ -133,14 +152,16 @@ export const useAiStore = create<AiState>((set) => ({
   composers: {},
   setOpen: (open) => set({ open }),
   toggle: () => set((state) => ({ open: !state.open })),
-  setProvider: (targetKey, conversationId, provider) =>
+  setProvider: (targetKey, conversationId, provider, model, reasoningEffort) =>
     set((state) => ({
       conversations: conversationId
         ? state.conversations.map((conversation) =>
-            conversation.id === conversationId ? { ...conversation, provider } : conversation
+            conversation.id === conversationId
+              ? { ...conversation, provider, model, reasoningEffort }
+              : conversation
           )
         : state.conversations,
-      composers: updateComposer(state, targetKey, { provider }),
+      composers: updateComposer(state, targetKey, { provider, model, reasoningEffort }),
     })),
   setCommandPolicy: (targetKey, conversationId, commandPolicy) =>
     set((state) => ({
@@ -156,10 +177,16 @@ export const useAiStore = create<AiState>((set) => ({
   beginConversation: (targetKey, provider, commandPolicy) =>
     set((state) => ({
       activeConversationIds: { ...state.activeConversationIds, [targetKey]: null },
-      composers: updateComposer(state, targetKey, { draft: '', provider, commandPolicy }),
+      composers: updateComposer(state, targetKey, {
+        draft: '',
+        provider,
+        model: undefined,
+        reasoningEffort: undefined,
+        commandPolicy,
+      }),
     })),
-  createConversation: (target, provider, commandPolicy) => {
-    const conversation = newConversation(target, provider, commandPolicy);
+  createConversation: (target, provider, commandPolicy, model, reasoningEffort) => {
+    const conversation = newConversation(target, provider, commandPolicy, model, reasoningEffort);
     const targetKey = aiConversationTargetKey(target);
     set((state) => ({
       conversations: [...state.conversations, conversation],
@@ -170,6 +197,8 @@ export const useAiStore = create<AiState>((set) => ({
       composers: updateComposer(state, targetKey, {
         draft: '',
         provider,
+        model,
+        reasoningEffort,
         commandPolicy,
       }),
     }));

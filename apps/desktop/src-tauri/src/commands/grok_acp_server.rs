@@ -18,12 +18,23 @@ use crate::{
     state::AiGatewayState,
 };
 
+pub(super) mod models;
 mod protocol;
 mod session;
 
+pub(super) use protocol::initialize_request as grok_initialize_request;
 use session::{GrokAcpServer, GrokAcpServerLaunch};
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
+
+/// 目录探测和聊天进程共用序列，私有目录不会相互覆盖。
+pub(super) fn next_runtime_id() -> (u128, u64) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+    (timestamp, NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed))
+}
 
 pub struct GrokAcpServerManager {
     sessions: PersistentSessionRegistry<GrokAcpServer>,
@@ -61,11 +72,7 @@ impl PersistentProviderRuntime for GrokAcpServerManager {
             command_policy,
             mcp_dispatcher,
         } = launch;
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|value| value.as_nanos())
-            .unwrap_or_default();
-        let sequence = NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed);
+        let (timestamp, sequence) = next_runtime_id();
         self.sessions.start_turn(
             app.clone(),
             PersistentTurnRequest {
@@ -112,11 +119,15 @@ mod tests {
     #[test]
     fn persistent_identity_changes_when_the_terminal_target_changes() {
         let local = ProviderSessionIdentity {
+            model: None,
+            reasoning_effort: None,
             connection_id: None,
             target_session_id: Some("local:one".into()),
             working_directory: Some("/tmp".into()),
         };
         let remote = ProviderSessionIdentity {
+            model: None,
+            reasoning_effort: None,
             connection_id: Some(7),
             target_session_id: None,
             working_directory: Some("/tmp".into()),

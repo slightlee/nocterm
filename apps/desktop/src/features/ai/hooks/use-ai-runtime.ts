@@ -28,6 +28,7 @@ import {
   type AiTaskOutcome,
 } from '../model/ai-runtime-task';
 import type { AiTerminalTarget } from '../model/ai-target';
+import type { AiReasoningEffort } from '../model/ai-reasoning';
 import {
   executionEventToPresentation,
   executionSnapshotToParts,
@@ -62,6 +63,8 @@ interface StartAiQuestion {
   history: AiMessage[];
   conversationId: string;
   provider: AiProviderId;
+  model?: string;
+  reasoningEffort?: AiReasoningEffort;
   target: AiTerminalTarget;
   commandPolicy: AiCommandPolicy;
 }
@@ -434,6 +437,8 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       history,
       conversationId,
       provider,
+      model,
+      reasoningEffort,
       target,
       commandPolicy,
     }: StartAiQuestion) => {
@@ -519,7 +524,9 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         target.connectionId,
         // workspace 会话标识统一携带 local:/remote: 前缀；后端据此解析精确终端绑定。
         target.targetSessionId ?? target.workspaceSessionId,
-        commandPolicy
+        commandPolicy,
+        model,
+        reasoningEffort
       )
         .then(async (result) => {
           window.clearTimeout(startTimeoutId);

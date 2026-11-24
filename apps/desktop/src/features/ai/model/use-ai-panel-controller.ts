@@ -9,6 +9,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TerminalSession, TerminalSessionId, TerminalStatus } from '../../terminal';
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import { resetAiConversation } from '../api/ai-client';
+import { getModelCatalogSnapshot, refreshModelCatalog } from '../api/ai-model-catalog';
+import { compatibleReasoningEffort, type AiReasoningEffort } from './ai-reasoning';
 import { useAiPersistence } from '../hooks/use-ai-persistence';
 import { useAiRuntime, type AiRuntimePresentation } from '../hooks/use-ai-runtime';
 import {
@@ -95,6 +97,8 @@ export interface AiPanelController {
   messages: AiMessage[];
   panelViewKey: string;
   provider: AiProviderId;
+  model?: string;
+  reasoningEffort?: AiReasoningEffort;
   providerAvailability: Record<string, boolean>;
   providerMenuOpen: boolean;
   selectedProvider: (typeof AI_PROVIDERS)[number];
@@ -115,7 +119,11 @@ export interface AiPanelController {
   handleCreateConversation: () => Promise<void>;
   handleDeleteConversation: (id: string) => Promise<void>;
   handleDraftChange: (value: string) => void;
-  handleProviderChange: (nextProvider: AiProviderId) => Promise<void>;
+  handleProviderChange: (
+    nextProvider: AiProviderId,
+    model?: string,
+    effort?: AiReasoningEffort
+  ) => Promise<void>;
   handleSelectConversation: (id: string) => Promise<void>;
   handleSelectTask: (task: AiTaskNavigationSource) => void;
   removeCurrentAttachment: (kind: AiAttachment['kind']) => void;
@@ -234,6 +242,10 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     ? resolveAiComposerState(composers, workspaceTargetKey)
     : { draft: '', provider: 'codex' as const, commandPolicy: 'auto_safe' as const };
   const provider = activeConversation?.provider ?? composerState.provider;
+  const model = activeConversation ? activeConversation.model : composerState.model;
+  const reasoningEffort = activeConversation
+    ? activeConversation.reasoningEffort
+    : composerState.reasoningEffort;
   const commandPolicy = activeConversation?.commandPolicy ?? composerState.commandPolicy;
   const currentTargetProvider = targetConversation?.provider ?? composerState.provider;
   const selectedProvider = AI_PROVIDERS.find((item) => item.id === provider) ?? AI_PROVIDERS[0];
@@ -262,6 +274,14 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     clearConversationPresentation,
   } = useAiRuntime({ addMessage });
   useAiPersistence({ onError: setPersistenceNotice });
+
+  useEffect(() => {
+    if (!visible || !isDesktopRuntime()) return;
+    // 面板展开便预取已安装 Agent 的目录，首次点击可复用正在进行的查询。
+    for (const { id } of AI_PROVIDERS) {
+      if (providerAvailability[id]) void refreshModelCatalog(id);
+    }
+  }, [visible, providerAvailability]);
 
   const activeTask = findAiRuntimeTaskByConversation(tasks, activeConversationId);
   const currentTargetTask = findAiRuntimeTaskByTarget(tasks, workspaceTargetKey);
@@ -387,6 +407,12 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
       return;
     }
 
+    // 在创建历史和清空草稿前拦截，快捷键提交也不能隐式使用 CLI 默认模型。
+    if (!model) {
+      setProviderMenuOpen(true);
+      return;
+    }
+
     const selectedAttachments = attachmentItems;
     const selectedFile = composerAttachments.file;
     const selectedTerminal = composerAttachments.terminalSelection;
@@ -402,7 +428,7 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
       : question;
     const conversationId =
       activeConversation?.id ??
-      createConversation(workspaceTarget.binding, provider, commandPolicy);
+      createConversation(workspaceTarget.binding, provider, commandPolicy, model, reasoningEffort);
     const history = activeConversation?.messages ?? [];
     addMessage(conversationId, 'user', visibleMessage);
     setDraft(workspaceTargetKey, '');
@@ -414,6 +440,8 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
       history,
       conversationId,
       provider,
+      model,
+      reasoningEffort,
       target: workspaceTarget,
       commandPolicy,
     });
@@ -422,6 +450,11 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
   /** 失败重试只能回到原目标和原会话；目标不匹配时禁止复制上下文执行。 */
   const retryLastQuestion = () => {
     if (currentTargetTask || !activeConversation || !targetReady) return;
+    // 旧历史未持久化模型选择；重试必须先选模型，不能提前删除失败轮次。
+    if (!model) {
+      setProviderMenuOpen(true);
+      return;
+    }
     let lastUserIndex = -1;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       if (messages[index]?.role === 'user') {
@@ -447,6 +480,8 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
       history: messages.slice(0, lastUserIndex),
       conversationId: activeConversation.id,
       provider,
+      model,
+      reasoningEffort,
       target: workspaceTarget,
       commandPolicy,
     });
@@ -545,23 +580,39 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     }
   };
 
-  const handleProviderChange = async (nextProvider: Parameters<typeof setProvider>[2]) => {
+  const handleProviderChange = async (
+    nextProvider: AiProviderId,
+    nextModel?: string,
+    effort?: AiReasoningEffort
+  ) => {
+    if (!nextModel) return;
+    const option = getModelCatalogSnapshot(nextProvider).models?.find(
+      (item) => item.id === nextModel
+    );
+    // 手动选择优先；仅重选同一 Agent 的同一模型时保留已有档位。
+    // 在这里固定默认值，菜单预览和后续目录刷新不能改写会话参数。
+    const nextEffort = compatibleReasoningEffort(
+      option?.reasoningEfforts,
+      effort ?? (nextProvider === provider && nextModel === model ? reasoningEffort : undefined),
+      option?.defaultReasoningEffort
+    );
     if (
       !workspaceTargetKey ||
       !viewingCurrentTarget ||
       currentTargetTask ||
-      nextProvider === provider
+      (nextProvider === provider && nextModel === model && nextEffort === reasoningEffort)
     ) {
       setProviderMenuOpen(false);
       return;
     }
     if (
+      nextProvider !== provider &&
       activeConversation &&
       !(await resetProviderConversation(activeConversation.id, panelViewKey))
     ) {
       return;
     }
-    setProvider(workspaceTargetKey, activeConversationId, nextProvider);
+    setProvider(workspaceTargetKey, activeConversationId, nextProvider, nextModel, nextEffort);
     setProviderMenuOpen(false);
   };
 
@@ -693,6 +744,8 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     messages,
     panelViewKey,
     provider,
+    model,
+    reasoningEffort,
     providerAvailability,
     providerMenuOpen,
     selectedProvider,

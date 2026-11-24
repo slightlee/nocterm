@@ -19,8 +19,9 @@ use super::{
     CodexSessionIdentity,
     protocol::{
         codex_config_read_request, codex_feature_list_request, codex_provider_config,
-        codex_thread_start_request, configured_mcp_server_names, terminate_child,
-        validate_disabled_features, validate_thread_security, wait_for_response, write_message,
+        codex_thread_start_request, codex_turn_start_request, configured_mcp_server_names,
+        terminate_child, validate_disabled_features, validate_thread_security, wait_for_response,
+        write_message,
     },
 };
 use crate::{
@@ -285,14 +286,12 @@ impl CodexAppServer {
             }
             return Err(error);
         }
-        let request = json!({
-            "id": request_id,
-            "method": "turn/start",
-            "params": {
-                "threadId": self.thread_id,
-                "input": [{"type": "text", "text": prompt}]
-            }
-        });
+        let request = codex_turn_start_request(
+            request_id,
+            &self.thread_id,
+            &prompt,
+            self.identity.reasoning_effort.as_deref(),
+        );
         let result = self
             .stdin
             .lock()

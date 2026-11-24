@@ -36,6 +36,35 @@ describe('useAiStore target conversations', () => {
     });
   });
 
+  it('keeps selected models scoped to their conversation and provider', () => {
+    const store = useAiStore.getState();
+    store.setProvider('ssh:7', 'production-old', 'codex', 'vendor/model');
+    expect(useAiStore.getState().conversations[0]?.model).toBe('vendor/model');
+    expect(useAiStore.getState().conversations[1]?.model).toBeUndefined();
+    store.setProvider('ssh:7', 'production-old', 'claude-code');
+    expect(useAiStore.getState().conversations[0]?.model).toBeUndefined();
+  });
+
+  it('思考强度随会话和草稿隔离，新会话与默认选择清除显式覆盖', () => {
+    const store = useAiStore.getState();
+    store.setProvider('ssh:7', 'production-old', 'codex', 'test-model', 'high');
+    expect(useAiStore.getState().conversations[0].reasoningEffort).toBe('high');
+    expect(useAiStore.getState().conversations[1].reasoningEffort).toBeUndefined();
+    expect(resolveAiComposerState(useAiStore.getState().composers, 'ssh:7').reasoningEffort).toBe(
+      'high'
+    );
+    store.setProvider('ssh:7', 'production-old', 'codex', 'test-model');
+    expect(useAiStore.getState().conversations[0].reasoningEffort).toBeUndefined();
+    const id = store.createConversation(production, 'codex', 'auto_safe', 'test-model', 'low');
+    expect(useAiStore.getState().conversations.find((c) => c.id === id)?.reasoningEffort).toBe(
+      'low'
+    );
+    store.beginConversation('ssh:7', 'codex', 'auto_safe');
+    expect(
+      resolveAiComposerState(useAiStore.getState().composers, 'ssh:7').reasoningEffort
+    ).toBeUndefined();
+  });
+
   it('enters a lazy blank state without creating a persisted conversation', () => {
     useAiStore.getState().beginConversation('ssh:7', 'claude-code', 'confirm_each');
 

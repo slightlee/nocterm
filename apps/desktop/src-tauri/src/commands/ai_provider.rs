@@ -12,7 +12,7 @@ mod codex;
 mod grok;
 mod terminal_contract;
 
-pub(crate) use grok::{PreparedGrokAcpLaunch, prepare_grok_acp_launch};
+pub(crate) use grok::{PreparedGrokAcpLaunch, prepare_grok_acp_launch, read_grok_model_metadata};
 pub(crate) use terminal_contract::{terminal_session_instructions, terminal_task_instructions};
 
 pub struct ProviderBridge<'a> {
@@ -105,6 +105,10 @@ pub enum ProviderLaunchPlan {
 /// 持久 Provider 的复用身份由宿主确定，不能从模型消息或 Provider 会话状态推断。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderSessionIdentity {
+    /// 模型变化时重建持久会话，使跟随默认和显式选择互不串用。
+    pub model: Option<String>,
+    /// 档位改变时也重建会话；恢复默认不能沿用上轮的显式覆盖。
+    pub reasoning_effort: Option<String>,
     pub connection_id: Option<i64>,
     pub target_session_id: Option<String>,
     pub working_directory: Option<String>,

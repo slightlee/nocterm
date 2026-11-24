@@ -53,12 +53,16 @@ mod tests {
     #[test]
     fn contract_is_identical_for_every_terminal_target() {
         let ssh = terminal_session_instructions(&ProviderSessionIdentity {
+            model: None,
+            reasoning_effort: None,
             connection_id: Some(7),
             target_session_id: None,
             working_directory: None,
         })
         .unwrap();
         let local = terminal_session_instructions(&ProviderSessionIdentity {
+            model: None,
+            reasoning_effort: None,
             connection_id: None,
             target_session_id: Some("local-one".into()),
             working_directory: None,
@@ -89,6 +93,8 @@ mod tests {
     fn contract_does_not_affect_sessions_without_a_terminal_target() {
         assert!(
             terminal_session_instructions(&ProviderSessionIdentity {
+                model: None,
+                reasoning_effort: None,
                 connection_id: None,
                 target_session_id: None,
                 working_directory: None,

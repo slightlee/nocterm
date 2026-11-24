@@ -60,6 +60,8 @@ export function AiPanel({
     lastUserMessageId,
     messages,
     provider,
+    model,
+    reasoningEffort,
     providerAvailability,
     providerMenuOpen,
     selectedProvider,
@@ -233,7 +235,9 @@ export function AiPanel({
         }}
         onComposerKeyDown={handleComposerKeyDown}
         onDraftChange={handleDraftChange}
-        onProviderChange={(nextProvider) => void handleProviderChange(nextProvider)}
+        onProviderChange={handleProviderChange}
+        model={model}
+        reasoningEffort={reasoningEffort}
         onProviderMenuToggle={() => setProviderMenuOpen(!providerMenuOpen)}
         onStop={() => {
           if (activeTask) requestSessionStop(activeTask.sessionId);

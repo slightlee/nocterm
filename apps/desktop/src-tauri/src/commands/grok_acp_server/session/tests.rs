@@ -28,7 +28,7 @@ fn installed_grok_accepts_the_isolated_acp_profile() {
         .duration_since(UNIX_EPOCH)
         .expect("system clock")
         .as_nanos();
-    let prepared = prepare_grok_acp_launch(timestamp, 1).expect("isolated Grok launch");
+    let prepared = prepare_grok_acp_launch(timestamp, 1, None).expect("isolated Grok launch");
     let mut child = Command::new(executable)
         .args(&prepared.args)
         .env_clear()
@@ -65,6 +65,8 @@ fn installed_grok_accepts_the_isolated_acp_profile() {
     );
     require_supported_sdk_mcp(&initialized).expect("installed Grok supports MCP-over-ACP");
     let identity = ProviderSessionIdentity {
+        model: None,
+        reasoning_effort: None,
         connection_id: Some(7),
         target_session_id: None,
         working_directory: None,

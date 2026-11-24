@@ -7,6 +7,7 @@ import {
 } from 'react';
 
 import type { AiAttachment } from '../model/ai-attachment';
+import type { AiReasoningEffort } from '../model/ai-reasoning';
 import type { AiCommandPolicy, AiProvider, AiProviderId } from '../model/ai-types';
 import { AiAttachmentChip, AiAttachmentPicker } from './AiAttachmentControl';
 import { AiCommandPolicySelector } from './AiCommandPolicySelector';
@@ -16,6 +17,8 @@ import styles from './AiComposer.module.css';
 interface AiComposerProps {
   provider: AiProvider;
   providerId: AiProviderId;
+  model?: string;
+  reasoningEffort?: AiReasoningEffort;
   providerAvailable: boolean | undefined;
   providerMenuOpen: boolean;
   running: boolean;
@@ -35,7 +38,7 @@ interface AiComposerProps {
   onAttachmentChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onAttachmentRemove: (kind: AiAttachment['kind']) => void;
   onProviderMenuToggle: () => void;
-  onProviderChange: (provider: AiProviderId) => void;
+  onProviderChange: (provider: AiProviderId, model?: string, effort?: AiReasoningEffort) => void;
   commandPolicy: AiCommandPolicy;
   onCommandPolicyChange: (policy: AiCommandPolicy) => void;
   onStop: () => void;
@@ -45,6 +48,8 @@ interface AiComposerProps {
 export function AiComposer({
   provider,
   providerId,
+  model,
+  reasoningEffort,
   providerAvailable,
   providerMenuOpen,
   running,
@@ -122,6 +127,8 @@ export function AiComposer({
             <AiProviderSelector
               disabled={toolControlsDisabled}
               onChange={onProviderChange}
+              model={model}
+              reasoningEffort={reasoningEffort}
               onToggle={() => {
                 setCommandPolicyMenuOpen(false);
                 onProviderMenuToggle();
@@ -162,11 +169,12 @@ export function AiComposer({
               className={styles.sendButton}
               disabled={
                 composerDisabled ||
+                !model ||
                 !targetReady ||
                 (!draft.trim() && attachments.length === 0) ||
                 attachmentLoading
               }
-              title={targetReady ? '发送请求' : targetUnavailableMessage}
+              title={!targetReady ? targetUnavailableMessage : !model ? '请先选择模型' : '发送请求'}
               type="submit"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
