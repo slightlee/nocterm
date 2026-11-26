@@ -95,6 +95,7 @@ export function ActivityBar({
       <div className={styles.spacer} />
       <div className={styles.bottomSection}>
         <button
+          aria-label="设置"
           className={`${styles.navItem} ${location.pathname.startsWith('/settings') ? styles.active : ''}`}
           onClick={() => navigate('/settings')}
           title="设置"
@@ -111,7 +112,6 @@ export function ActivityBar({
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.7 1.7 0 0 0 .34 2l.06.06a2.1 2.1 0 1 1-3 3l-.06-.06a1.7 1.7 0 0 0-2-.36 1.7 1.7 0 0 0-1 1.64V21a2.1 2.1 0 1 1-4.2 0v-.1a1.7 1.7 0 0 0-1-1.64 1.7 1.7 0 0 0-2 .36l-.06.06a2.1 2.1 0 1 1-3-3l.06-.06a1.7 1.7 0 0 0 .36-2 1.7 1.7 0 0 0-1.64-1H3a2.1 2.1 0 1 1 0-4.2h.1a1.7 1.7 0 0 0 1.64-1 1.7 1.7 0 0 0-.36-2l-.06-.06a2.1 2.1 0 1 1 3-3l.06.06a1.7 1.7 0 0 0 2 .36 1.7 1.7 0 0 0 1-1.64V3a2.1 2.1 0 1 1 4.2 0v.1a1.7 1.7 0 0 0 1 1.64 1.7 1.7 0 0 0 2-.36l.06-.06a2.1 2.1 0 1 1 3 3l-.06.06a1.7 1.7 0 0 0-.36 2 1.7 1.7 0 0 0 1.64 1h.1a2.1 2.1 0 1 1 0 4.2h-.1a1.7 1.7 0 0 0-1.6.3Z" />
           </svg>
-          <span className={styles.navLabel}>设置</span>
         </button>
       </div>
     </nav>
