@@ -75,6 +75,9 @@ fn target_bound_threads_require_nocterm_and_route_terminal_tools() {
     assert_eq!(config["web_search"], "disabled");
 
     let local = CodexSessionIdentity {
+        model: Some("vendor/model-v2".into()),
+        reasoning_effort: None,
+        fast_mode: None,
         connection_id: None,
         target_session_id: Some("local:one".into()),
         working_directory: None,
@@ -82,6 +85,7 @@ fn target_bound_threads_require_nocterm_and_route_terminal_tools() {
     let request = codex_thread_start_request(&local, config, true);
     assert_eq!(request["method"], "thread/start");
     assert_eq!(request["id"], 3);
+    assert_eq!(request["params"]["model"], "vendor/model-v2");
     assert!(request["params"].get("sandbox").is_none());
     assert!(
         request["params"]["developerInstructions"]
@@ -94,6 +98,9 @@ fn target_bound_threads_require_nocterm_and_route_terminal_tools() {
     );
 
     let untargeted = CodexSessionIdentity {
+        model: None,
+        reasoning_effort: None,
+        fast_mode: None,
         connection_id: None,
         target_session_id: None,
         working_directory: None,
@@ -131,6 +138,19 @@ fn config_read_discovers_existing_mcp_servers_before_thread_start() {
         .expect_err("invalid server map must fail closed")
         .contains("mcp_servers")
     );
+}
+
+#[test]
+fn turn_effort_is_native_and_default_does_not_override_cli_config() {
+    let explicit =
+        super::codex_turn_start_request(10, "thread", "question", Some("high"), Some(true));
+    assert_eq!(explicit["params"]["effort"], "high");
+    assert_eq!(explicit["params"]["serviceTier"], "fast");
+    assert_eq!(explicit["params"]["threadId"], "thread");
+    assert_eq!(explicit["params"]["input"][0]["text"], "question");
+    let default = super::codex_turn_start_request(11, "thread", "question", None, None);
+    assert!(default["params"].get("effort").is_none());
+    assert!(default["params"].get("serviceTier").is_none());
 }
 
 #[test]

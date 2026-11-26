@@ -6,6 +6,21 @@ use std::{ffi::OsString, fs, path::Path};
 use toml::{Table, Value};
 
 use super::{original_home, push_secret, write_private_file};
+use crate::commands::ai_provider::http_endpoint_host;
+
+const ALLOWED_ENDPOINTS: [&str; 5] = [
+    "cli_chat_proxy_base_url",
+    "models_base_url",
+    "models_list_url",
+    "models_endpoint",
+    "xai_api_base_url",
+];
+const ENDPOINT_ENVIRONMENT: [&str; 4] = [
+    "GROK_MODELS_BASE_URL",
+    "GROK_MODELS_LIST_URL",
+    "GROK_XAI_API_BASE_URL",
+    "GROK_CLI_CHAT_PROXY_BASE_URL",
+];
 
 const ISOLATED_CONFIG: &str = r#"
 disable_web_search = true
@@ -60,25 +75,148 @@ sessions = false
 /// 内联凭据只进入子进程环境；生成的 TOML 不保存模型密钥或认证 Header。
 pub(super) fn create_runtime_config(
     runtime_directory: &Path,
+    selected_model: Option<&str>,
 ) -> Result<Vec<(OsString, OsString)>, String> {
-    let source = original_home().map(|home| home.join("config.toml"));
-    let source_contents = source
-        .as_deref()
-        .filter(|path| path.is_file())
-        .map(fs::read_to_string)
-        .transpose()
-        .map_err(|error| format!("读取 Grok 模型配置失败：{error}"))?;
+    let source_contents = read_source_config()?;
     let environment_default = std::env::var("GROK_DEFAULT_MODEL")
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let (contents, environment) =
-        project_model_config(source_contents.as_deref(), environment_default.as_deref())?;
+    let (contents, environment) = project_model_config(
+        source_contents.as_deref(),
+        selected_model.or(environment_default.as_deref()),
+    )?;
     write_private_file(
         &runtime_directory.join("config.toml"),
         contents.as_bytes(),
         "Grok 隔离配置",
     )?;
     Ok(environment)
+}
+
+fn read_source_config() -> Result<Option<String>, String> {
+    let source = original_home().map(|home| home.join("config.toml"));
+    source
+        .as_deref()
+        .filter(|path| path.is_file())
+        .map(fs::read_to_string)
+        .transpose()
+        .map_err(|error| format!("读取 Grok 模型配置失败：{error}"))
+}
+
+pub(crate) struct GrokCatalogMetadata {
+    pub models: Vec<(String, Option<String>)>,
+    pub uses_custom_endpoint: bool,
+}
+
+/// 目录只带出模型标识、名称和端点分类；URL、凭据与可执行认证留在配置边界内。
+pub(crate) fn read_grok_model_metadata() -> Result<GrokCatalogMetadata, String> {
+    let source = read_source_config()?;
+    let environment_default = std::env::var("GROK_DEFAULT_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    configured_catalog_metadata_with_inputs(
+        source.as_deref(),
+        environment_default.as_deref(),
+        endpoint_environment_is_configured(),
+    )
+}
+
+/// 不把上游 model 当作调用 ID；端点摘要只描述当前有效默认模型的连接方式。
+fn configured_catalog_metadata_with_inputs(
+    source: Option<&str>,
+    environment_default: Option<&str>,
+    environment_endpoint: bool,
+) -> Result<GrokCatalogMetadata, String> {
+    let Some(source) = source else {
+        return Ok(GrokCatalogMetadata {
+            models: Vec::new(),
+            uses_custom_endpoint: environment_endpoint,
+        });
+    };
+    let config: Value = toml::from_str(source)
+        .map_err(|_| "Grok config.toml 格式无效，请先修正本机 Grok 配置".to_string())?;
+    let default_model = environment_default.or_else(|| {
+        config
+            .get("models")
+            .and_then(Value::as_table)
+            .and_then(|models| models.get("default"))
+            .and_then(Value::as_str)
+    });
+    let uses_custom_endpoint =
+        environment_endpoint || configured_route_uses_custom_endpoint(&config, default_model);
+    let Some(models) = config.get("model") else {
+        return Ok(GrokCatalogMetadata {
+            models: Vec::new(),
+            uses_custom_endpoint,
+        });
+    };
+    let models = models.as_table().ok_or("Grok model 必须是 TOML 表")?;
+    let models = models
+        .iter()
+        .map(|(id, model)| {
+            let model = model.as_table().ok_or("Grok 模型配置必须是 TOML 表")?;
+            Ok((
+                id.clone(),
+                model
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(GrokCatalogMetadata {
+        models,
+        uses_custom_endpoint,
+    })
+}
+
+fn configured_route_uses_custom_endpoint(config: &Value, default_model: Option<&str>) -> bool {
+    let global_endpoint = config
+        .get("endpoints")
+        .and_then(Value::as_table)
+        .is_some_and(|endpoints| {
+            ALLOWED_ENDPOINTS
+                .iter()
+                .any(|key| custom_endpoint_value(endpoints.get(*key)))
+        });
+    if global_endpoint {
+        return true;
+    }
+    let Some(model) = default_model
+        .and_then(|id| config.get("model")?.as_table()?.get(id))
+        .and_then(Value::as_table)
+    else {
+        return false;
+    };
+    if custom_endpoint_value(model.get("base_url")) {
+        return true;
+    }
+    model
+        .get("model_provider")
+        .and_then(Value::as_str)
+        .and_then(|provider| config.get("model_providers")?.as_table()?.get(provider))
+        .and_then(Value::as_table)
+        .is_some_and(|provider| custom_endpoint_value(provider.get("base_url")))
+}
+
+fn endpoint_environment_is_configured() -> bool {
+    ENDPOINT_ENVIRONMENT.iter().any(|name| {
+        std::env::var(name)
+            .ok()
+            .is_some_and(|value| is_custom_grok_endpoint(&value))
+    })
+}
+
+fn custom_endpoint_value(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(is_custom_grok_endpoint)
+}
+
+/// 显式填写官方默认地址仍属于官方路由；无效字符串不作为接入方式展示。
+fn is_custom_grok_endpoint(value: &str) -> bool {
+    http_endpoint_host(value)
+        .is_some_and(|host| host != "api.x.ai" && host != "cli-chat-proxy.grok.com")
 }
 
 fn project_model_config(
@@ -170,13 +308,6 @@ fn project_model_config(
 
 /// 只继承模型请求实际使用的端点，反馈、遥测、托管配置和部署凭据继续保持关闭。
 fn project_endpoints(source: &Table, projected: &mut Table) -> Result<(), String> {
-    const ALLOWED_ENDPOINTS: [&str; 5] = [
-        "cli_chat_proxy_base_url",
-        "models_base_url",
-        "models_list_url",
-        "models_endpoint",
-        "xai_api_base_url",
-    ];
     let Some(endpoints) = source.get("endpoints").and_then(Value::as_table) else {
         return Ok(());
     };

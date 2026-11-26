@@ -64,6 +64,15 @@ describe('reduceAiRuntimeOutput', () => {
 });
 
 describe('aiRuntimeErrorMessage', () => {
+  it('explains when Grok rejected an explicit effort before sending the question', () => {
+    expect(aiRuntimeErrorMessage('AI_GROK_REASONING_EFFORT_APPLY_FAILED', '启动失败')).toContain(
+      '这次请求尚未发送'
+    );
+    expect(aiRuntimeErrorMessage('AI_GROK_REASONING_EFFORT_UNAVAILABLE', '启动失败')).toContain(
+      '请重新选择模型或档位'
+    );
+  });
+
   it('preserves actionable Tauri string errors', () => {
     expect(
       aiRuntimeErrorMessage(

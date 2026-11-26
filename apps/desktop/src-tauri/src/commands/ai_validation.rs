@@ -25,7 +25,30 @@ pub(super) fn validate_start_request(
 ) -> Result<ValidatedAiSessionStart, String> {
     let session_id = validate_client_session_id(&request.client_session_id)?;
     let conversation_id = validate_conversation_id(&request.conversation_id)?;
+    if request
+        .model
+        .as_deref()
+        .is_some_and(|id| !valid_model_id(id))
+    {
+        return Err("AI_MODEL_ID_INVALID".into());
+    }
     validate_prompt(&request.prompt, "AI 请求")?;
+    if let Some(effort) = &request.reasoning_effort {
+        if !valid_reasoning_effort(&request.provider, effort) {
+            return Err("AI_REASONING_EFFORT_INVALID".into());
+        }
+        if request.model.is_none() {
+            return Err("AI_REASONING_MODEL_REQUIRED".into());
+        }
+    }
+    if request.fast_mode.is_some() {
+        if request.model.is_none() {
+            return Err("AI_SPEED_MODEL_REQUIRED".into());
+        }
+        if request.provider != "codex" && request.provider != "claude-code" {
+            return Err("AI_SPEED_UNSUPPORTED".into());
+        }
+    }
     validate_prompt(&request.continuation_prompt, "AI 本轮请求")?;
     let working_directory = validate_working_directory(request.working_directory.as_deref())?;
     let command_policy = parse_command_policy(request.command_policy.as_deref())?;
@@ -38,6 +61,30 @@ pub(super) fn validate_start_request(
         workspace_session_id,
         command_policy,
     })
+}
+
+/// 模型 ID 作为单个协议值或 CLI 参数，允许常见路由和上下文后缀，拒绝选项及控制字符。
+pub(super) fn valid_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 200
+        && id.as_bytes()[0].is_ascii_alphanumeric()
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"-._/:@+[]".contains(&c))
+        && !id.contains("://")
+}
+
+/// 仅接受 Provider 的原生参数值；未接入能力枚举的 Provider 不得悄悄忽略选择。
+pub(super) fn valid_reasoning_effort(provider: &str, effort: &str) -> bool {
+    match provider {
+        "codex" => matches!(
+            effort,
+            "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+        ),
+        "claude-code" => matches!(effort, "low" | "medium" | "high" | "xhigh" | "max"),
+        "grok" => super::grok_acp_server::models::EFFORTS.contains(&effort),
+        _ => false,
+    }
 }
 
 fn validate_client_session_id(raw: &str) -> Result<String, String> {
@@ -182,6 +229,60 @@ mod tests {
     }
 
     #[test]
+    fn explicit_reasoning_requires_a_model_and_a_native_provider_value() {
+        let mut request: AiSessionStartRequest = serde_json::from_value(serde_json::json!({
+            "clientSessionId":"ai-one", "conversationId":"conversation-one", "provider":"codex",
+            "model":"test-model", "reasoningEffort":"high", "prompt":"test", "continuationPrompt":"test",
+            "targetSessionId":"local:one"
+        })).unwrap();
+        assert!(validate_start_request(&request).is_ok());
+        request.provider = "grok".into();
+        assert!(validate_start_request(&request).is_ok());
+        request.model = None;
+        assert_eq!(
+            validate_start_request(&request).err().as_deref(),
+            Some("AI_REASONING_MODEL_REQUIRED")
+        );
+        request.model = Some("test-model".into());
+        for (provider, value) in [
+            ("codex", "--help"),
+            ("claude-code", "ultra"),
+            ("grok", "ultra"),
+        ] {
+            request.provider = provider.into();
+            request.reasoning_effort = Some(value.into());
+            assert_eq!(
+                validate_start_request(&request).err().as_deref(),
+                Some("AI_REASONING_EFFORT_INVALID")
+            );
+        }
+        request.reasoning_effort = None;
+        assert!(validate_start_request(&request).is_ok());
+    }
+
+    #[test]
+    fn explicit_speed_requires_a_model_and_supported_provider() {
+        let mut request: AiSessionStartRequest = serde_json::from_value(serde_json::json!({
+            "clientSessionId":"ai-one", "conversationId":"conversation-one", "provider":"codex",
+            "model":"test-model", "fastMode":true, "prompt":"test", "continuationPrompt":"test",
+            "targetSessionId":"local:one"
+        }))
+        .unwrap();
+        assert!(validate_start_request(&request).is_ok());
+        request.provider = "grok".into();
+        assert_eq!(
+            validate_start_request(&request).err().as_deref(),
+            Some("AI_SPEED_UNSUPPORTED")
+        );
+        request.provider = "claude-code".into();
+        request.model = None;
+        assert_eq!(
+            validate_start_request(&request).err().as_deref(),
+            Some("AI_SPEED_MODEL_REQUIRED")
+        );
+    }
+
+    #[test]
     fn accepts_only_bounded_conversation_ids() {
         assert!(validate_conversation_id("123e4567-e89b-12d3-a456-426614174000").is_ok());
         assert!(validate_conversation_id("").is_err());
@@ -231,6 +332,9 @@ mod tests {
             client_session_id: "ai-one".into(),
             conversation_id: "conversation-one".into(),
             provider: "codex".into(),
+            model: None,
+            reasoning_effort: None,
+            fast_mode: None,
             prompt: "inspect".into(),
             continuation_prompt: "inspect".into(),
             working_directory: None,

@@ -1,4 +1,5 @@
 export { AiPanel } from './components/AiPanel';
+export { AiAgentSettingsPage } from './components/AiAgentSettingsPage';
 export type { AiTerminalSelectionRequest } from './components/AiPanel';
 export { AiPanelToggle } from './components/AiPanelToggle';
 export {

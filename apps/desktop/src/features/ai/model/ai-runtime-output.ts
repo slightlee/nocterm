@@ -23,6 +23,13 @@ export interface AiRuntimeOutputReduction extends AiRuntimeOutputSnapshot {
 
 /** Tauri command 可能拒绝字符串或 Error；面板必须保留后端可操作的失败说明。 */
 export function aiRuntimeErrorMessage(error: unknown, fallback: string): string {
+  const code = error instanceof Error ? error.message : error;
+  if (code === 'AI_REASONING_EFFORT_INVALID') return '当前 Agent 不支持所选思考强度，请重新选择。';
+  if (code === 'AI_REASONING_MODEL_REQUIRED') return '请先选择具体模型，再设置思考强度。';
+  if (code === 'AI_GROK_REASONING_EFFORT_UNAVAILABLE')
+    return '当前 Grok 会话未提供所选思考强度，请重新选择模型或档位。';
+  if (code === 'AI_GROK_REASONING_EFFORT_APPLY_FAILED')
+    return 'Grok 未能确认所选思考强度。这次请求尚未发送，请调整档位或重试。';
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   if (typeof error === 'string' && error.trim()) return error.trim();
   return fallback;

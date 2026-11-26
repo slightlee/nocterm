@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { TerminalSession } from '../../terminal';
-import { canBeginAiConversation, resolveAiTaskNavigation } from './ai-panel-state';
+import {
+  canBeginAiConversation,
+  canCommitAiProviderChange,
+  effectiveAiFastMode,
+  resolveAiTaskNavigation,
+} from './ai-panel-state';
 import type { AiRuntimeTask, AiRuntimeTasks } from './ai-runtime-task';
 
 function remoteSession(id: string, connectionId: number): TerminalSession {
@@ -60,6 +65,36 @@ describe('canBeginAiConversation', () => {
     expect(canBeginAiConversation('ssh:2', tasks)).toBe(true);
     expect(canBeginAiConversation('local:session-1', tasks)).toBe(false);
     expect(canBeginAiConversation(null, tasks)).toBe(false);
+  });
+});
+
+describe('canCommitAiProviderChange', () => {
+  it('rejects stale resets, changed conversations and tasks started while awaiting', () => {
+    const targetKey = 'local:session-1';
+    expect(canCommitAiProviderChange(2, 2, 'conversation-a', 'conversation-a', targetKey, {})).toBe(
+      true
+    );
+    expect(canCommitAiProviderChange(1, 2, 'conversation-a', 'conversation-a', targetKey, {})).toBe(
+      false
+    );
+    expect(canCommitAiProviderChange(2, 2, 'conversation-a', 'conversation-b', targetKey, {})).toBe(
+      false
+    );
+    const task = runtimeTask({ kind: 'local', id: 'session-1', label: '本地终端' }, 'session-1');
+    expect(
+      canCommitAiProviderChange(2, 2, 'conversation-a', 'conversation-a', targetKey, {
+        [task.sessionId]: task,
+      })
+    ).toBe(false);
+  });
+});
+
+describe('effectiveAiFastMode', () => {
+  it('uses the capability snapshot instead of mutable catalog state', () => {
+    expect(effectiveAiFastMode(true, true)).toBe(true);
+    expect(effectiveAiFastMode(false, true)).toBe(false);
+    expect(effectiveAiFastMode(true, false)).toBeUndefined();
+    expect(effectiveAiFastMode(false, undefined)).toBeUndefined();
   });
 });
 

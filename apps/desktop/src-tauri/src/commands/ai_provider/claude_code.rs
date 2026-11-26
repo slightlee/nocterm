@@ -47,6 +47,20 @@ impl ProviderAdapter for ClaudeCodeAdapter {
             "".into(),
             "--strict-mcp-config".into(),
         ];
+        if let Some(model) = &launch.identity.model {
+            args.extend(["--model".into(), model.clone()]);
+        }
+        // 不改用户配置文件；省略参数时交回 CLI 默认，避免跨会话残留。
+        if let Some(effort) = &launch.identity.reasoning_effort {
+            args.extend(["--effort".into(), effort.clone()]);
+        }
+        if let Some(fast_mode) = launch.identity.fast_mode {
+            // Headless Claude 只接受会话级 settings；不修改用户 settings.json。
+            args.extend([
+                "--settings".into(),
+                serde_json::json!({"fastMode": fast_mode}).to_string(),
+            ]);
+        }
         if has_bridge {
             args.extend(["--allowed-tools".into(), NOCTERM_MCP_ALLOWED_TOOLS.into()]);
         }

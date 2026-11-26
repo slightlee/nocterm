@@ -13,6 +13,9 @@ use crate::commands::ai_provider::ProviderSessionIdentity;
 
 fn identity() -> ProviderSessionIdentity {
     ProviderSessionIdentity {
+        model: None,
+        reasoning_effort: None,
+        fast_mode: None,
         connection_id: Some(7),
         target_session_id: None,
         working_directory: Some("/srv/app".into()),
@@ -82,6 +85,9 @@ fn local_session_rules_expose_only_the_local_mcp_catalog() {
     let request = session_new_request(
         "/private/runtime",
         &ProviderSessionIdentity {
+            model: None,
+            reasoning_effort: None,
+            fast_mode: None,
             connection_id: None,
             target_session_id: Some("local-one".into()),
             working_directory: None,

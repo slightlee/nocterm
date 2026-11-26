@@ -1,0 +1,534 @@
+.page {
+  /* 内容区容器避免侧栏占宽后仍按整个窗口套用双栏。 */
+  container-type: inline-size;
+  width: min(1120px, 100%);
+  min-height: 100%;
+  padding: 32px 32px 40px;
+  margin: 0 auto;
+}
+
+.pageHeader {
+  margin-bottom: 24px;
+}
+
+.pageHeader h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.pageHeader p {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: clamp(420px, calc(100dvh - 185px), 560px);
+  align-items: stretch;
+  overflow: hidden;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+}
+
+.agentPane {
+  align-self: stretch;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-secondary);
+}
+
+.paneHeader {
+  display: flex;
+  height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  color: var(--text-secondary);
+}
+
+.paneHeader strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.paneHeader span {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.agentList {
+  display: grid;
+  padding-bottom: 8px;
+}
+
+.agentRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 10px;
+  min-height: 68px;
+  padding: 10px 18px;
+}
+
+.agentRow:hover {
+  background: var(--bg-hover);
+}
+
+.agentSelected {
+  background: var(--bg-selected);
+}
+
+.agentSelect {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.agentIcon {
+  width: 19px;
+  height: 19px;
+  flex: none;
+  fill: currentcolor;
+  margin-top: 1px;
+}
+
+.agentCopy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.agentName {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.agentName strong {
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.version {
+  overflow: hidden;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted,
+.error {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.muted {
+  color: var(--text-tertiary);
+}
+
+.error,
+.feedback,
+.customForm small {
+  color: var(--term-red);
+}
+
+.rowActions,
+.orderButtons {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.rowActions {
+  gap: 8px;
+}
+
+.orderButtons {
+  gap: 0;
+}
+
+.orderButton,
+.iconButton,
+.refreshButton {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  flex: none;
+  place-items: center;
+  color: var(--text-tertiary);
+  border-radius: 4px;
+}
+
+.orderButton:disabled,
+.refreshButton:disabled {
+  opacity: 0.3;
+}
+
+.orderButton:hover:enabled,
+.iconButton:hover,
+.refreshButton:hover:enabled {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.orderButtons svg,
+.iconButton svg,
+.refreshButton svg,
+.search svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.switch {
+  position: relative;
+  width: 30px;
+  height: 17px;
+  flex: none;
+  background: var(--border-primary);
+  border-radius: 20px;
+}
+
+.switch::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 11px;
+  height: 11px;
+  background: var(--bg-primary);
+  border-radius: 50%;
+  content: '';
+  transition: transform var(--dur-normal) var(--ease-out);
+}
+
+.switchOn {
+  background: var(--accent-blue);
+}
+
+.switchOn::after {
+  transform: translateX(13px);
+}
+
+.modelPane {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  padding: 22px 24px 26px;
+}
+
+.modelHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.modelHeader h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.modelMeta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hint {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.toolbarActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.toolbarActions > span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.search {
+  display: flex;
+  min-width: 140px;
+  max-width: 400px;
+  height: 30px;
+  flex: 0 1 400px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+}
+
+.search:focus-within {
+  border-color: var(--border-focus);
+}
+
+.search input {
+  min-width: 0;
+  width: 100%;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.addModelButton {
+  flex: none;
+  padding: 5px 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.addModelButton:hover {
+  color: var(--text-primary);
+}
+
+.modelList {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* 连续单行列表用间距分组，不逐行画边框。 */
+.modelRow {
+  display: flex;
+  min-height: 33px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+
+.modelRow:hover {
+  background: var(--bg-hover);
+}
+
+/* 排序保持键盘可访问；常态隐藏，避免高频列表堆叠重复图标。 */
+.agentRow > .rowActions > .orderButtons {
+  position: absolute;
+  right: 57px;
+  bottom: 8px;
+}
+
+.agentRow > .rowActions > .orderButtons,
+.modelRow > .rowActions > .orderButtons {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.agentRow:hover > .rowActions > .orderButtons,
+.agentRow:focus-within > .rowActions > .orderButtons,
+.modelRow:hover > .rowActions > .orderButtons,
+.modelRow:focus-within > .rowActions > .orderButtons {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.modelIdentity {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.modelIdentity strong,
+.modelIdentity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelIdentity strong {
+  font-size: 12px;
+  font-weight: 400;
+  flex: 0 1 auto;
+}
+
+.modelIdentity span {
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.modelIdentity small {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.emptyState {
+  display: grid;
+  min-height: 150px;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.emptyState strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.emptyState span {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.customForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.customForm label {
+  min-width: 120px;
+  flex: 1;
+}
+
+.customForm input {
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 5px;
+}
+
+.customForm input:focus {
+  border-color: var(--border-focus);
+}
+
+.addButton {
+  height: 30px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  font-size: 11px;
+  background: var(--bg-selected);
+  border-radius: 5px;
+}
+
+.addButton:disabled {
+  opacity: 0.4;
+}
+
+.customForm small {
+  width: 100%;
+  font-size: 11px;
+}
+
+.feedback {
+  margin: 10px 0 0;
+  font-size: 11px;
+}
+
+.page button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@container (width <= 680px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    height: auto;
+  }
+
+  .agentPane {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-secondary);
+  }
+
+  .agentRow {
+    min-height: 64px;
+    padding-block: 10px;
+  }
+
+  .modelPane {
+    height: auto;
+    padding: 18px;
+  }
+
+  .modelList {
+    max-height: 420px;
+  }
+}
+
+@media (width <= 820px) {
+  .page {
+    padding: 24px 20px;
+  }
+}
+
+@media (hover: none) {
+  .agentRow > .rowActions > .orderButtons,
+  .modelRow > .rowActions > .orderButtons {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch::after {
+    transition: none;
+  }
+}

@@ -60,7 +60,12 @@ export function AiPanel({
     lastUserMessageId,
     messages,
     provider,
+    model,
+    reasoningEffort,
+    fastMode,
+    supportsFastMode,
     providerAvailability,
+    providerChangePending,
     providerMenuOpen,
     selectedProvider,
     targetReady,
@@ -140,7 +145,7 @@ export function AiPanel({
           <button
             aria-label="新建 AI 会话"
             className={styles.iconButton}
-            disabled={!controller.canBeginConversation}
+            disabled={!controller.canBeginConversation || providerChangePending}
             onClick={() => void handleCreateConversation()}
             title="新建会话"
             type="button"
@@ -218,10 +223,13 @@ export function AiPanel({
         attachmentLoading={attachmentLoading}
         commandPolicy={controller.commandPolicy}
         composerDisabled={
-          !viewingCurrentTarget || !workspaceTargetKey || currentTargetBusyElsewhere
+          !viewingCurrentTarget ||
+          !workspaceTargetKey ||
+          currentTargetBusyElsewhere ||
+          providerChangePending
         }
         composerRef={composerRef}
-        controlsDisabled={Boolean(currentTargetTask)}
+        controlsDisabled={Boolean(currentTargetTask) || providerChangePending}
         draft={draft}
         fileInputRef={fileInputRef}
         onAttachmentChange={handleAttachmentChange}
@@ -233,7 +241,11 @@ export function AiPanel({
         }}
         onComposerKeyDown={handleComposerKeyDown}
         onDraftChange={handleDraftChange}
-        onProviderChange={(nextProvider) => void handleProviderChange(nextProvider)}
+        onProviderChange={handleProviderChange}
+        model={model}
+        reasoningEffort={reasoningEffort}
+        fastMode={fastMode}
+        supportsFastMode={supportsFastMode}
         onProviderMenuToggle={() => setProviderMenuOpen(!providerMenuOpen)}
         onStop={() => {
           if (activeTask) requestSessionStop(activeTask.sessionId);
@@ -247,9 +259,11 @@ export function AiPanel({
         statusMessage={
           currentTargetBusyElsewhere
             ? '当前终端的另一会话正在执行，请从历史会话中返回任务。'
-            : !viewingCurrentTarget || !targetReady
-              ? targetUnavailableMessage
-              : undefined
+            : providerChangePending
+              ? '正在切换 Agent…'
+              : !viewingCurrentTarget || !targetReady
+                ? targetUnavailableMessage
+                : undefined
         }
         targetReady={targetReady}
         targetUnavailableMessage={targetUnavailableMessage}

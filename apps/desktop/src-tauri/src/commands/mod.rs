@@ -3,6 +3,7 @@ pub mod ai_bridge;
 pub mod ai_conversation;
 pub mod ai_execution;
 mod ai_headless;
+pub mod ai_models;
 mod ai_persistent;
 pub mod ai_policy;
 pub mod ai_process;

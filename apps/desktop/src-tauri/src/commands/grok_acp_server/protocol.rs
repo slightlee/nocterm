@@ -72,7 +72,7 @@ impl BootstrapMessages {
     }
 }
 
-pub(super) fn initialize_request() -> Value {
+pub(in crate::commands) fn initialize_request() -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": 1,

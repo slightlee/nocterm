@@ -1,0 +1,405 @@
+/* 弹层使用视口坐标，窄 AI 面板也能向外展开双栏。 */
+.anchor {
+  display: flex;
+  min-width: 0;
+}
+
+.menu {
+  /* 小窗口的 AI 面板使用 sticky 层，Portal 菜单需在它之上、模态遮罩之下。 */
+  position: fixed;
+  z-index: calc(var(--z-sticky) + 1);
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  width: min(460px, calc(100vw - 16px));
+  max-height: calc(100dvh - 110px);
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+}
+
+.columns {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 160px;
+}
+
+.reasoningPane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-inline-start: 1px solid var(--border-secondary);
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  background: var(--bg-secondary);
+  border-inline-end: 1px solid var(--border-secondary);
+}
+
+.emptyProviders {
+  display: grid;
+  min-height: 150px;
+  align-content: center;
+  justify-items: start;
+  gap: 5px;
+  padding: 24px;
+}
+
+.emptyProviders strong {
+  font-size: 12px;
+}
+
+.emptyProviders span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 34px;
+  place-items: center;
+  color: var(--text-secondary);
+  border-radius: 6px;
+}
+
+.agent:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.agent[aria-pressed='true'] {
+  color: var(--text-primary);
+  background: var(--bg-selected);
+}
+
+/* 侧边刻度表示浏览中的 Agent，勾选表示会话真正使用的模型。 */
+.agent[aria-pressed='true']::before {
+  position: absolute;
+  inset-inline-start: -5px;
+  width: 3px;
+  height: 17px;
+  background: var(--term-blue);
+  border-radius: 3px;
+  content: '';
+}
+
+.brand,
+.rowBrand {
+  width: 20px;
+  height: 20px;
+  fill: currentcolor;
+}
+
+.content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.reasoningPane > .content {
+  flex: 1;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 39px;
+  margin: 0 10px;
+  padding: 0 5px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.search:focus-within {
+  border-color: var(--border-focus);
+}
+
+.search input {
+  min-width: 0;
+  flex: 1;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.search input::placeholder {
+  color: var(--text-secondary);
+}
+
+.scrollArea {
+  height: min(300px, 40dvh);
+  min-height: 0;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 自定义 ID 可达 200 字符；单列必须允许收缩，右侧勾选始终留在视口内。 */
+.modelList {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+}
+
+/* 整行承接悬停预览，点击名称才提交模型；右栏始终可见，无需额外箭头入口。 */
+.optionRow {
+  display: flex;
+  min-width: 0;
+  border-radius: 5px;
+}
+
+/* 浏览高亮和已提交勾选分开；移动到右栏后仍能辨认档位属于哪个模型。 */
+.optionRow[data-preview='true'] {
+  background: var(--bg-hover);
+}
+
+.reasoningHeader {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  min-height: 57px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.reasoningHeader div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.reasoningHeader strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.reasoningHeader span {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effortBadge {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: normal;
+}
+
+.speedIcon {
+  flex: none;
+  color: var(--term-blue);
+}
+
+.option,
+.add {
+  display: flex;
+  width: 100%;
+  min-height: 29px;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 9px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: start;
+  border-radius: 5px;
+}
+
+.optionRow > .option {
+  min-width: 0;
+  min-height: 30px;
+  flex: 1;
+}
+
+.option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.option[aria-selected='true'] {
+  background: var(--bg-selected);
+}
+
+/* 名称只占一行；长名称可收缩，别名标识与右侧状态保留独立空间。 */
+.modelText {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.alias {
+  max-width: 40%;
+  flex-shrink: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.availability {
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.rowBrand,
+.lineIcon,
+.check {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--text-secondary);
+}
+
+/* 默认标记说明模型能力；选中勾独立表示当前生效档位。 */
+.defaultEffort {
+  margin-inline-start: auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.lineIcon,
+.check {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.check {
+  margin-inline-start: auto;
+  color: var(--term-blue);
+  stroke-width: 2;
+}
+
+.defaultEffort + .check {
+  margin-inline-start: 0;
+}
+
+.speedFooter {
+  display: flex;
+  min-height: 40px;
+  grid-column: 1 / -1;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-secondary);
+}
+
+.speedOptions {
+  display: inline-grid;
+  grid-template-columns: repeat(2, max-content);
+  padding: 2px;
+  background: var(--bg-secondary);
+  border-radius: 7px;
+}
+
+.speedOptions button {
+  display: inline-flex;
+  min-width: 74px;
+  min-height: 27px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 11px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+.speedOptions svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.speedOptions button[aria-pressed='true'] {
+  color: var(--text-primary);
+  background: var(--bg-selected);
+}
+
+.speedOptions button:disabled {
+  opacity: 0.5;
+}
+
+.add {
+  color: var(--text-secondary);
+}
+
+.add:hover,
+.option:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.menu button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+
+.notice {
+  display: block;
+  padding: 7px 9px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 只有整个视口不足以容纳双栏时才上下排列，面板自身变窄不触发降级。 */
+@media (width < 480px) {
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .columns > .content,
+  .reasoningPane {
+    min-height: auto;
+  }
+
+  .reasoningPane {
+    border-top: 1px solid var(--border-secondary);
+    border-inline-start: 0;
+  }
+
+  .scrollArea {
+    height: auto;
+    max-height: 25dvh;
+    flex: none;
+  }
+}

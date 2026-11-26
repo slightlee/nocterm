@@ -6,6 +6,7 @@ use std::{
     fs::{self, DirBuilder, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use super::{
@@ -16,6 +17,7 @@ use super::{
 mod config;
 
 use config::create_runtime_config;
+pub(crate) use config::read_grok_model_metadata;
 
 pub(super) static ADAPTER: &dyn ProviderAdapter = &GrokAdapter;
 
@@ -116,6 +118,23 @@ impl Drop for PreparedGrokAcpLaunch {
 }
 
 impl PreparedGrokAcpLaunch {
+    /// 能力探测与聊天共用隔离环境，防止探测加载聊天运行时已禁用的用户扩展。
+    pub fn command(&self, executable: &Path) -> Command {
+        let mut command = Command::new(executable);
+        crate::commands::ai_process::hide_console_window(&mut command);
+        command
+            .args(&self.args)
+            .env_clear()
+            .envs(self.environment.iter().map(|(key, value)| (key, value)))
+            .current_dir(&self.current_directory);
+        // Windows CLI 包装器和 npm shebang 依赖与可执行文件一致的 PATH。
+        if let Some(path) = super::provider_environment_path(executable) {
+            command.env("PATH", path);
+        }
+        super::apply_local_network_bypass(&mut command);
+        command
+    }
+
     /// Provider 输出属于不可信边界，任何任务级密钥在进入 IPC 前都必须被替换。
     pub fn redact(&self, text: impl Into<String>) -> String {
         let mut redacted = text.into();
@@ -141,9 +160,10 @@ impl PreparedGrokAcpLaunch {
 pub(crate) fn prepare_grok_acp_launch(
     timestamp: u128,
     sequence: u64,
+    model: Option<&str>,
 ) -> Result<PreparedGrokAcpLaunch, String> {
     let (runtime_directory, cleanup_parent) = create_runtime_directory(timestamp, sequence)?;
-    let prepared = prepare_isolated_launch(&runtime_directory, cleanup_parent.clone());
+    let prepared = prepare_isolated_launch(&runtime_directory, cleanup_parent.clone(), model);
     if prepared.is_err() {
         cleanup_paths(std::slice::from_ref(&runtime_directory));
         if let Some(parent) = cleanup_parent {
@@ -156,10 +176,15 @@ pub(crate) fn prepare_grok_acp_launch(
 fn prepare_isolated_launch(
     runtime_directory: &Path,
     cleanup_parent: Option<PathBuf>,
+    model: Option<&str>,
 ) -> Result<PreparedGrokAcpLaunch, String> {
-    let model_environment = create_runtime_config(runtime_directory)?;
+    let model_environment = create_runtime_config(runtime_directory, model)?;
     let (mut environment, mut secret_environment_keys) =
         create_isolated_environment(model_environment);
+    // 显式选择优先于继承的 GROK_DEFAULT_MODEL，仅影响本次隔离子进程。
+    if let Some(id) = model {
+        set_environment(&mut environment, "GROK_DEFAULT_MODEL".into(), id.into());
+    }
     link_authentication(runtime_directory)?;
     let profile = runtime_directory.join("agent.md");
     write_private_file(&profile, agent_profile().as_bytes(), "Grok Agent Profile")?;

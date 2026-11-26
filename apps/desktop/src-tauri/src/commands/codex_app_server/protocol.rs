@@ -213,11 +213,33 @@ pub(super) fn codex_thread_start_request(
         "params": {
             "approvalPolicy": "never",
             "cwd": identity.working_directory,
+            "model": identity.model,
             "developerInstructions": developer_instructions,
             "ephemeral": true,
             "config": config
         }
     })
+}
+
+/// effort 是 turn/start 的原生字段；默认不发送覆盖值，保留 CLI 生效配置。
+pub(super) fn codex_turn_start_request(
+    id: u64,
+    thread_id: &str,
+    prompt: &str,
+    effort: Option<&str>,
+    fast_mode: Option<bool>,
+) -> Value {
+    let mut request = json!({
+        "id": id, "method": "turn/start",
+        "params": {"threadId": thread_id, "input": [{"type":"text", "text":prompt}]}
+    });
+    if let Some(effort) = effort {
+        request["params"]["effort"] = json!(effort);
+    }
+    if let Some(fast) = fast_mode {
+        request["params"]["serviceTier"] = json!(if fast { "fast" } else { "default" });
+    }
+    request
 }
 
 pub(super) fn write_message(writer: &mut impl Write, message: &Value) -> Result<(), String> {

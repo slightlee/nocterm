@@ -9,6 +9,12 @@ pub struct AiSessionStartRequest {
     /// UI 对话 ID 用于复用 Codex app-server；它不作为终端授权身份。
     pub conversation_id: String,
     pub provider: String,
+    /// 空值表示沿用 CLI 配置。
+    pub model: Option<String>,
+    /// 空值跟随 CLI 配置；显式值必须通过 Provider 档位白名单校验。
+    pub reasoning_effort: Option<String>,
+    /// 空值沿用 CLI 配置；布尔值只用于目录明确支持快速模式的模型。
+    pub fast_mode: Option<bool>,
     /// 首次创建 Provider 会话时包含界面已有历史，用于应用重启后的上下文恢复。
     pub prompt: String,
     /// 已复用 Provider 会话只发送当前问题，避免重复注入历史消息。
@@ -28,6 +34,61 @@ pub struct AiProviderStatus {
     pub id: String,
     pub command: String,
     pub available: bool,
+}
+
+/// 模型调用标识与显示名称分离，防止把本机别名映射误展示为官方模型。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelOption {
+    pub id: String,
+    pub name: String,
+    pub source: AiModelSource,
+    /// 历史版本仅默认折叠，不表示不可用或禁止已有会话继续选择。
+    pub is_legacy: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_effort: Option<String>,
+    /// 仅在 CLI 目录或维护目录明确声明时返回，不能按模型名称猜测。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub supports_fast_mode: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_cli_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<AiModelUnavailableReason>,
+}
+
+/// 设置页只接收可操作或需要解释的状态，不推断模型是否真正可用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AiProviderAccess {
+    LoginRequired,
+    CustomEndpoint,
+    ExternalProvider,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelCatalog {
+    pub models: Vec<AiModelOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<AiProviderAccess>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AiModelSource {
+    Cli,
+    Catalog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AiModelUnavailableReason {
+    CliUpdateRequired,
+    CliVersionUnknown,
 }
 
 #[derive(Debug, Clone, Serialize)]
