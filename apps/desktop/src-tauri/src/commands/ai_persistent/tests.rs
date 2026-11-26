@@ -81,6 +81,7 @@ fn identity(target: &str) -> ProviderSessionIdentity {
     ProviderSessionIdentity {
         model: None,
         reasoning_effort: None,
+        fast_mode: None,
         connection_id: None,
         target_session_id: Some(target.to_string()),
         working_directory: Some("/tmp".into()),
@@ -223,10 +224,12 @@ fn restoring_default_effort_replaces_a_session_with_explicit_effort() {
     let explicit = ProviderSessionIdentity {
         model: Some("test-model".into()),
         reasoning_effort: Some("high".into()),
+        fast_mode: Some(true),
         ..identity("local-one")
     };
     let default = ProviderSessionIdentity {
         reasoning_effort: None,
+        fast_mode: None,
         ..explicit.clone()
     };
     let old = Arc::new(TestSession::with_identity(explicit.clone()));

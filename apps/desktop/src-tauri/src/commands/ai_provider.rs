@@ -109,6 +109,8 @@ pub struct ProviderSessionIdentity {
     pub model: Option<String>,
     /// 档位改变时也重建会话；恢复默认不能沿用上轮的显式覆盖。
     pub reasoning_effort: Option<String>,
+    /// 速度档位改变时重建会话，避免 Provider 保留上一轮设置。
+    pub fast_mode: Option<bool>,
     pub connection_id: Option<i64>,
     pub target_session_id: Option<String>,
     pub working_directory: Option<String>,
@@ -141,6 +143,84 @@ fn user_home_directory() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
+}
+
+/// 接入摘要只需要比较 HTTP(S) 主机；不保留路径、用户信息、查询参数或凭据。
+pub(crate) fn http_endpoint_host(url: &str) -> Option<String> {
+    let url = url.trim();
+    let scheme_end = url.find("://")?;
+    let scheme = &url[..scheme_end];
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return None;
+    }
+    let authority = url[scheme_end + 3..].split(['/', '?', '#']).next()?;
+    // 原始 `@` 只能分隔一次 userinfo；凭据中的 `@` 必须按 URL 规则百分号编码。
+    if authority.matches('@').count() > 1 {
+        return None;
+    }
+    let host_port = authority.rsplit('@').next()?;
+    let (host, port, ipv6) = if let Some(ipv6) = host_port.strip_prefix('[') {
+        let close = ipv6.find(']')?;
+        let suffix = &ipv6[close + 1..];
+        let port = if suffix.is_empty() {
+            None
+        } else {
+            Some(suffix.strip_prefix(':')?)
+        };
+        (&ipv6[..close], port, true)
+    } else {
+        if host_port.matches(':').count() > 1 {
+            return None;
+        }
+        host_port
+            .rsplit_once(':')
+            .map_or((host_port, None, false), |(host, port)| {
+                (host, Some(port), false)
+            })
+    };
+    let normalized_host = host.strip_suffix('.').unwrap_or(host);
+    if !valid_http_host(normalized_host, ipv6)
+        || port.is_some_and(|port| {
+            port.is_empty()
+                || !port.bytes().all(|byte| byte.is_ascii_digit())
+                || port.parse::<u16>().is_err()
+        })
+    {
+        return None;
+    }
+    Some(normalized_host.to_ascii_lowercase())
+}
+
+/// 接受标准 IP 与 ASCII DNS 名；国际域名必须先转换为 punycode，避免自制 IDNA 规则。
+fn valid_http_host(host: &str, ipv6: bool) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    if ipv6 {
+        return host.parse::<std::net::Ipv6Addr>().is_ok();
+    }
+    if host
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
+        return host.parse::<std::net::Ipv4Addr>().is_ok();
+    }
+    host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
 }
 
 /// 供 Provider 子进程注入的 PATH。已选可执行文件所在目录必须排在最前，保证

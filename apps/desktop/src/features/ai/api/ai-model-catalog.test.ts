@@ -75,6 +75,77 @@ describe('Provider 模型目录缓存', () => {
     }
   );
 
+  it('stores the bounded access summary without persisting it to disk', async () => {
+    const { refreshModelCatalog, getModelCatalogSnapshot } = await import('./ai-model-catalog');
+    mocks.invoke.mockResolvedValueOnce({
+      models: [{ id: 'fast', name: 'Fast', source: 'cli', supportsFastMode: true }],
+      access: 'customEndpoint',
+    });
+    await refreshModelCatalog('codex');
+    expect(getModelCatalogSnapshot('codex')).toMatchObject({
+      access: 'customEndpoint',
+      models: [expect.objectContaining({ id: 'fast', supportsFastMode: true })],
+    });
+    const cached = window.localStorage.getItem('nocterm.ai.discovered-models.codex') ?? '';
+    expect(cached).not.toContain('customEndpoint');
+    expect(cached).not.toContain('secret');
+
+    mocks.invoke.mockResolvedValueOnce({
+      models: [{ id: 'official', name: 'Official', source: 'cli' }],
+    });
+    await refreshModelCatalog('codex', { force: true });
+    expect(getModelCatalogSnapshot('codex').access).toBeUndefined();
+  });
+
+  it('manual refresh bypasses a successful catalog cache', async () => {
+    const { refreshModelCatalog } = await import('./ai-model-catalog');
+    mocks.invoke.mockResolvedValueOnce(['cached']).mockResolvedValueOnce(['fresh']);
+    await refreshModelCatalog('codex');
+    expect(await refreshModelCatalog('codex', { force: true })).toEqual({
+      models: parseModelCatalog(['fresh']),
+      refreshedAt: Date.now(),
+    });
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('settings version probes share pending work and preserve concurrent catalog results', async () => {
+    const { refreshProviderVersion, refreshModelCatalog, getModelCatalogSnapshot } =
+      await import('./ai-model-catalog');
+    let resolveVersion!: (value: string) => void;
+    mocks.invoke.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        resolveVersion = resolve;
+      })
+    );
+    const pending = refreshProviderVersion('codex');
+    expect(refreshProviderVersion('codex', true)).toBe(pending);
+    mocks.invoke.mockResolvedValueOnce(['model']);
+    await refreshModelCatalog('codex');
+    resolveVersion('0.171.0');
+    await pending;
+    expect(getModelCatalogSnapshot('codex')).toMatchObject({
+      models: parseModelCatalog(['model']),
+      cliVersion: '0.171.0',
+    });
+    await refreshProviderVersion('codex');
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    mocks.invoke.mockResolvedValueOnce(['new-model']);
+    await refreshModelCatalog('codex', { force: true });
+    expect(getModelCatalogSnapshot('codex').cliVersion).toBe('0.171.0');
+    mocks.invoke.mockResolvedValueOnce('not a version');
+    await refreshProviderVersion('codex', true);
+    expect(getModelCatalogSnapshot('codex')).toMatchObject({
+      models: parseModelCatalog(['new-model']),
+      cliVersion: null,
+    });
+    await refreshProviderVersion('codex');
+    expect(mocks.invoke).toHaveBeenCalledTimes(4);
+    vi.advanceTimersByTime(30_000);
+    mocks.invoke.mockResolvedValueOnce('0.172.0');
+    await refreshProviderVersion('codex');
+    expect(getModelCatalogSnapshot('codex').cliVersion).toBe('0.172.0');
+  });
+
   it('到期刷新时保持旧模型可选，成功后替换整个列表', async () => {
     const { refreshModelCatalog, getModelCatalogSnapshot } = await import('./ai-model-catalog');
     mocks.invoke.mockResolvedValueOnce(['a']).mockResolvedValueOnce(['b']);
@@ -82,7 +153,7 @@ describe('Provider 模型目录缓存', () => {
     vi.advanceTimersByTime(5 * 60_000);
     const pending = refreshModelCatalog('codex');
     expect(getModelCatalogSnapshot('codex').models).toEqual(parseModelCatalog(['a']));
-    expect(await pending).toEqual({ models: parseModelCatalog(['b']) });
+    expect(await pending).toEqual({ models: parseModelCatalog(['b']), refreshedAt: Date.now() });
   });
 
   it('重启时先回显，失败保留目录并延迟重试，卸载只清理发现缓存', async () => {
@@ -129,12 +200,15 @@ describe('Provider 模型目录缓存', () => {
     mocks.invoke.mockResolvedValueOnce(models);
     expect(await refreshModelCatalog('claude-code')).toEqual({
       models,
+      refreshedAt: Date.now(),
     });
+    const refreshedAt = Date.now();
     vi.advanceTimersByTime(5 * 60_000);
     mocks.invoke.mockResolvedValueOnce([{ id: 'invalid id' }]);
     expect(await refreshModelCatalog('claude-code')).toEqual({
       models,
       error: 'unavailable',
+      refreshedAt,
     });
     expect(
       JSON.parse(window.localStorage.getItem('nocterm.ai.discovered-models.claude-code')!)
@@ -187,7 +261,7 @@ describe('Provider 模型目录缓存', () => {
         vi.advanceTimersByTime(1);
       }
       mocks.invoke.mockResolvedValueOnce([]);
-      expect(await refreshModelCatalog(provider)).toEqual({ models: [] });
+      expect(await refreshModelCatalog(provider)).toEqual({ models: [], refreshedAt: Date.now() });
       expect(mocks.invoke).toHaveBeenCalledTimes(3);
     }
   );
@@ -214,7 +288,7 @@ describe('Provider 模型目录缓存', () => {
     await refreshModelCatalog('claude-code');
     await refreshModelCatalog('claude-code');
     expect(mocks.invoke).toHaveBeenCalledTimes(1);
-    expect(getModelCatalogSnapshot('claude-code')).toEqual({ models });
+    expect(getModelCatalogSnapshot('claude-code')).toEqual({ models, refreshedAt: Date.now() });
   });
 
   it('冷却从慢请求完成时开始，等待中的请求持续合并', async () => {
@@ -235,7 +309,10 @@ describe('Provider 模型目录缓存', () => {
     expect(mocks.invoke).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1);
     mocks.invoke.mockResolvedValueOnce([]);
-    expect(await refreshModelCatalog('claude-code')).toEqual({ models: [] });
+    expect(await refreshModelCatalog('claude-code')).toEqual({
+      models: [],
+      refreshedAt: Date.now(),
+    });
     expect(mocks.invoke).toHaveBeenCalledTimes(2);
   });
 });

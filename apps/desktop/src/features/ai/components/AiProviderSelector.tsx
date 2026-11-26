@@ -1,9 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useAiAgentPreferences } from '../hooks/use-ai-agent-preferences';
 import { useAiModelCatalog } from '../hooks/use-ai-model-catalog';
+import { enabledProviders } from '../model/ai-agent-preferences';
 import { REASONING_LABELS, type AiReasoningEffort } from '../model/ai-reasoning';
-import { AI_PROVIDERS, type AiProvider, type AiProviderId } from '../model/ai-types';
+import type { AiProvider, AiProviderId } from '../model/ai-types';
 import { modelMenuPosition } from './ai-model-menu-position';
 import { AiModelOptions } from './AiModelOptions';
 import { AiProviderIcon } from './AiProviderIcon';
@@ -15,10 +17,17 @@ interface AiProviderSelectorProps {
   providerId: AiProviderId;
   model?: string;
   reasoningEffort?: AiReasoningEffort;
+  fastMode?: boolean;
+  supportsFastMode?: boolean;
   open: boolean;
   disabled: boolean;
   onToggle: () => void;
-  onChange: (provider: AiProviderId, model?: string, effort?: AiReasoningEffort) => void;
+  onChange: (
+    provider: AiProviderId,
+    model?: string,
+    effort?: AiReasoningEffort,
+    fastMode?: boolean
+  ) => void;
 }
 
 /** Provider 选择器只呈现已注册 Adapter，不参与会话启动或可用性探测。 */
@@ -27,13 +36,16 @@ export function AiProviderSelector({
   providerId,
   model,
   reasoningEffort,
+  fastMode,
+  supportsFastMode,
   open,
   disabled,
   onToggle,
   onChange,
 }: AiProviderSelectorProps) {
   // 标签只影响展示，选择与发送始终使用原始 ID，避免把映射名称当作调用参数。
-  const modelName = useAiModelCatalog(providerId).models?.find((item) => item.id === model)?.name;
+  const selectedModel = useAiModelCatalog(providerId).models?.find((item) => item.id === model);
+  const modelName = selectedModel?.name;
   const menuId = useId();
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -108,6 +120,11 @@ export function AiProviderSelector({
           {reasoningEffort && (
             <small className={picker.effortBadge}>{REASONING_LABELS[reasoningEffort]}</small>
           )}
+          {fastMode && supportsFastMode && (
+            <svg className={picker.speedIcon} viewBox="0 0 24 24" role="img" aria-label="快速模式">
+              <path d="m13 2-10 12h9l-1 8 10-12h-9l1-8Z" />
+            </svg>
+          )}
         </span>
         <svg className={styles.providerChevron} viewBox="0 0 24 24" aria-hidden="true">
           <path d="m7 10 5 5 5-5" />
@@ -133,14 +150,14 @@ export function AiProviderSelector({
               }}
             >
               <ModelMenuContent
-                key={`${providerId}:${model ?? ''}`}
                 providerId={providerId}
                 model={model}
                 reasoningEffort={reasoningEffort}
+                fastMode={fastMode}
+                supportsFastMode={supportsFastMode}
                 disabled={disabled}
-                onChange={(agent, id, effort) => {
-                  trigger.current?.focus();
-                  onChange(agent, id, effort);
+                onChange={(agent, id, effort, speed) => {
+                  onChange(agent, id, effort, speed);
                 }}
               />
             </div>,
@@ -156,22 +173,39 @@ function ModelMenuContent({
   providerId,
   model,
   reasoningEffort,
+  fastMode,
+  supportsFastMode,
   disabled,
   onChange,
 }: Pick<
   AiProviderSelectorProps,
-  'providerId' | 'model' | 'reasoningEffort' | 'disabled' | 'onChange'
+  | 'providerId'
+  | 'model'
+  | 'reasoningEffort'
+  | 'fastMode'
+  | 'supportsFastMode'
+  | 'disabled'
+  | 'onChange'
 >) {
+  const providers = enabledProviders(useAiAgentPreferences());
   const [browsing, setBrowsing] = useState<AiProviderId>(
-    model ? providerId : (AI_PROVIDERS[0]?.id ?? providerId)
+    model && providers.some(({ id }) => id === providerId)
+      ? providerId
+      : (providers[0]?.id ?? providerId)
   );
-  const agent = AI_PROVIDERS.find((item) => item.id === browsing);
+  const agent = providers.find((item) => item.id === browsing) ?? providers[0];
+  const speedAvailable = agent?.id === providerId && supportsFastMode === true;
+  const emptyState = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // 全部停用时没有搜索框接收焦点，仍需让 Esc 可关闭弹层并返回工具栏。
+    if (!agent) emptyState.current?.focus();
+  }, [agent]);
   return (
     <>
       <div className={picker.rail} role="group" aria-label="Agent">
-        {AI_PROVIDERS.map((item) => (
+        {providers.map((item) => (
           <button
-            aria-pressed={item.id === browsing}
+            aria-pressed={item.id === agent?.id}
             aria-label={item.name}
             title={item.name}
             className={picker.agent}
@@ -184,6 +218,12 @@ function ModelMenuContent({
           </button>
         ))}
       </div>
+      {!agent && (
+        <div className={picker.emptyProviders} tabIndex={-1} ref={emptyState}>
+          <strong>没有启用的 Agent</strong>
+          <span>请在“设置 → 智能体”中启用至少一个 Agent。</span>
+        </div>
+      )}
       {agent && (
         <AiModelOptions
           key={agent.id}
@@ -194,6 +234,32 @@ function ModelMenuContent({
           disabled={disabled}
           onSelect={(id, effort) => onChange(agent.id, id, effort)}
         />
+      )}
+      {speedAvailable && model && (
+        <div className={picker.speedFooter}>
+          <div className={picker.speedOptions} role="group" aria-label="响应速度">
+            <button
+              type="button"
+              disabled={disabled}
+              aria-pressed={fastMode !== true}
+              onClick={() => onChange(providerId, model, reasoningEffort, false)}
+            >
+              标准
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              aria-pressed={fastMode === true}
+              onClick={() => onChange(providerId, model, reasoningEffort, true)}
+              title="同一模型更低延迟，可能消耗更多额度"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m13 2-10 12h9l-1 8 10-12h-9l1-8Z" />
+              </svg>
+              快速
+            </button>
+          </div>
+        </div>
       )}
     </>
   );

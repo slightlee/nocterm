@@ -55,6 +55,7 @@ mod tests {
         let ssh = terminal_session_instructions(&ProviderSessionIdentity {
             model: None,
             reasoning_effort: None,
+            fast_mode: None,
             connection_id: Some(7),
             target_session_id: None,
             working_directory: None,
@@ -63,6 +64,7 @@ mod tests {
         let local = terminal_session_instructions(&ProviderSessionIdentity {
             model: None,
             reasoning_effort: None,
+            fast_mode: None,
             connection_id: None,
             target_session_id: Some("local-one".into()),
             working_directory: None,
@@ -95,6 +97,7 @@ mod tests {
             terminal_session_instructions(&ProviderSessionIdentity {
                 model: None,
                 reasoning_effort: None,
+                fast_mode: None,
                 connection_id: None,
                 target_session_id: None,
                 working_directory: None,

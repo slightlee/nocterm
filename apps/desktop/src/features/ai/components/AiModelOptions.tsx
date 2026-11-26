@@ -2,14 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
 import { refreshModelCatalog, type CatalogSnapshot } from '../api/ai-model-catalog';
+import { useAiAgentPreferences } from '../hooks/use-ai-agent-preferences';
 import { useAiModelCatalog } from '../hooks/use-ai-model-catalog';
-import {
-  addCustomModel,
-  filterModelOptions,
-  isModelId,
-  modelUnavailableLabel,
-  readCustomModels,
-} from '../model/ai-model-catalog';
+import { applyModelPreferences } from '../model/ai-agent-preferences';
+import { filterModelOptions, modelUnavailableLabel } from '../model/ai-model-catalog';
 import type { AiProvider } from '../model/ai-types';
 import { compatibleReasoningEffort, type AiReasoningEffort } from '../model/ai-reasoning';
 import { AiProviderIcon } from './AiProviderIcon';
@@ -32,7 +28,7 @@ function modelCatalogStatus({ models, error }: CatalogSnapshot): string {
   if (error)
     return models?.length
       ? '刷新失败，显示上次读取的模型'
-      : '模型列表读取失败，可添加当前接口支持的自定义模型';
+      : '模型列表读取失败，可在设置 → 智能体中添加自定义模型';
   if (!models) return '正在读取本机模型…';
   return models.length ? '' : '当前 Agent 未报告模型';
 }
@@ -53,31 +49,30 @@ export function AiModelOptions({
   const listRef = useRef<HTMLDivElement>(null);
   const reasoningRef = useRef<HTMLDivElement>(null);
   const catalog = useAiModelCatalog(provider);
-  const [saved, setSaved] = useState(() => {
-    try {
-      return { ids: readCustomModels(window.localStorage, provider), error: '' };
-    } catch {
-      return { ids: [], error: '读取本机自定义模型失败' };
-    }
-  });
-  const [draft, setDraft] = useState('');
-  const [editing, setEditing] = useState(false);
-  const [error, setError] = useState(saved.error);
+  const preferences = useAiAgentPreferences().providers[provider];
   const status = modelCatalogStatus(catalog);
   useEffect(() => {
     if (!isDesktopRuntime()) return;
     void refreshModelCatalog(provider);
   }, [provider]);
 
-  const options = filterModelOptions(
-    catalog.models ?? [],
-    saved.ids,
-    active ? selected : undefined,
-    query,
-    showLegacy
+  const options = applyModelPreferences(
+    filterModelOptions(
+      catalog.models ?? [],
+      preferences.customModels,
+      active ? selected : undefined,
+      query,
+      showLegacy
+    ),
+    preferences
   );
   const legacyCount =
-    catalog.models?.filter((model) => model.source === 'catalog' && model.isLegacy).length ?? 0;
+    catalog.models?.filter(
+      (model) =>
+        model.source === 'catalog' &&
+        model.isLegacy &&
+        !preferences.disabledModels.includes(model.id)
+    ).length ?? 0;
   // 预览不提交选择；从可见列表读取最新能力，搜索隐藏模型后不能误选隐藏项的档位。
   const reasoningModel = options.find((model) => model?.id === reasoningModelId);
   const focusReasoning = () => {
@@ -91,27 +86,6 @@ export function AiModelOptions({
   };
   // 只报告选模意图；保留已有档位或采用默认值由控制器统一决定。
   const selectModel = (id: string) => onSelect(id);
-  const addModel = () => {
-    if (disabled) return;
-    const id = draft.trim();
-    if (!isModelId(id)) {
-      setError('请输入有效的模型 ID');
-      return;
-    }
-    const unavailable = modelUnavailableLabel(catalog.models?.find((model) => model.id === id));
-    if (unavailable) {
-      setError(unavailable);
-      return;
-    }
-    try {
-      setSaved({ ids: addCustomModel(window.localStorage, provider, id), error: '' });
-    } catch {
-      setError('无法保存自定义模型，请检查本地存储');
-      return;
-    }
-    selectModel(id);
-  };
-
   return (
     <div className={styles.columns}>
       <div className={styles.content}>
@@ -227,54 +201,6 @@ export function AiModelOptions({
           {(status || !options.length) && (
             <small role="status" className={styles.notice}>
               {status || '没有匹配的模型'}
-            </small>
-          )}
-        </div>
-        <div className={styles.footer}>
-          {editing ? (
-            <div className={styles.entry}>
-              <input
-                aria-label="模型 ID"
-                autoFocus
-                autoComplete="off"
-                spellCheck={false}
-                maxLength={200}
-                placeholder="输入模型 ID"
-                value={draft}
-                onChange={(event) => {
-                  setDraft(event.target.value);
-                  setError('');
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    if (!event.nativeEvent.isComposing) addModel();
-                  }
-                }}
-              />
-              <button type="button" disabled={disabled || !draft.trim()} onClick={addModel}>
-                添加并使用
-              </button>
-            </div>
-          ) : (
-            <button
-              className={styles.add}
-              type="button"
-              disabled={disabled}
-              onClick={() => {
-                setDraft(query.trim());
-                setEditing(true);
-              }}
-            >
-              <svg className={styles.lineIcon} viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              添加自定义模型
-            </button>
-          )}
-          {error && (
-            <small className={styles.error} role="alert">
-              {error}
             </small>
           )}
         </div>

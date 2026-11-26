@@ -81,6 +81,7 @@ pub fn run() {
             commands::health::health_check,
             commands::ai::ai_provider_status,
             commands::ai_models::ai_provider_models,
+            commands::ai_models::ai_provider_version,
             commands::ai::ai_session_start,
             commands::ai::ai_session_stop,
             commands::ai::ai_conversation_reset,

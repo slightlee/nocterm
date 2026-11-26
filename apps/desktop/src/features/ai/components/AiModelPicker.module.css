@@ -46,6 +46,25 @@
   border-inline-end: 1px solid var(--border-secondary);
 }
 
+.emptyProviders {
+  display: grid;
+  min-height: 150px;
+  align-content: center;
+  justify-items: start;
+  gap: 5px;
+  padding: 24px;
+}
+
+.emptyProviders strong {
+  font-size: 12px;
+}
+
+.emptyProviders span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .agent {
   position: relative;
   display: grid;
@@ -95,14 +114,10 @@
   flex: 1;
 }
 
-.search,
-.entry {
+.search {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.search {
   flex: none;
   height: 39px;
   margin: 0 10px;
@@ -115,8 +130,7 @@
   border-color: var(--border-focus);
 }
 
-.search input,
-.entry input {
+.search input {
   min-width: 0;
   flex: 1;
   color: var(--text-primary);
@@ -124,8 +138,7 @@
   font-size: 12px;
 }
 
-.search input::placeholder,
-.entry input::placeholder {
+.search input::placeholder {
   color: var(--text-secondary);
 }
 
@@ -190,6 +203,11 @@
   color: var(--text-secondary);
   font-size: 10px;
   font-weight: normal;
+}
+
+.speedIcon {
+  flex: none;
+  color: var(--term-blue);
 }
 
 .option,
@@ -289,10 +307,54 @@
   margin-inline-start: 0;
 }
 
-.footer {
-  flex: none;
-  padding: 4px 5px;
+.speedFooter {
+  display: flex;
+  min-height: 40px;
+  grid-column: 1 / -1;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
   border-top: 1px solid var(--border-secondary);
+}
+
+.speedOptions {
+  display: inline-grid;
+  grid-template-columns: repeat(2, max-content);
+  padding: 2px;
+  background: var(--bg-secondary);
+  border-radius: 7px;
+}
+
+.speedOptions button {
+  display: inline-flex;
+  min-width: 74px;
+  min-height: 27px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 11px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+.speedOptions svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.speedOptions button[aria-pressed='true'] {
+  color: var(--text-primary);
+  background: var(--bg-selected);
+}
+
+.speedOptions button:disabled {
+  opacity: 0.5;
 }
 
 .add {
@@ -305,49 +367,17 @@
   background: var(--bg-hover);
 }
 
-.entry {
-  gap: 6px;
-  padding: 2px 4px;
-}
-
-.entry input {
-  height: 27px;
-  padding: 0 7px;
-  border: 1px solid var(--border-primary);
-  border-radius: 4px;
-}
-
-.entry input:focus {
-  border-color: var(--border-focus);
-}
-
-.entry button {
-  padding: 4px 6px;
-  color: var(--term-blue);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.entry button:disabled {
-  color: var(--text-tertiary);
-}
-
 .menu button:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: -2px;
 }
 
-.notice,
-.error {
+.notice {
   display: block;
   padding: 7px 9px;
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.5;
-}
-
-.error {
-  color: var(--term-red);
 }
 
 /* 只有整个视口不足以容纳双栏时才上下排列，面板自身变窄不触发降级。 */

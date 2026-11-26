@@ -54,6 +54,13 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         if let Some(effort) = &launch.identity.reasoning_effort {
             args.extend(["--effort".into(), effort.clone()]);
         }
+        if let Some(fast_mode) = launch.identity.fast_mode {
+            // Headless Claude 只接受会话级 settings；不修改用户 settings.json。
+            args.extend([
+                "--settings".into(),
+                serde_json::json!({"fastMode": fast_mode}).to_string(),
+            ]);
+        }
         if has_bridge {
             args.extend(["--allowed-tools".into(), NOCTERM_MCP_ALLOWED_TOOLS.into()]);
         }

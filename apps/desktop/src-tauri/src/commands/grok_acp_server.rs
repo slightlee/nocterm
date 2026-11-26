@@ -121,6 +121,7 @@ mod tests {
         let local = ProviderSessionIdentity {
             model: None,
             reasoning_effort: None,
+            fast_mode: None,
             connection_id: None,
             target_session_id: Some("local:one".into()),
             working_directory: Some("/tmp".into()),
@@ -128,6 +129,7 @@ mod tests {
         let remote = ProviderSessionIdentity {
             model: None,
             reasoning_effort: None,
+            fast_mode: None,
             connection_id: Some(7),
             target_session_id: None,
             working_directory: Some("/tmp".into()),

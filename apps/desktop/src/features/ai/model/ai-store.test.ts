@@ -4,6 +4,7 @@ import type { AiConversationTarget } from './ai-target';
 import {
   conversationTargetKey,
   resolveActiveAiConversation,
+  resolveActiveAiConversationId,
   resolveAiComposerState,
   type AiConversation,
   useAiStore,
@@ -47,21 +48,41 @@ describe('useAiStore target conversations', () => {
 
   it('思考强度随会话和草稿隔离，新会话与默认选择清除显式覆盖', () => {
     const store = useAiStore.getState();
-    store.setProvider('ssh:7', 'production-old', 'codex', 'test-model', 'high');
+    store.setProvider('ssh:7', 'production-old', 'codex', 'test-model', 'high', true, true);
     expect(useAiStore.getState().conversations[0].reasoningEffort).toBe('high');
+    expect(useAiStore.getState().conversations[0].fastMode).toBe(true);
+    expect(useAiStore.getState().conversations[0].supportsFastMode).toBe(true);
     expect(useAiStore.getState().conversations[1].reasoningEffort).toBeUndefined();
     expect(resolveAiComposerState(useAiStore.getState().composers, 'ssh:7').reasoningEffort).toBe(
       'high'
     );
     store.setProvider('ssh:7', 'production-old', 'codex', 'test-model');
     expect(useAiStore.getState().conversations[0].reasoningEffort).toBeUndefined();
-    const id = store.createConversation(production, 'codex', 'auto_safe', 'test-model', 'low');
+    const id = store.createConversation(
+      production,
+      'codex',
+      'auto_safe',
+      'test-model',
+      'low',
+      false,
+      true
+    );
     expect(useAiStore.getState().conversations.find((c) => c.id === id)?.reasoningEffort).toBe(
       'low'
+    );
+    expect(useAiStore.getState().conversations.find((c) => c.id === id)?.fastMode).toBe(false);
+    expect(useAiStore.getState().conversations.find((c) => c.id === id)?.supportsFastMode).toBe(
+      true
     );
     store.beginConversation('ssh:7', 'codex', 'auto_safe');
     expect(
       resolveAiComposerState(useAiStore.getState().composers, 'ssh:7').reasoningEffort
+    ).toBeUndefined();
+    expect(
+      resolveAiComposerState(useAiStore.getState().composers, 'ssh:7').fastMode
+    ).toBeUndefined();
+    expect(
+      resolveAiComposerState(useAiStore.getState().composers, 'ssh:7').supportsFastMode
     ).toBeUndefined();
   });
 
@@ -103,6 +124,16 @@ describe('useAiStore target conversations', () => {
 
     expect(resolveActiveAiConversation(conversations, {}, 'ssh:7')?.id).toBe('production-new');
     expect(resolveActiveAiConversation(conversations, {}, 'ssh:8')?.id).toBe('staging');
+  });
+
+  it('resolves the fallback conversation id used by provider change validation', () => {
+    const conversations = [
+      conversation('production-old', production, 1),
+      conversation('production-new', production, 9),
+    ];
+
+    expect(resolveActiveAiConversationId(conversations, {}, 'ssh:7')).toBe('production-new');
+    expect(resolveActiveAiConversationId(conversations, { 'ssh:7': null }, 'ssh:7')).toBeNull();
   });
 
   it('keeps drafts and blank selection isolated by target', () => {

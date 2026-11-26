@@ -19,7 +19,9 @@ fn catalog_metadata_includes_non_default_aliases_without_connection_details() {
         [model_providers.hidden]
         api_key = "provider-secret"
     "#;
-    let metadata = super::configured_model_metadata(Some(source)).unwrap();
+    let metadata = super::configured_catalog_metadata_with_inputs(Some(source), None, false)
+        .unwrap()
+        .models;
     assert_eq!(
         metadata,
         vec![
@@ -37,15 +39,110 @@ fn catalog_metadata_includes_non_default_aliases_without_connection_details() {
 #[test]
 fn catalog_metadata_handles_missing_and_invalid_configuration_explicitly() {
     for source in [None, Some("[models]\ndefault = 'built-in'")] {
-        assert!(super::configured_model_metadata(source).unwrap().is_empty());
+        assert!(
+            super::configured_catalog_metadata_with_inputs(source, None, false)
+                .unwrap()
+                .models
+                .is_empty()
+        );
     }
     for source in [
         "invalid = [",
         "model = 'invalid'",
         "[model]\nentry = 'invalid'",
     ] {
-        assert!(super::configured_model_metadata(Some(source)).is_err());
+        assert!(super::configured_catalog_metadata_with_inputs(Some(source), None, false).is_err());
     }
+}
+
+#[test]
+fn catalog_metadata_classifies_only_the_effective_default_route() {
+    let direct = r#"
+        [models]
+        default = "custom"
+        [model.custom]
+        base_url = "https://gateway.example.test/v1"
+        [model.other]
+    "#;
+    assert!(
+        super::configured_catalog_metadata_with_inputs(Some(direct), None, false)
+            .unwrap()
+            .uses_custom_endpoint
+    );
+
+    let provider = r#"
+        [models]
+        default = "custom"
+        [model.custom]
+        model_provider = "gateway"
+        [model_providers.gateway]
+        base_url = "https://gateway.example.test/v1"
+    "#;
+    assert!(
+        super::configured_catalog_metadata_with_inputs(Some(provider), None, false)
+            .unwrap()
+            .uses_custom_endpoint
+    );
+
+    let non_default = r#"
+        [models]
+        default = "native"
+        [model.native]
+        [model.custom]
+        base_url = "https://gateway.example.test/v1"
+    "#;
+    assert!(
+        !super::configured_catalog_metadata_with_inputs(Some(non_default), None, false)
+            .unwrap()
+            .uses_custom_endpoint
+    );
+    assert!(
+        super::configured_catalog_metadata_with_inputs(Some(non_default), Some("custom"), false)
+            .unwrap()
+            .uses_custom_endpoint
+    );
+
+    let global = r#"
+        [models]
+        default = "native"
+        [endpoints]
+        xai_api_base_url = "https://gateway.example.test/v1"
+    "#;
+    assert!(
+        super::configured_catalog_metadata_with_inputs(Some(global), None, false)
+            .unwrap()
+            .uses_custom_endpoint
+    );
+}
+
+#[test]
+fn endpoint_classification_requires_a_valid_non_official_http_route() {
+    for endpoint in [
+        "https://api.x.ai/v1",
+        "https://cli-chat-proxy.grok.com/v1",
+        "not-a-url",
+        "",
+    ] {
+        assert!(!super::is_custom_grok_endpoint(endpoint), "{endpoint}");
+    }
+    for endpoint in [
+        "http://127.0.0.1:3000/v1",
+        "https://gateway.example.test/v1",
+    ] {
+        assert!(super::is_custom_grok_endpoint(endpoint), "{endpoint}");
+    }
+
+    let official = r#"
+        [models]
+        default = "native"
+        [model.native]
+        base_url = "https://api.x.ai/v1"
+    "#;
+    assert!(
+        !super::configured_catalog_metadata_with_inputs(Some(official), None, false)
+            .unwrap()
+            .uses_custom_endpoint
+    );
 }
 
 #[test]

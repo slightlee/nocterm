@@ -19,6 +19,8 @@ interface AiComposerProps {
   providerId: AiProviderId;
   model?: string;
   reasoningEffort?: AiReasoningEffort;
+  fastMode?: boolean;
+  supportsFastMode?: boolean;
   providerAvailable: boolean | undefined;
   providerMenuOpen: boolean;
   running: boolean;
@@ -38,7 +40,12 @@ interface AiComposerProps {
   onAttachmentChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onAttachmentRemove: (kind: AiAttachment['kind']) => void;
   onProviderMenuToggle: () => void;
-  onProviderChange: (provider: AiProviderId, model?: string, effort?: AiReasoningEffort) => void;
+  onProviderChange: (
+    provider: AiProviderId,
+    model?: string,
+    effort?: AiReasoningEffort,
+    fastMode?: boolean
+  ) => void;
   commandPolicy: AiCommandPolicy;
   onCommandPolicyChange: (policy: AiCommandPolicy) => void;
   onStop: () => void;
@@ -50,6 +57,8 @@ export function AiComposer({
   providerId,
   model,
   reasoningEffort,
+  fastMode,
+  supportsFastMode,
   providerAvailable,
   providerMenuOpen,
   running,
@@ -129,6 +138,8 @@ export function AiComposer({
               onChange={onProviderChange}
               model={model}
               reasoningEffort={reasoningEffort}
+              fastMode={fastMode}
+              supportsFastMode={supportsFastMode}
               onToggle={() => {
                 setCommandPolicyMenuOpen(false);
                 onProviderMenuToggle();

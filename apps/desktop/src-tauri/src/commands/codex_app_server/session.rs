@@ -291,6 +291,7 @@ impl CodexAppServer {
             &self.thread_id,
             &prompt,
             self.identity.reasoning_effort.as_deref(),
+            self.identity.fast_mode,
         );
         let result = self
             .stdin

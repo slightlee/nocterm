@@ -2,6 +2,150 @@ use super::*;
 use crate::dto::ai::AiModelUnavailableReason;
 
 #[test]
+fn cli_versions_accept_product_prefixes_without_projecting_raw_output() {
+    for (line, expected) in [
+        ("codex-cli 0.171.0", "0.171.0"),
+        ("2.1.330 (Claude Code)", "2.1.330"),
+        ("grok v1.0.52", "1.0.52"),
+        ("codex-cli 0.172.0-alpha.1", "0.172.0-alpha.1"),
+    ] {
+        assert_eq!(parse_cli_version(line), Some(expected));
+    }
+    for line in [
+        "",
+        "login required",
+        "https://example.test/1.2.3",
+        "1.2.3\u{1b}[0m",
+    ] {
+        assert_eq!(parse_cli_version(line), None);
+    }
+}
+
+#[test]
+fn cli_version_rejects_unregistered_providers() {
+    assert_eq!(
+        tauri::async_runtime::block_on(ai_provider_version("unknown".into())).unwrap_err(),
+        "AI_PROVIDER_UNKNOWN"
+    );
+}
+
+#[test]
+fn access_snapshot_distinguishes_custom_routes_from_native_authentication() {
+    let custom = codex_access(
+        Some(&json!({"account":null,"requiresOpenaiAuth":true})),
+        Some(
+            &json!({"config":{"model_provider":"gateway","model_providers":{
+                "gateway":{"base_url":"http://127.0.0.1:3000/v1","api_key":"must-not-leak"}
+            }}}),
+        ),
+    );
+    assert_eq!(custom, Some(AiProviderAccess::CustomEndpoint));
+
+    let native = codex_access(
+        Some(
+            &json!({"account":{"type":"chatgpt","email":"private@example.test"},
+            "requiresOpenaiAuth":true}),
+        ),
+        Some(&json!({"config":{}})),
+    );
+    assert_eq!(native, None);
+    let login_required = codex_access(
+        Some(&json!({"account":null,"requiresOpenaiAuth":true})),
+        Some(&json!({"config":{}})),
+    );
+    assert_eq!(login_required, Some(AiProviderAccess::LoginRequired));
+    let encoded = serde_json::to_string(&custom).unwrap();
+    assert!(!encoded.contains("127.0.0.1"));
+    assert!(!encoded.contains("must-not-leak"));
+}
+
+#[test]
+fn claude_access_reports_routes_and_login_action_without_claiming_success() {
+    let official = json!({"account":{
+        "apiProvider":"firstParty",
+        "email":"private@example.test",
+        "tokenSource":"none",
+        "apiKeySource":"none"
+    }});
+    assert_eq!(classify_claude_access(&official, false), None);
+    assert_eq!(
+        classify_claude_access(&official, true),
+        Some(AiProviderAccess::CustomEndpoint)
+    );
+    assert_eq!(
+        classify_claude_access(&json!({"account":null}), true),
+        Some(AiProviderAccess::CustomEndpoint)
+    );
+    assert_eq!(
+        classify_claude_access(
+            &json!({"account":{"apiProvider":"bedrock","tokenSource":"none"}}),
+            false,
+        ),
+        Some(AiProviderAccess::ExternalProvider)
+    );
+    assert_eq!(
+        classify_claude_access(
+            &json!({"account":{
+                "apiProvider":"firstParty",
+                "tokenSource":"none",
+                "apiKeySource":"none"
+            }}),
+            false,
+        ),
+        Some(AiProviderAccess::LoginRequired)
+    );
+    // Claude Code 的初始化账号字段是可选的；未登录时缺失字段等价于没有对应凭据。
+    assert_eq!(
+        classify_claude_access(
+            &json!({"account":{"apiProvider":"firstParty","tokenSource":"none"}}),
+            false,
+        ),
+        Some(AiProviderAccess::LoginRequired)
+    );
+    assert_eq!(
+        classify_claude_access(&json!({"account":null}), false),
+        None
+    );
+}
+
+#[test]
+fn codex_fast_mode_requires_an_explicit_reported_service_tier() {
+    assert!(reported_fast_mode(
+        &json!({"supportedServiceTiers":[{"id":"fast"}]})
+    ));
+    assert!(reported_fast_mode(
+        &json!({"additionalSpeedTiers":["priority"]})
+    ));
+    assert!(!reported_fast_mode(
+        &json!({"displayName":"Fast-looking model"})
+    ));
+}
+
+#[test]
+fn claude_endpoint_detection_accepts_only_non_native_http_routes() {
+    assert!(is_custom_claude_url("http://127.0.0.1:3000/v1"));
+    assert!(is_custom_claude_url(
+        "https://gateway.example.test/anthropic"
+    ));
+    assert!(!is_custom_claude_url("https://api.anthropic.com/v1"));
+    assert!(is_custom_claude_url(
+        "https://api.anthropic.com.example.test/v1"
+    ));
+    assert!(!is_custom_claude_url("file:///tmp/not-an-endpoint"));
+}
+
+#[test]
+#[ignore = "read-only probe of locally installed CLI versions"]
+fn local_cli_version_probe() {
+    for provider in ["codex", "claude-code", "grok"] {
+        println!(
+            "{provider}: {:?}",
+            tauri::async_runtime::block_on(ai_provider_version(provider.into()))
+        );
+    }
+}
+
+#[test]
 fn configured_grok_models_fill_missing_ids_without_overwriting_probed_capabilities() {
     let mut models = Vec::new();
     append_grok_models(
@@ -101,6 +245,27 @@ fn claude_catalog_includes_documented_compatible_defaults() {
     }
     let opus = models.iter().find(|m| m.id == "claude-opus-5").unwrap();
     assert_eq!(opus.default_reasoning_effort.as_deref(), Some("high"));
+    for id in [
+        "claude-fable-5-2",
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+    ] {
+        assert!(
+            models
+                .iter()
+                .find(|model| model.id == id)
+                .unwrap()
+                .supports_fast_mode
+        );
+    }
+    assert!(
+        !models
+            .iter()
+            .find(|model| model.id == "claude-sonnet-5-5")
+            .unwrap()
+            .supports_fast_mode
+    );
     let opus = models.iter().find(|m| m.id == "claude-opus-4-7").unwrap();
     assert!(opus.default_reasoning_effort.is_none());
     assert!(models.iter().all(|model| {
@@ -130,7 +295,7 @@ fn codex_preserves_display_order_and_skips_hidden() {
 }
 
 #[test]
-fn claude_keeps_aliases_even_when_they_resolve_to_same_model() {
+fn claude_hides_external_role_mappings_but_keeps_native_and_direct_models() {
     let mut models = vec![];
     append_claude_models(
         &mut models,
@@ -138,20 +303,33 @@ fn claude_keeps_aliases_even_when_they_resolve_to_same_model() {
             {"value":"default"},
             {"value":"opus","displayName":"Mapped Model","resolvedModel":"mapped-model"},
             {"value":"sonnet","displayName":"Mapped Model","resolvedModel":"mapped-model"},
+            {"value":"haiku","displayName":"Bedrock Haiku","resolvedModel":"us.anthropic.claude-haiku-4-5-v1:0"},
+            {"value":"glm-5.3-flash","displayName":"GLM 5.3 Flash","resolvedModel":"glm-5.3-flash"},
             {"value":"claude-opus-5-5","displayName":"Local Name"}
         ]}),
     )
     .unwrap();
     claude_catalog::append_versions(&mut models, Some("2.1.284")).unwrap();
-    assert_eq!(models[0].id, "opus");
-    assert_eq!(models[1].id, "sonnet");
-    assert_eq!(models[0].resolved_model.as_deref(), Some("mapped-model"));
+    assert!(!models.iter().any(|model| model.id == "opus"));
+    assert!(!models.iter().any(|model| model.id == "sonnet"));
+    assert_eq!(
+        models
+            .iter()
+            .find(|model| model.id == "haiku")
+            .and_then(|model| model.resolved_model.as_deref()),
+        Some("us.anthropic.claude-haiku-4-5-v1:0")
+    );
+    assert!(models.iter().any(|model| model.id == "glm-5.3-flash"));
     assert_eq!(
         models.iter().filter(|m| m.id == "claude-opus-5-5").count(),
         1
     );
-    assert_eq!(models[2].name, "Local Name");
-    assert!(models[2].default_reasoning_effort.is_none());
+    let local = models
+        .iter()
+        .find(|model| model.id == "claude-opus-5-5")
+        .unwrap();
+    assert_eq!(local.name, "Local Name");
+    assert!(local.default_reasoning_effort.is_none());
     assert!(
         models
             .iter()
@@ -277,6 +455,6 @@ fn local_catalog_probe() {
     for provider in ["codex", "claude-code", "grok"] {
         let models = discover_models(provider).expect(provider);
         println!("{provider}: {}", serde_json::to_string(&models).unwrap());
-        assert!(!models.is_empty());
+        assert!(!models.models.is_empty());
     }
 }

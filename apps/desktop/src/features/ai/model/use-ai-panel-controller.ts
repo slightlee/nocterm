@@ -12,7 +12,9 @@ import { resetAiConversation } from '../api/ai-client';
 import { getModelCatalogSnapshot, refreshModelCatalog } from '../api/ai-model-catalog';
 import { compatibleReasoningEffort, type AiReasoningEffort } from './ai-reasoning';
 import { useAiPersistence } from '../hooks/use-ai-persistence';
+import { useAiAgentPreferences } from '../hooks/use-ai-agent-preferences';
 import { useAiRuntime, type AiRuntimePresentation } from '../hooks/use-ai-runtime';
+import { enabledProviders } from './ai-agent-preferences';
 import {
   buildAiVisibleContextSummary,
   createTerminalSelectionAttachment,
@@ -33,11 +35,17 @@ import {
 import {
   conversationTargetKey,
   resolveActiveAiConversation,
+  resolveActiveAiConversationId,
   resolveAiComposerState,
   useAiStore,
   type AiConversation,
 } from '../model/ai-store';
-import { canBeginAiConversation, resolveAiTaskNavigation } from '../model/ai-panel-state';
+import {
+  canBeginAiConversation,
+  canCommitAiProviderChange,
+  effectiveAiFastMode,
+  resolveAiTaskNavigation,
+} from '../model/ai-panel-state';
 import {
   findAiRuntimeTaskByConversation,
   findAiRuntimeTaskByTarget,
@@ -99,7 +107,11 @@ export interface AiPanelController {
   provider: AiProviderId;
   model?: string;
   reasoningEffort?: AiReasoningEffort;
+  fastMode?: boolean;
+  supportsFastMode?: boolean;
   providerAvailability: Record<string, boolean>;
+  /** Provider 会话重置期间禁止发送或再次提交旧选择。 */
+  providerChangePending: boolean;
   providerMenuOpen: boolean;
   selectedProvider: (typeof AI_PROVIDERS)[number];
   targetConversation: AiConversation | null;
@@ -122,7 +134,8 @@ export interface AiPanelController {
   handleProviderChange: (
     nextProvider: AiProviderId,
     model?: string,
-    effort?: AiReasoningEffort
+    effort?: AiReasoningEffort,
+    fastMode?: boolean
   ) => Promise<void>;
   handleSelectConversation: (id: string) => Promise<void>;
   handleSelectTask: (task: AiTaskNavigationSource) => void;
@@ -194,6 +207,7 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
   const [historyOpen, setHistoryOpen] = useState(false);
   const [taskMenuOpen, setTaskMenuOpen] = useState(false);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [providerChangePending, setProviderChangePending] = useState(false);
   const [inspectedConversationId, setInspectedConversationId] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Record<string, AiComposerAttachments>>({});
   const [attachmentLoadingTargetKey, setAttachmentLoadingTargetKey] = useState<string | null>(null);
@@ -207,6 +221,9 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
   const fileInputRef = useRef<HTMLInputElement>(null);
   // 历史输入浏览状态属于当前目标；Tab 变化时必须清空，不能把 A 的游标带到 B。
   const historyBrowserRef = useRef<AiHistoryBrowseState | null>(null);
+  // 同步 ref 覆盖 React 提交前的极短窗口；序号保证迟到的异步重置不能覆盖后续选择。
+  const providerChangePendingRef = useRef(false);
+  const providerChangeSequenceRef = useRef(0);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeId) ?? null,
@@ -246,9 +263,17 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
   const reasoningEffort = activeConversation
     ? activeConversation.reasoningEffort
     : composerState.reasoningEffort;
+  // 速度是会话偏好；只有目录明确声明支持时才把它投影成 Provider 参数。
+  const fastMode = activeConversation ? activeConversation.fastMode : composerState.fastMode;
+  const supportsFastMode = activeConversation
+    ? activeConversation.supportsFastMode
+    : composerState.supportsFastMode;
+  const effectiveFastMode = effectiveAiFastMode(fastMode, supportsFastMode);
   const commandPolicy = activeConversation?.commandPolicy ?? composerState.commandPolicy;
   const currentTargetProvider = targetConversation?.provider ?? composerState.provider;
   const selectedProvider = AI_PROVIDERS.find((item) => item.id === provider) ?? AI_PROVIDERS[0];
+  const agentPreferences = useAiAgentPreferences();
+  const visibleProviders = useMemo(() => enabledProviders(agentPreferences), [agentPreferences]);
   const messages = activeConversation?.messages ?? [];
   const draft = inspectedConversation ? '' : composerState.draft;
   const composerAttachments =
@@ -273,15 +298,17 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     markAllTaskResultsRead,
     clearConversationPresentation,
   } = useAiRuntime({ addMessage });
+  const runtimeTasksRef = useRef(tasks);
+  runtimeTasksRef.current = tasks;
   useAiPersistence({ onError: setPersistenceNotice });
 
   useEffect(() => {
     if (!visible || !isDesktopRuntime()) return;
     // 面板展开便预取已安装 Agent 的目录，首次点击可复用正在进行的查询。
-    for (const { id } of AI_PROVIDERS) {
+    for (const { id } of visibleProviders) {
       if (providerAvailability[id]) void refreshModelCatalog(id);
     }
-  }, [visible, providerAvailability]);
+  }, [visible, visibleProviders, providerAvailability]);
 
   const activeTask = findAiRuntimeTaskByConversation(tasks, activeConversationId);
   const currentTargetTask = findAiRuntimeTaskByTarget(tasks, workspaceTargetKey);
@@ -399,7 +426,13 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
 
   const submit = (event?: React.FormEvent) => {
     event?.preventDefault();
-    if (currentTargetTask || !workspaceTargetKey || !workspaceTarget.binding) return;
+    if (
+      providerChangePendingRef.current ||
+      currentTargetTask ||
+      !workspaceTargetKey ||
+      !workspaceTarget.binding
+    )
+      return;
     const content = draft.trim();
     if (!content && attachmentItems.length === 0) return;
     if (!targetReady) {
@@ -428,7 +461,15 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
       : question;
     const conversationId =
       activeConversation?.id ??
-      createConversation(workspaceTarget.binding, provider, commandPolicy, model, reasoningEffort);
+      createConversation(
+        workspaceTarget.binding,
+        provider,
+        commandPolicy,
+        model,
+        reasoningEffort,
+        fastMode,
+        supportsFastMode
+      );
     const history = activeConversation?.messages ?? [];
     addMessage(conversationId, 'user', visibleMessage);
     setDraft(workspaceTargetKey, '');
@@ -442,6 +483,7 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
       provider,
       model,
       reasoningEffort,
+      fastMode: effectiveFastMode,
       target: workspaceTarget,
       commandPolicy,
     });
@@ -449,7 +491,13 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
 
   /** 失败重试只能回到原目标和原会话；目标不匹配时禁止复制上下文执行。 */
   const retryLastQuestion = () => {
-    if (currentTargetTask || !activeConversation || !targetReady) return;
+    if (
+      providerChangePendingRef.current ||
+      currentTargetTask ||
+      !activeConversation ||
+      !targetReady
+    )
+      return;
     // 旧历史未持久化模型选择；重试必须先选模型，不能提前删除失败轮次。
     if (!model) {
       setProviderMenuOpen(true);
@@ -482,6 +530,7 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
       provider,
       model,
       reasoningEffort,
+      fastMode: effectiveFastMode,
       target: workspaceTarget,
       commandPolicy,
     });
@@ -583,37 +632,82 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
   const handleProviderChange = async (
     nextProvider: AiProviderId,
     nextModel?: string,
-    effort?: AiReasoningEffort
+    effort?: AiReasoningEffort,
+    selectedFastMode?: boolean
   ) => {
     if (!nextModel) return;
     const option = getModelCatalogSnapshot(nextProvider).models?.find(
       (item) => item.id === nextModel
     );
-    // 手动选择优先；仅重选同一 Agent 的同一模型时保留已有档位。
-    // 在这里固定默认值，菜单预览和后续目录刷新不能改写会话参数。
+    // 思考强度属于模型能力；速度属于会话偏好，切换模型或 Agent 时继续沿用。
+    // Provider 参数会在发送前按当前模型能力过滤，偏好本身无需因暂不支持而丢失。
     const nextEffort = compatibleReasoningEffort(
       option?.reasoningEfforts,
       effort ?? (nextProvider === provider && nextModel === model ? reasoningEffort : undefined),
       option?.defaultReasoningEffort
     );
+    const sameModel = nextProvider === provider && nextModel === model;
+    const nextFastMode = selectedFastMode ?? fastMode ?? false;
+    // 目录只在用户完成本次选模时参与能力判断；后续刷新不得改变会话发送参数。
+    const nextSupportsFastMode = option?.supportsFastMode === true;
     if (
       !workspaceTargetKey ||
       !viewingCurrentTarget ||
       currentTargetTask ||
-      (nextProvider === provider && nextModel === model && nextEffort === reasoningEffort)
-    ) {
-      setProviderMenuOpen(false);
-      return;
-    }
-    if (
-      nextProvider !== provider &&
-      activeConversation &&
-      !(await resetProviderConversation(activeConversation.id, panelViewKey))
+      (sameModel &&
+        nextEffort === reasoningEffort &&
+        nextFastMode === fastMode &&
+        nextSupportsFastMode === supportsFastMode)
     ) {
       return;
     }
-    setProvider(workspaceTargetKey, activeConversationId, nextProvider, nextModel, nextEffort);
-    setProviderMenuOpen(false);
+    const sequence = ++providerChangeSequenceRef.current;
+    const requiresReset = nextProvider !== provider && activeConversation !== null;
+    if (requiresReset) {
+      providerChangePendingRef.current = true;
+      setProviderChangePending(true);
+    }
+    try {
+      if (
+        requiresReset &&
+        !(await resetProviderConversation(activeConversation.id, panelViewKey))
+      ) {
+        return;
+      }
+      // reset 等待期间目标或任务可能变化；重新读取权威快照，禁止改写运行中的会话。
+      const latestStore = useAiStore.getState();
+      const latestConversationId = resolveActiveAiConversationId(
+        latestStore.conversations,
+        latestStore.activeConversationIds,
+        workspaceTargetKey
+      );
+      if (
+        !canCommitAiProviderChange(
+          sequence,
+          providerChangeSequenceRef.current,
+          activeConversationId,
+          latestConversationId,
+          workspaceTargetKey,
+          runtimeTasksRef.current
+        )
+      ) {
+        return;
+      }
+      setProvider(
+        workspaceTargetKey,
+        activeConversationId,
+        nextProvider,
+        nextModel,
+        nextEffort,
+        nextFastMode,
+        nextSupportsFastMode
+      );
+    } finally {
+      if (sequence === providerChangeSequenceRef.current) {
+        providerChangePendingRef.current = false;
+        setProviderChangePending(false);
+      }
+    }
   };
 
   const handleCreateConversation = async () => {
@@ -746,7 +840,10 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     provider,
     model,
     reasoningEffort,
+    fastMode,
+    supportsFastMode,
     providerAvailability,
+    providerChangePending,
     providerMenuOpen,
     selectedProvider,
     targetConversation,

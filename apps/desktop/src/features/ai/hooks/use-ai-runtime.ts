@@ -65,6 +65,7 @@ interface StartAiQuestion {
   provider: AiProviderId;
   model?: string;
   reasoningEffort?: AiReasoningEffort;
+  fastMode?: boolean;
   target: AiTerminalTarget;
   commandPolicy: AiCommandPolicy;
 }
@@ -439,6 +440,7 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
       provider,
       model,
       reasoningEffort,
+      fastMode,
       target,
       commandPolicy,
     }: StartAiQuestion) => {
@@ -514,20 +516,21 @@ export function useAiRuntime({ addMessage }: AiRuntimeOptions) {
         void stopAiSession(clientSessionId).catch(() => undefined);
         failTaskStart(clientSessionId, '启动 AI Provider 超时，请检查 Provider 状态后重试。');
       }, AI_START_TIMEOUT_MS);
-      void startAiSession(
+      void startAiSession({
         clientSessionId,
         conversationId,
         provider,
-        `${target.context}${buildConversationContext(history)}${buildAiPrompt(question, attachments)}`,
-        prompt,
-        undefined,
-        target.connectionId,
+        prompt: `${target.context}${buildConversationContext(history)}${buildAiPrompt(question, attachments)}`,
+        continuationPrompt: prompt,
+        workingDirectory: undefined,
+        connectionId: target.connectionId,
         // workspace 会话标识统一携带 local:/remote: 前缀；后端据此解析精确终端绑定。
-        target.targetSessionId ?? target.workspaceSessionId,
+        targetSessionId: target.targetSessionId ?? target.workspaceSessionId,
         commandPolicy,
         model,
-        reasoningEffort
-      )
+        reasoningEffort,
+        fastMode,
+      })
         .then(async (result) => {
           window.clearTimeout(startTimeoutId);
           if (result.sessionId !== clientSessionId && taskRefs.current.has(clientSessionId)) {

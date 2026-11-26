@@ -227,6 +227,7 @@ pub(super) fn codex_turn_start_request(
     thread_id: &str,
     prompt: &str,
     effort: Option<&str>,
+    fast_mode: Option<bool>,
 ) -> Value {
     let mut request = json!({
         "id": id, "method": "turn/start",
@@ -234,6 +235,9 @@ pub(super) fn codex_turn_start_request(
     });
     if let Some(effort) = effort {
         request["params"]["effort"] = json!(effort);
+    }
+    if let Some(fast) = fast_mode {
+        request["params"]["serviceTier"] = json!(if fast { "fast" } else { "default" });
     }
     request
 }

@@ -12,6 +12,10 @@ export interface AiConversation {
   model?: string;
   /** 会话内存选项，不写入历史数据库。空值交给 Agent 的生效配置。 */
   reasoningEffort?: AiReasoningEffort;
+  /** 仅在模型明确支持时存在；false 表示显式使用标准速度。 */
+  fastMode?: boolean;
+  /** 选模时固定的能力快照；目录刷新不能据此改写已有会话参数。 */
+  supportsFastMode?: boolean;
   commandPolicy?: AiCommandPolicy;
   /** 旧版历史没有目标，只允许查看，不能静默绑定到当前终端。 */
   target: AiConversationTarget | null;
@@ -25,6 +29,8 @@ interface AiTargetComposerState {
   provider: AiProviderId;
   model?: string;
   reasoningEffort?: AiReasoningEffort;
+  fastMode?: boolean;
+  supportsFastMode?: boolean;
   commandPolicy: AiCommandPolicy;
 }
 
@@ -41,7 +47,9 @@ interface AiState {
     conversationId: string | null,
     provider: AiProviderId,
     model?: string,
-    reasoningEffort?: AiReasoningEffort
+    reasoningEffort?: AiReasoningEffort,
+    fastMode?: boolean,
+    supportsFastMode?: boolean
   ) => void;
   setCommandPolicy: (
     targetKey: string,
@@ -59,7 +67,9 @@ interface AiState {
     provider: AiProviderId,
     commandPolicy: AiCommandPolicy,
     model?: string,
-    reasoningEffort?: AiReasoningEffort
+    reasoningEffort?: AiReasoningEffort,
+    fastMode?: boolean,
+    supportsFastMode?: boolean
   ) => string;
   deleteConversation: (id: string) => void;
   selectConversation: (targetKey: string, id: string) => void;
@@ -108,6 +118,15 @@ export function resolveActiveAiConversation(
   );
 }
 
+/** 与会话视图使用同一套显式选择和最近会话回退规则，供异步提交校验读取。 */
+export function resolveActiveAiConversationId(
+  conversations: AiConversation[],
+  activeConversationIds: Record<string, string | null>,
+  targetKey: string
+): string | null {
+  return resolveActiveAiConversation(conversations, activeConversationIds, targetKey)?.id ?? null;
+}
+
 export function resolveAiComposerState(
   composers: Record<string, AiTargetComposerState>,
   targetKey: string
@@ -120,7 +139,9 @@ const newConversation = (
   provider: AiProviderId,
   commandPolicy: AiCommandPolicy,
   model?: string,
-  reasoningEffort?: AiReasoningEffort
+  reasoningEffort?: AiReasoningEffort,
+  fastMode?: boolean,
+  supportsFastMode?: boolean
 ): AiConversation => {
   const now = Date.now();
   return {
@@ -129,6 +150,8 @@ const newConversation = (
     provider,
     model,
     reasoningEffort,
+    fastMode,
+    supportsFastMode,
     commandPolicy,
     target,
     messages: [],
@@ -152,16 +175,37 @@ export const useAiStore = create<AiState>((set) => ({
   composers: {},
   setOpen: (open) => set({ open }),
   toggle: () => set((state) => ({ open: !state.open })),
-  setProvider: (targetKey, conversationId, provider, model, reasoningEffort) =>
+  setProvider: (
+    targetKey,
+    conversationId,
+    provider,
+    model,
+    reasoningEffort,
+    fastMode,
+    supportsFastMode
+  ) =>
     set((state) => ({
       conversations: conversationId
         ? state.conversations.map((conversation) =>
             conversation.id === conversationId
-              ? { ...conversation, provider, model, reasoningEffort }
+              ? {
+                  ...conversation,
+                  provider,
+                  model,
+                  reasoningEffort,
+                  fastMode,
+                  supportsFastMode,
+                }
               : conversation
           )
         : state.conversations,
-      composers: updateComposer(state, targetKey, { provider, model, reasoningEffort }),
+      composers: updateComposer(state, targetKey, {
+        provider,
+        model,
+        reasoningEffort,
+        fastMode,
+        supportsFastMode,
+      }),
     })),
   setCommandPolicy: (targetKey, conversationId, commandPolicy) =>
     set((state) => ({
@@ -182,11 +226,29 @@ export const useAiStore = create<AiState>((set) => ({
         provider,
         model: undefined,
         reasoningEffort: undefined,
+        fastMode: undefined,
+        supportsFastMode: undefined,
         commandPolicy,
       }),
     })),
-  createConversation: (target, provider, commandPolicy, model, reasoningEffort) => {
-    const conversation = newConversation(target, provider, commandPolicy, model, reasoningEffort);
+  createConversation: (
+    target,
+    provider,
+    commandPolicy,
+    model,
+    reasoningEffort,
+    fastMode,
+    supportsFastMode
+  ) => {
+    const conversation = newConversation(
+      target,
+      provider,
+      commandPolicy,
+      model,
+      reasoningEffort,
+      fastMode,
+      supportsFastMode
+    );
     const targetKey = aiConversationTargetKey(target);
     set((state) => ({
       conversations: [...state.conversations, conversation],
@@ -199,6 +261,8 @@ export const useAiStore = create<AiState>((set) => ({
         provider,
         model,
         reasoningEffort,
+        fastMode,
+        supportsFastMode,
         commandPolicy,
       }),
     }));

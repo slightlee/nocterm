@@ -85,6 +85,7 @@ pub(super) fn start_session(
     let identity = ProviderSessionIdentity {
         model: request.model,
         reasoning_effort: request.reasoning_effort,
+        fast_mode: request.fast_mode,
         connection_id,
         target_session_id: workspace_session_id.clone(),
         working_directory: working_directory.clone(),

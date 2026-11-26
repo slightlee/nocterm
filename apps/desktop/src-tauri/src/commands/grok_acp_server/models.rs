@@ -166,6 +166,7 @@ mod tests {
         let mut identity = ProviderSessionIdentity {
             model: Some("grok-a".into()),
             reasoning_effort: None,
+            fast_mode: None,
             connection_id: None,
             target_session_id: Some("local:one".into()),
             working_directory: None,

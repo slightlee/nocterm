@@ -1,6 +1,7 @@
 import { Navigate, Route, BrowserRouter, Routes } from 'react-router-dom';
 
 import { AppShell } from './layouts/AppShell';
+import { AiAgentSettingsPage } from '../features/ai';
 import { ConnectionBackupSettingsPage } from '../features/connections';
 import {
   AboutSettingsPage,
@@ -21,6 +22,7 @@ export function App() {
             <Route path="/settings" element={<SettingsPage />}>
               <Route index element={<Navigate replace to="appearance" />} />
               <Route path="appearance" element={<AppearanceSettingsPage />} />
+              <Route path="agents" element={<AiAgentSettingsPage />} />
               <Route path="backup" element={<ConnectionBackupSettingsPage />} />
               <Route path="about" element={<AboutSettingsPage />} />
             </Route>

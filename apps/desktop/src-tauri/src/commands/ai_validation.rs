@@ -41,6 +41,14 @@ pub(super) fn validate_start_request(
             return Err("AI_REASONING_MODEL_REQUIRED".into());
         }
     }
+    if request.fast_mode.is_some() {
+        if request.model.is_none() {
+            return Err("AI_SPEED_MODEL_REQUIRED".into());
+        }
+        if request.provider != "codex" && request.provider != "claude-code" {
+            return Err("AI_SPEED_UNSUPPORTED".into());
+        }
+    }
     validate_prompt(&request.continuation_prompt, "AI 本轮请求")?;
     let working_directory = validate_working_directory(request.working_directory.as_deref())?;
     let command_policy = parse_command_policy(request.command_policy.as_deref())?;
@@ -253,6 +261,28 @@ mod tests {
     }
 
     #[test]
+    fn explicit_speed_requires_a_model_and_supported_provider() {
+        let mut request: AiSessionStartRequest = serde_json::from_value(serde_json::json!({
+            "clientSessionId":"ai-one", "conversationId":"conversation-one", "provider":"codex",
+            "model":"test-model", "fastMode":true, "prompt":"test", "continuationPrompt":"test",
+            "targetSessionId":"local:one"
+        }))
+        .unwrap();
+        assert!(validate_start_request(&request).is_ok());
+        request.provider = "grok".into();
+        assert_eq!(
+            validate_start_request(&request).err().as_deref(),
+            Some("AI_SPEED_UNSUPPORTED")
+        );
+        request.provider = "claude-code".into();
+        request.model = None;
+        assert_eq!(
+            validate_start_request(&request).err().as_deref(),
+            Some("AI_SPEED_MODEL_REQUIRED")
+        );
+    }
+
+    #[test]
     fn accepts_only_bounded_conversation_ids() {
         assert!(validate_conversation_id("123e4567-e89b-12d3-a456-426614174000").is_ok());
         assert!(validate_conversation_id("").is_err());
@@ -304,6 +334,7 @@ mod tests {
             provider: "codex".into(),
             model: None,
             reasoning_effort: None,
+            fast_mode: None,
             prompt: "inspect".into(),
             continuation_prompt: "inspect".into(),
             working_directory: None,

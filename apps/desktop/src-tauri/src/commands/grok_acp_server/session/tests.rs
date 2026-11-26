@@ -67,6 +67,7 @@ fn installed_grok_accepts_the_isolated_acp_profile() {
     let identity = ProviderSessionIdentity {
         model: None,
         reasoning_effort: None,
+        fast_mode: None,
         connection_id: Some(7),
         target_session_id: None,
         working_directory: None,

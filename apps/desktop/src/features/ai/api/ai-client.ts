@@ -34,19 +34,36 @@ export async function openAiExternalLink(url: string): Promise<void> {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-export function startAiSession(
-  clientSessionId: string,
-  conversationId: string,
-  provider: AiProviderId,
-  prompt: string,
-  continuationPrompt: string,
-  workingDirectory?: string,
-  connectionId?: number,
-  targetSessionId?: string,
-  commandPolicy: AiCommandPolicy = 'auto_safe',
-  model?: string,
-  reasoningEffort?: AiReasoningEffort
-) {
+interface StartAiSessionRequest {
+  clientSessionId: string;
+  conversationId: string;
+  provider: AiProviderId;
+  prompt: string;
+  continuationPrompt: string;
+  workingDirectory?: string;
+  connectionId?: number;
+  targetSessionId?: string;
+  commandPolicy?: AiCommandPolicy;
+  model?: string;
+  reasoningEffort?: AiReasoningEffort;
+  fastMode?: boolean;
+}
+
+/** 使用具名字段保持前端请求与 Rust DTO 对齐，新增会话选项不会引入位置参数错位。 */
+export function startAiSession({
+  clientSessionId,
+  conversationId,
+  provider,
+  prompt,
+  continuationPrompt,
+  workingDirectory,
+  connectionId,
+  targetSessionId,
+  commandPolicy = 'auto_safe',
+  model,
+  reasoningEffort,
+  fastMode,
+}: StartAiSessionRequest) {
   return invoke<{ sessionId: string }>('ai_session_start', {
     request: {
       clientSessionId,
@@ -56,6 +73,7 @@ export function startAiSession(
       continuationPrompt,
       model,
       reasoningEffort,
+      fastMode,
       workingDirectory,
       connectionId,
       targetSessionId,

@@ -10,7 +10,15 @@ export interface CatalogSnapshot {
   /** undefined 表示尚无成功结果；空数组是 CLI 正常返回的空目录。 */
   models?: AiModelOption[];
   error?: 'unavailable' | 'not-installed';
+  /** 仅记录本次进程成功探测的时间，磁盘回显不伪装成当前安装状态。 */
+  refreshedAt?: number;
+  /** undefined 尚未读取，null 表示无法识别；不从磁盘恢复过期的 CLI 版本。 */
+  cliVersion?: string | null;
+  /** 只读接入摘要不含端点地址或凭据；磁盘缓存不恢复该运行时信息。 */
+  access?: AiProviderAccess;
 }
+
+export type AiProviderAccess = 'loginRequired' | 'customEndpoint' | 'externalProvider';
 
 interface CatalogCache {
   models: AiModelOption[];
@@ -20,6 +28,8 @@ interface CatalogEntry {
   snapshot: CatalogSnapshot;
   refreshAfter: number;
   pending?: Promise<CatalogSnapshot>;
+  versionPending?: Promise<void>;
+  versionRefreshAfter?: number;
   listeners: Set<() => void>;
 }
 
@@ -78,17 +88,48 @@ function persistModels(provider: AiProviderId, models?: AiModelOption[]) {
   }
 }
 
+function parseAccess(value: unknown): AiProviderAccess | undefined {
+  return value === 'loginRequired' || value === 'customEndpoint' || value === 'externalProvider'
+    ? value
+    : undefined;
+}
+
+/** 兼容旧数组替身与磁盘格式；桌面 IPC 新格式同时携带受限接入快照。 */
+function parseCatalogResponse(raw: unknown): {
+  models: AiModelOption[];
+  access?: AiProviderAccess;
+} {
+  if (Array.isArray(raw)) return { models: parseModelCatalog(raw) };
+  if (!raw || typeof raw !== 'object') throw new Error('模型目录格式无效');
+  const result = raw as Record<string, unknown>;
+  const access = parseAccess(result.access);
+  return {
+    models: parseModelCatalog(result.models),
+    ...(access ? { access } : {}),
+  };
+}
+
 /** 面板预取和菜单共用同一请求。按完成时间计时，避免慢探测或短暂故障导致重复启动 CLI。 */
-export function refreshModelCatalog(provider: AiProviderId): Promise<CatalogSnapshot> {
+export function refreshModelCatalog(
+  provider: AiProviderId,
+  options: { force?: boolean } = {}
+): Promise<CatalogSnapshot> {
   const entry = getEntry(provider);
   if (entry.pending) return entry.pending;
   // 兼容性由同一次后端探测确定；未知版本和失败结果也必须遵守冷却时间。
-  if (Date.now() < entry.refreshAfter) return Promise.resolve(entry.snapshot);
+  if (!options.force && Date.now() < entry.refreshAfter) return Promise.resolve(entry.snapshot);
   entry.pending = invoke<unknown>('ai_provider_models', { provider })
     .then((raw) => {
-      const models = parseModelCatalog(raw);
+      const { models, access } = parseCatalogResponse(raw);
       persistModels(provider, models);
-      entry.snapshot = { models };
+      entry.snapshot = {
+        ...entry.snapshot,
+        models,
+        // 成功响应没有摘要表示官方或未知接入，必须清除上一次的运行时状态。
+        access,
+        error: undefined,
+        refreshedAt: Date.now(),
+      };
       entry.refreshAfter = Date.now() + FRESH_MS;
       return entry.snapshot;
     })
@@ -98,7 +139,9 @@ export function refreshModelCatalog(provider: AiProviderId): Promise<CatalogSnap
         entry.snapshot = { error: 'not-installed' };
       } else {
         entry.snapshot = {
+          ...entry.snapshot,
           models: entry.snapshot.models,
+          refreshedAt: entry.snapshot.refreshedAt,
           error: 'unavailable',
         };
       }
@@ -111,4 +154,32 @@ export function refreshModelCatalog(provider: AiProviderId): Promise<CatalogSnap
       entry.listeners.forEach((listener) => listener());
     });
   return entry.pending;
+}
+
+/** 版本仅由设置页请求，独立于目录失败；并发合并与短期缓存避免重复启动 --version。 */
+export function refreshProviderVersion(provider: AiProviderId, force = false): Promise<void> {
+  const entry = getEntry(provider);
+  if (entry.versionPending) return entry.versionPending;
+  if (!force && Date.now() < (entry.versionRefreshAfter ?? 0)) return Promise.resolve();
+  entry.versionPending = invoke<unknown>('ai_provider_version', { provider })
+    .then((value) => {
+      if (
+        typeof value !== 'string' ||
+        value.length > 80 ||
+        !/^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.+-]+)?$/.test(value)
+      )
+        throw new Error('无效的 CLI 版本');
+      entry.snapshot = { ...entry.snapshot, cliVersion: value };
+      entry.versionRefreshAfter = Date.now() + FRESH_MS;
+    })
+    .catch(() => {
+      // 失败立即撤下旧版本，不能把升级前的缓存伪装成当前版本。
+      entry.snapshot = { ...entry.snapshot, cliVersion: null };
+      entry.versionRefreshAfter = Date.now() + RETRY_MS;
+    })
+    .finally(() => {
+      entry.versionPending = undefined;
+      entry.listeners.forEach((listener) => listener());
+    });
+  return entry.versionPending;
 }

@@ -11,7 +11,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::dto::ai::{AiModelOption, AiModelSource};
+use crate::dto::ai::{AiModelCatalog, AiModelOption, AiModelSource, AiProviderAccess};
 
 mod claude_catalog;
 #[cfg(test)]
@@ -20,7 +20,7 @@ mod tests;
 use super::{
     ai_process::hide_console_window,
     ai_provider::{
-        apply_local_network_bypass, prepare_grok_acp_launch, provider_adapter,
+        apply_local_network_bypass, http_endpoint_host, prepare_grok_acp_launch, provider_adapter,
         provider_environment_path, read_grok_model_metadata,
     },
     ai_stream::read_bounded_lines,
@@ -31,16 +31,28 @@ use super::{
 const UNAVAILABLE: &str = "AI_MODEL_CATALOG_UNAVAILABLE";
 const INVALID: &str = "AI_MODEL_CATALOG_INVALID";
 const LIMIT: usize = 1024;
+const CLAUDE_ROLE_ALIASES: [&str; 4] = ["opus", "fable", "sonnet", "haiku"];
 
 /// 执行一次目录探测。面板负责预取、复用结果与合并同一 Agent 的并发请求。
 #[tauri::command]
-pub async fn ai_provider_models(provider: String) -> Result<Vec<AiModelOption>, String> {
+pub async fn ai_provider_models(provider: String) -> Result<AiModelCatalog, String> {
     tauri::async_runtime::spawn_blocking(move || discover_models(&provider))
         .await
         .map_err(|_| UNAVAILABLE.to_string())?
 }
 
-fn discover_models(provider: &str) -> Result<Vec<AiModelOption>, String> {
+/// 设置页按需读取版本；只返回校验后的版本号，失败不泄露 CLI 原始输出。
+#[tauri::command]
+pub async fn ai_provider_version(provider: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        probe_cli_version(&mut provider_command(&provider)?)
+            .map_err(|_| "AI_PROVIDER_VERSION_UNAVAILABLE".to_string())
+    })
+    .await
+    .map_err(|_| "AI_PROVIDER_VERSION_UNAVAILABLE".to_string())?
+}
+
+fn provider_command(provider: &str) -> Result<Command, String> {
     let adapter = provider_adapter(provider).ok_or("AI_PROVIDER_UNKNOWN")?;
     let executable = adapter.executable().ok_or("AI_PROVIDER_NOT_INSTALLED")?;
     let mut command = Command::new(&executable);
@@ -50,14 +62,27 @@ fn discover_models(provider: &str) -> Result<Vec<AiModelOption>, String> {
     hide_console_window(&mut command);
     apply_local_network_bypass(&mut command);
     command.current_dir(std::env::temp_dir());
+    Ok(command)
+}
+
+fn discover_models(provider: &str) -> Result<AiModelCatalog, String> {
+    let mut command = provider_command(provider)?;
+    let executable = std::path::PathBuf::from(command.get_program());
     let mut models = Vec::new();
-    match adapter.id() {
+    let access;
+    match provider {
         "codex" => {
             let mut probe = Probe::start(command.args(["app-server", "--stdio"]), false)?;
             probe.send(json!({"id":1,"method":"initialize","params":{"clientInfo":{
                 "name":"nocterm","version":env!("NOCTERM_PRODUCT_VERSION")}}}))?;
             probe.response(1)?;
             probe.send(json!({"method":"initialized"}))?;
+            probe.send(json!({"id":100,"method":"account/read","params":{}}))?;
+            let account = probe.response(100).ok();
+            probe
+                .send(json!({"id":101,"method":"config/read","params":{"includeLayers":false}}))?;
+            let config = probe.response(101).ok();
+            access = codex_access(account.as_ref(), config.as_ref());
             let mut cursor = Value::Null;
             for id in 2..66 {
                 probe.send(
@@ -104,6 +129,7 @@ fn discover_models(provider: &str) -> Result<Vec<AiModelOption>, String> {
                     continue;
                 }
                 append_claude_models(&mut models, &response["response"])?;
+                access = claude_access(&response["response"]);
                 break;
             }
             claude_catalog::append_versions(&mut models, version.as_deref())?;
@@ -126,14 +152,104 @@ fn discover_models(provider: &str) -> Result<Vec<AiModelOption>, String> {
                 }
             }
             // 隔离探测只加载默认模型；两种发现路径都补齐其余本机模型的安全元数据。
-            append_configured_grok_models(
-                &mut models,
-                read_grok_model_metadata().map_err(|_| INVALID)?,
-            )?;
+            let metadata = read_grok_model_metadata().map_err(|_| INVALID)?;
+            append_configured_grok_models(&mut models, metadata.models)?;
+            // 只报告默认模型的连接方式；Grok 没有可靠的独立只读认证状态。
+            access = metadata
+                .uses_custom_endpoint
+                .then_some(AiProviderAccess::CustomEndpoint);
         }
         _ => return Err("AI_PROVIDER_UNKNOWN".into()),
     }
-    Ok(models)
+    Ok(AiModelCatalog { models, access })
+}
+
+/// 只读取路由类别，不把 base_url 或账号字段带出进程边界。
+fn codex_access(account: Option<&Value>, config: Option<&Value>) -> Option<AiProviderAccess> {
+    if codex_has_custom_endpoint(config) {
+        return Some(AiProviderAccess::CustomEndpoint);
+    }
+    let account = account?;
+    if !account["account"].is_null() {
+        return None;
+    }
+    (account["requiresOpenaiAuth"].as_bool() == Some(true))
+        .then_some(AiProviderAccess::LoginRequired)
+}
+
+fn codex_has_custom_endpoint(config: Option<&Value>) -> bool {
+    let Some(config) = config.and_then(|value| value.get("config")) else {
+        return false;
+    };
+    let provider = config["model_provider"].as_str().unwrap_or("openai");
+    let base_url = if provider == "openai" {
+        config["openai_base_url"].as_str()
+    } else {
+        config["model_providers"][provider]["base_url"].as_str()
+    };
+    base_url
+        .and_then(http_endpoint_host)
+        .is_some_and(|host| host != "api.openai.com" && host != "chatgpt.com")
+}
+
+fn claude_access(result: &Value) -> Option<AiProviderAccess> {
+    let custom_endpoint = configured_claude_base_url()
+        .as_deref()
+        .is_some_and(is_custom_claude_url);
+    classify_claude_access(result, custom_endpoint)
+}
+
+fn classify_claude_access(result: &Value, custom_endpoint: bool) -> Option<AiProviderAccess> {
+    if custom_endpoint {
+        return Some(AiProviderAccess::CustomEndpoint);
+    }
+    let account = result
+        .get("account")
+        .filter(|account| account.is_object())?;
+    let api_provider = account["apiProvider"].as_str();
+    if api_provider.is_some_and(|provider| provider != "firstParty") {
+        return Some(AiProviderAccess::ExternalProvider);
+    }
+    let token_source = account["tokenSource"].as_str();
+    let api_key_source = account["apiKeySource"].as_str();
+    let authenticated = account["email"].is_string()
+        || account["subscriptionType"].is_string()
+        || token_source.is_some_and(|source| source != "none")
+        || api_key_source.is_some_and(|source| source != "none");
+    if authenticated {
+        return None;
+    }
+    (api_provider == Some("firstParty")).then_some(AiProviderAccess::LoginRequired)
+}
+
+fn is_custom_claude_url(url: &str) -> bool {
+    http_endpoint_host(url).is_some_and(|host| host != "api.anthropic.com")
+}
+
+/// Claude Code 会从用户 settings.json 注入环境；只定向读取 Base URL，忽略同表中的凭据。
+fn configured_claude_base_url() -> Option<String> {
+    if let Ok(value) = std::env::var("ANTHROPIC_BASE_URL")
+        && is_custom_claude_url(&value)
+    {
+        return Some(value);
+    }
+    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(|home| std::path::PathBuf::from(home).join(".claude"))
+        })?;
+    let path = config_dir.join("settings.json");
+    if std::fs::metadata(&path).ok()?.len() > 1024 * 1024 {
+        return None;
+    }
+    let settings: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    settings
+        .pointer("/env/ANTHROPIC_BASE_URL")
+        .and_then(Value::as_str)
+        .filter(|url| is_custom_claude_url(url))
+        .map(str::to_string)
 }
 
 /// ACP/CLI 已报告的项保持原顺序与能力；本机缺失项复用同一 ID/名称校验与数量上限。
@@ -203,6 +319,7 @@ fn append_codex_models(models: &mut Vec<AiModelOption>, result: &Value) -> Resul
                     .as_str()
                     .filter(|effort| model.reasoning_efforts.iter().any(|value| value == effort))
                     .map(str::to_string);
+                model.supports_fast_mode = reported_fast_mode(item);
             }
         }
     }
@@ -211,7 +328,7 @@ fn append_codex_models(models: &mut Vec<AiModelOption>, result: &Value) -> Resul
 
 fn append_claude_models(models: &mut Vec<AiModelOption>, result: &Value) -> Result<(), String> {
     for item in result["models"].as_array().ok_or(INVALID)? {
-        if item["value"] != "default" {
+        if item["value"] != "default" && !is_external_claude_role_mapping(item) {
             let before = models.len();
             add(
                 models,
@@ -232,6 +349,50 @@ fn append_claude_models(models: &mut Vec<AiModelOption>, result: &Value) -> Resu
         }
     }
     Ok(())
+}
+
+/// 角色别名映射由 Claude Code/CC Switch 负责，不自动投影成 Nocterm 的第三方模型。
+/// 用户仍可在设置中显式添加实际可调用的模型 ID；原生 Claude 路由保留用于云平台兼容。
+fn is_external_claude_role_mapping(item: &Value) -> bool {
+    let Some(alias) = item["value"].as_str() else {
+        return false;
+    };
+    let Some(resolved) = item["resolvedModel"].as_str() else {
+        return false;
+    };
+    is_claude_role_alias(alias) && !is_native_claude_route(resolved)
+}
+
+fn is_native_claude_route(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    is_claude_role_alias(&model)
+        || model.starts_with("claude-")
+        || model.starts_with("anthropic.claude-")
+        || model.contains(".anthropic.claude-")
+}
+
+fn is_claude_role_alias(model: &str) -> bool {
+    CLAUDE_ROLE_ALIASES
+        .iter()
+        .any(|alias| model.eq_ignore_ascii_case(alias))
+}
+
+fn reported_fast_mode(item: &Value) -> bool {
+    [
+        "serviceTiers",
+        "supportedServiceTiers",
+        "additionalSpeedTiers",
+    ]
+    .into_iter()
+    .filter_map(|field| item[field].as_array())
+    .flatten()
+    .any(|tier| {
+        let id = tier.as_str().or_else(|| tier["id"].as_str()).unwrap_or("");
+        let name = tier["name"].as_str().unwrap_or("");
+        id.eq_ignore_ascii_case("fast")
+            || id.eq_ignore_ascii_case("priority")
+            || name.eq_ignore_ascii_case("fast")
+    })
 }
 
 /// 只投影原生档位，未知值不进入菜单；去重并按强度排列，不复制 CLI 的任意描述。
@@ -267,6 +428,7 @@ fn add(
             is_legacy: false,
             reasoning_efforts: Vec::new(),
             default_reasoning_effort: None,
+            supports_fast_mode: false,
             resolved_model: resolved.filter(|s| valid_model_id(s)).map(str::to_string),
             minimum_cli_version: None,
             unavailable_reason: None,
@@ -294,9 +456,24 @@ fn probe_cli_version(command: &mut Command) -> Result<String, String> {
     let mut probe = Probe::start(version_command.arg("--version"), false)?;
     let line = probe.next_line()?.ok_or(INVALID)?;
     probe.finish()?;
-    let version = line.split_whitespace().next().ok_or(INVALID)?;
-    claude_catalog::parse_version(version).ok_or(INVALID)?;
+    let version = parse_cli_version(&line).ok_or(INVALID)?;
     Ok(version.to_string())
+}
+
+/// 三种 CLI 使用纯版本号或“产品名 版本号”；仅投影受限 token，忽略后面的说明。
+fn parse_cli_version(line: &str) -> Option<&str> {
+    line.split_whitespace().take(2).find_map(|token| {
+        let version = token.strip_prefix('v').unwrap_or(token);
+        if version.len() > 80
+            || !version
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".-+".contains(&c))
+        {
+            return None;
+        }
+        let core = version.split(['-', '+']).next()?;
+        claude_catalog::parse_version(core).map(|_| version)
+    })
 }
 
 /// 有界行通道和整轮截止时间限制损坏协议与无响应 CLI 的资源占用。

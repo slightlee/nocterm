@@ -55,4 +55,25 @@ describe('思考强度展示', () => {
     expect(markup).not.toContain('默认');
     expect(markup).not.toContain('aria-selected="true"');
   });
+
+  it('思考强度面板不混入会话速度设置', () => {
+    const markup = renderToStaticMarkup(
+      <AiReasoningOptions
+        model={{
+          id: 'fast-model',
+          name: 'Fast Model',
+          source: 'cli',
+          supportsFastMode: true,
+          reasoningEfforts: ['medium'],
+        }}
+        disabled={false}
+        onBack={() => undefined}
+        onSelect={() => undefined}
+      />
+    );
+    expect(markup).toContain('思考强度');
+    expect(markup).not.toContain('响应速度');
+    expect(markup).not.toContain('标准');
+    expect(markup).not.toContain('快速');
+  });
 });

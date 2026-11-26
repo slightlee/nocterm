@@ -164,7 +164,12 @@ pub(super) fn append_versions(
 ) -> Result<(), String> {
     let installed = version.and_then(parse_version);
     for spec in VERSIONS {
-        if models.iter().any(|m| m.id == spec.id) {
+        let supports_fast_mode = fast_mode_minimum(spec.id).is_some_and(|required| {
+            installed.is_some_and(|actual| Some(actual) >= parse_version(required))
+        });
+        if let Some(model) = models.iter_mut().find(|model| model.id == spec.id) {
+            // CLI 报告项优先，但固定 ID 可以补充已核对且受版本约束的能力。
+            model.supports_fast_mode = supports_fast_mode;
             continue;
         }
         let unavailable_reason = spec.minimum.and_then(|required| match installed {
@@ -192,6 +197,7 @@ pub(super) fn append_versions(
             is_legacy: spec.legacy,
             reasoning_efforts: reasoning_efforts.iter().map(|s| (*s).to_string()).collect(),
             default_reasoning_effort,
+            supports_fast_mode,
             resolved_model: None,
             minimum_cli_version: spec.minimum.map(str::to_string),
             unavailable_reason,
@@ -201,4 +207,15 @@ pub(super) fn append_versions(
         return Err(super::INVALID.into());
     }
     Ok(())
+}
+
+/// Headless fastMode 需要 Claude Code 2.1.205+；新型号还受各自首次支持版本约束。
+fn fast_mode_minimum(id: &str) -> Option<&'static str> {
+    match id {
+        "claude-fable-5-2" => Some("2.1.321"),
+        "claude-opus-5-5" => Some("2.1.280"),
+        "claude-opus-5" => Some("2.1.219"),
+        "claude-opus-4-8" => Some("2.1.205"),
+        _ => None,
+    }
 }

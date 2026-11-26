@@ -4,14 +4,16 @@ use serde_json::Value;
 
 use super::{
     ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
-    ProviderToolTransport, combined_search_path, find_provider_executable_in, merge_no_proxy,
-    provider_adapter, provider_environment_path_from, supplementary_search_directories,
+    ProviderToolTransport, combined_search_path, find_provider_executable_in, http_endpoint_host,
+    merge_no_proxy, provider_adapter, provider_environment_path_from,
+    supplementary_search_directories,
 };
 
 fn identity() -> ProviderSessionIdentity {
     ProviderSessionIdentity {
         model: None,
         reasoning_effort: None,
+        fast_mode: None,
         connection_id: Some(7),
         target_session_id: None,
         working_directory: None,
@@ -226,6 +228,40 @@ fn no_proxy_merge_keeps_user_entries_and_appends_local_bypass() {
 }
 
 #[test]
+fn endpoint_host_accepts_http_case_and_rejects_malformed_authorities() {
+    assert_eq!(
+        http_endpoint_host("HTTPS://Gateway.Example.test:8443/v1").as_deref(),
+        Some("gateway.example.test")
+    );
+    assert_eq!(
+        http_endpoint_host("http://[::1]:3000/v1").as_deref(),
+        Some("::1")
+    );
+    assert_eq!(
+        http_endpoint_host("https://user:pass@Gateway.Example.test./v1").as_deref(),
+        Some("gateway.example.test")
+    );
+    for invalid in [
+        "file:///tmp/socket",
+        "https://bad host/v1",
+        "https://bad^host/v1",
+        "https://bad%zz.example/v1",
+        "https://-bad.example/v1",
+        "https://bad-.example/v1",
+        "https://bad..example/v1",
+        "https://999.999.999.999/v1",
+        "https://user@@example.test/v1",
+        "https://example.test:not-a-port/v1",
+        "https://example.test:70000/v1",
+        "https://2001:db8::1/v1",
+        "https://example.test\\spoofed/v1",
+        "https://[not-ipv6]:3000/v1",
+    ] {
+        assert_eq!(http_endpoint_host(invalid), None, "accepted {invalid}");
+    }
+}
+
+#[test]
 fn codex_uses_its_persistent_protocol_adapter() {
     let identity = identity();
     let prepared = provider_adapter("codex")
@@ -435,6 +471,7 @@ fn claude_passes_explicit_model_as_one_option() {
     let identity = ProviderSessionIdentity {
         model: Some("vendor/model:small".into()),
         reasoning_effort: Some("high".into()),
+        fast_mode: Some(true),
         ..identity()
     };
     let plan = provider_adapter("claude-code")
@@ -456,8 +493,15 @@ fn claude_passes_explicit_model_as_one_option() {
             .windows(2)
             .any(|args| args == ["--effort", "high"])
     );
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|args| args == ["--settings", r#"{"fastMode":true}"#])
+    );
     let default_identity = ProviderSessionIdentity {
         reasoning_effort: None,
+        fast_mode: None,
         ..identity
     };
     let ProviderLaunchPlan::Headless(default) = provider_adapter("claude-code")
@@ -468,6 +512,7 @@ fn claude_passes_explicit_model_as_one_option() {
         panic!("headless")
     };
     assert!(!default.args.iter().any(|arg| arg == "--effort"));
+    assert!(!default.args.iter().any(|arg| arg == "--settings"));
 }
 
 #[test]

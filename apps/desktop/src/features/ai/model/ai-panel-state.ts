@@ -11,6 +11,30 @@ export function canBeginAiConversation(targetKey: string | null, tasks: AiRuntim
   return Boolean(targetKey) && findAiRuntimeTaskByTarget(tasks, targetKey) === null;
 }
 
+/** 速度能力在选模时固定；后续目录刷新只能影响菜单，不能改写会话参数。 */
+export function effectiveAiFastMode(
+  fastMode: boolean | undefined,
+  supportsFastMode: boolean | undefined
+): boolean | undefined {
+  return supportsFastMode ? fastMode : undefined;
+}
+
+/** 异步 Provider 重置完成后，只允许最新操作改写仍空闲的原会话。 */
+export function canCommitAiProviderChange(
+  operationSequence: number,
+  latestSequence: number,
+  expectedConversationId: string | null,
+  latestConversationId: string | null,
+  targetKey: string,
+  tasks: AiRuntimeTasks
+): boolean {
+  return (
+    operationSequence === latestSequence &&
+    expectedConversationId === latestConversationId &&
+    findAiRuntimeTaskByTarget(tasks, targetKey) === null
+  );
+}
+
 export interface AiTaskNavigationDestination {
   conversationId: string;
   targetKey: string;

@@ -8,6 +8,7 @@ export interface AiModelOption {
   isLegacy?: boolean;
   reasoningEfforts?: AiReasoningEffort[];
   defaultReasoningEffort?: AiReasoningEffort;
+  supportsFastMode?: boolean;
   resolvedModel?: string;
   minimumCliVersion?: string;
   unavailableReason?: 'cliUpdateRequired' | 'cliVersionUnknown';
@@ -39,6 +40,7 @@ export function parseModelCatalog(value: unknown): AiModelOption[] {
         (!isReasoningEffort(m.defaultReasoningEffort) ||
           !Array.isArray(m.reasoningEfforts) ||
           !m.reasoningEfforts.includes(m.defaultReasoningEffort))) ||
+      (m.supportsFastMode !== undefined && typeof m.supportsFastMode !== 'boolean') ||
       (m.resolvedModel !== undefined && !isModelId(m.resolvedModel)) ||
       (m.minimumCliVersion !== undefined &&
         (typeof m.minimumCliVersion !== 'string' ||
@@ -60,6 +62,7 @@ export function parseModelCatalog(value: unknown): AiModelOption[] {
       ...(m.defaultReasoningEffort
         ? { defaultReasoningEffort: m.defaultReasoningEffort as AiReasoningEffort }
         : {}),
+      ...(m.supportsFastMode === true ? { supportsFastMode: true } : {}),
       resolvedModel: m.resolvedModel as string | undefined,
       minimumCliVersion: m.minimumCliVersion as string | undefined,
       unavailableReason: m.unavailableReason as AiModelOption['unavailableReason'],
@@ -136,12 +139,4 @@ export function readCustomModels(storage: Storage, provider: AiProviderId): stri
   if (!Array.isArray(values) || !values.every(isModelId))
     throw new Error('本机自定义模型列表格式无效');
   return values;
-}
-
-/** 按 Agent 读改写，添加已有项保持幂等。写入失败时保留原列表。 */
-export function addCustomModel(storage: Storage, provider: AiProviderId, id: string): string[] {
-  if (!isModelId(id)) throw new Error('请输入有效的模型 ID');
-  const ids = [...new Set([...readCustomModels(storage, provider), id])];
-  storage.setItem(catalogKey(provider), JSON.stringify(ids));
-  return ids;
 }

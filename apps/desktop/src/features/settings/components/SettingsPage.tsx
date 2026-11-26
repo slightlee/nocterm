@@ -37,6 +37,18 @@ export function SettingsPage() {
             className={({ isActive }) =>
               `${styles.navigationItem} ${isActive ? styles.active : ''}`
             }
+            to="/settings/agents"
+          >
+            <svg aria-hidden="true" viewBox="0 0 20 20">
+              <rect x="4" y="5" width="12" height="10" rx="2" />
+              <path d="M8 9h.01M12 9h.01M8 12h4M10 2.8V5" />
+            </svg>
+            <span>智能体</span>
+          </NavLink>
+          <NavLink
+            className={({ isActive }) =>
+              `${styles.navigationItem} ${isActive ? styles.active : ''}`
+            }
             to="/settings/backup"
           >
             <svg aria-hidden="true" viewBox="0 0 20 20">
