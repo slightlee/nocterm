@@ -215,7 +215,7 @@
 
 .composerProviderButton:hover {
   color: var(--term-text);
-  border-color: var(--term-blue);
+  background: var(--bg-hover);
 }
 
 .composerProviderButton:disabled {
@@ -315,7 +315,11 @@
   padding-left: 7px;
 }
 
-.attachmentButton:hover,
+.attachmentButton:hover {
+  color: var(--term-text);
+  background: var(--bg-hover);
+}
+
 .attachmentChip:hover {
   color: var(--term-text);
   border-color: var(--term-blue);
