@@ -3,10 +3,11 @@
 
 use std::{
     ffi::{OsStr, OsString},
-    fs::{self, DirBuilder, OpenOptions},
-    io::Write,
+    fs::{self, DirBuilder, File, OpenOptions, TryLockError},
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
 };
 
 use super::{
@@ -80,6 +81,9 @@ const SECRET_ENVIRONMENT_VARIABLES: [&str; 6] = [
     "ALL_PROXY",
     "GROK_CLI_CHAT_PROXY_BASE_URL",
 ];
+const PERSISTENT_STATE_DIRECTORY: &str = "ai-provider-state";
+const GROK_STATE_DIRECTORY: &str = "grok";
+const CONVERSATION_STATE_DIRECTORY: &str = "conversations";
 
 struct GrokAdapter;
 
@@ -101,14 +105,22 @@ impl ProviderAdapter for GrokAdapter {
     }
 }
 
-/// 隔离目录的所有权跟随 ACP 进程；无论启动失败、重置还是宿主退出都会统一清理。
+/// 探测进程使用临时目录，聊天进程使用持久目录；清理路径显式记录所有权，避免
+/// 正常退出误删跨重启恢复所需的 Grok 会话文件。
 pub(crate) struct PreparedGrokAcpLaunch {
     pub args: Vec<String>,
     pub environment: Vec<(OsString, OsString)>,
     pub current_directory: PathBuf,
     secret_environment_keys: Vec<OsString>,
-    cleanup_paths: Vec<PathBuf>,
-    cleanup_parent: Option<PathBuf>,
+    cleanup: Mutex<Option<GrokLaunchCleanup>>,
+}
+
+/// 锁与认证投影拥有同一生命周期。清理先移除投影再释放 OS 锁，旧对象的
+/// stdout 收尾或 Drop 不能再次删除新进程在相同路径创建的文件。
+struct GrokLaunchCleanup {
+    paths: Vec<PathBuf>,
+    parent: Option<PathBuf>,
+    _conversation_lock: Option<File>,
 }
 
 impl Drop for PreparedGrokAcpLaunch {
@@ -150,9 +162,16 @@ impl PreparedGrokAcpLaunch {
 
     /// Provider 已退出时立即移除会话文件；Drop 再次调用也必须保持幂等。
     pub fn cleanup(&self) {
-        cleanup_paths(&self.cleanup_paths);
-        if let Some(parent) = &self.cleanup_parent {
-            let _ = fs::remove_dir(parent);
+        // 即使其他清理线程仍在删除文件，也必须等它释放锁后才能返回。
+        let mut owned = self
+            .cleanup
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(cleanup) = owned.take() {
+            cleanup_paths(&cleanup.paths);
+            if let Some(parent) = &cleanup.parent {
+                let _ = fs::remove_dir(parent);
+            }
         }
     }
 }
@@ -163,7 +182,13 @@ pub(crate) fn prepare_grok_acp_launch(
     model: Option<&str>,
 ) -> Result<PreparedGrokAcpLaunch, String> {
     let (runtime_directory, cleanup_parent) = create_runtime_directory(timestamp, sequence)?;
-    let prepared = prepare_isolated_launch(&runtime_directory, cleanup_parent.clone(), model);
+    let prepared = prepare_isolated_launch(
+        &runtime_directory,
+        vec![runtime_directory.clone()],
+        cleanup_parent.clone(),
+        model,
+        None,
+    );
     if prepared.is_err() {
         cleanup_paths(std::slice::from_ref(&runtime_directory));
         if let Some(parent) = cleanup_parent {
@@ -173,10 +198,47 @@ pub(crate) fn prepare_grok_acp_launch(
     prepared
 }
 
+/// 聊天会话按 Nocterm 对话 ID 使用稳定的隔离 HOME/cwd。Provider 原生文件只在该
+/// 子目录内持久化，不能读取用户 Grok 的插件、MCP、Hook、Skill 或记忆目录。
+pub(crate) fn prepare_grok_conversation_launch(
+    app_data_directory: &Path,
+    conversation_id: &str,
+    model: Option<&str>,
+) -> Result<PreparedGrokAcpLaunch, String> {
+    let runtime_directory = conversation_runtime_directory(app_data_directory, conversation_id)?;
+    let ownership = try_lock_conversation(app_data_directory, conversation_id)?
+        .ok_or_else(|| "Grok 会话正在由另一个进程使用，请稍后重试".to_string())?;
+    create_private_directory_all(&runtime_directory, "Grok 持久会话目录")?;
+    prepare_isolated_launch(&runtime_directory, Vec::new(), None, model, Some(ownership))
+}
+
+/// 重置或删除对话只删除白名单 ID 对应的单个目录；应用数据根目录和其他会话不受影响。
+pub(crate) fn cleanup_grok_conversation(
+    app_data_directory: &Path,
+    conversation_id: &str,
+) -> Result<bool, String> {
+    let runtime_directory = conversation_runtime_directory(app_data_directory, conversation_id)?;
+    if !runtime_directory.exists() {
+        return Ok(false);
+    }
+    let _ownership = try_lock_conversation(app_data_directory, conversation_id)?
+        .ok_or_else(|| "Grok 会话仍被另一个进程占用，无法清理".to_string())?;
+    match fs::remove_dir_all(&runtime_directory) {
+        Ok(()) => {
+            remove_empty_state_parents(app_data_directory, &runtime_directory);
+            Ok(true)
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("清理 Grok 持久会话目录失败：{error}")),
+    }
+}
+
 fn prepare_isolated_launch(
     runtime_directory: &Path,
+    mut cleanup_paths: Vec<PathBuf>,
     cleanup_parent: Option<PathBuf>,
     model: Option<&str>,
+    conversation_lock: Option<File>,
 ) -> Result<PreparedGrokAcpLaunch, String> {
     let model_environment = create_runtime_config(runtime_directory, model)?;
     let (mut environment, mut secret_environment_keys) =
@@ -185,9 +247,13 @@ fn prepare_isolated_launch(
     if let Some(id) = model {
         set_environment(&mut environment, "GROK_DEFAULT_MODEL".into(), id.into());
     }
-    link_authentication(runtime_directory)?;
     let profile = runtime_directory.join("agent.md");
-    write_private_file(&profile, agent_profile().as_bytes(), "Grok Agent Profile")?;
+    replace_private_file(&profile, agent_profile().as_bytes(), "Grok Agent Profile")?;
+    // 会话文件可以跨进程保留，认证投影只能活到当前 Provider 进程结束。
+    // 将其作为独立清理对象，避免持久目录把 OAuth 凭据一并长期保留。
+    if let Some(authentication_path) = link_authentication(runtime_directory)? {
+        cleanup_paths.push(authentication_path);
+    }
     for (key, value) in [
         (
             OsString::from("GROK_HOME"),
@@ -237,9 +303,84 @@ fn prepare_isolated_launch(
         environment,
         current_directory: runtime_directory.to_path_buf(),
         secret_environment_keys,
-        cleanup_paths: vec![runtime_directory.to_path_buf()],
-        cleanup_parent,
+        cleanup: Mutex::new(Some(GrokLaunchCleanup {
+            paths: cleanup_paths,
+            parent: cleanup_parent,
+            _conversation_lock: conversation_lock,
+        })),
     })
+}
+
+fn conversation_runtime_directory(
+    app_data_directory: &Path,
+    conversation_id: &str,
+) -> Result<PathBuf, String> {
+    if conversation_id.is_empty()
+        || conversation_id.len() > 64
+        || !conversation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("Grok 持久会话标识无效".to_string());
+    }
+    Ok(app_data_directory
+        .join(PERSISTENT_STATE_DIRECTORY)
+        .join(GROK_STATE_DIRECTORY)
+        .join(CONVERSATION_STATE_DIRECTORY)
+        .join(conversation_id))
+}
+
+fn create_private_directory_all(path: &Path, label: &str) -> Result<(), String> {
+    let mut builder = DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .recursive(true)
+        .create(path)
+        .map_err(|error| format!("创建 {label}失败：{error}"))
+}
+
+/// 固定锁文件位于会话目录之外，不能在释放时删除，否则 Unix 上会形成两个 inode
+/// 各自持锁的竞态。OS 在宿主崩溃后释放锁，不依赖 PID 存活猜测或新的生产依赖。
+fn try_lock_conversation(app_data: &Path, conversation_id: &str) -> Result<Option<File>, String> {
+    conversation_runtime_directory(app_data, conversation_id)?;
+    let locks = app_data
+        .join(PERSISTENT_STATE_DIRECTORY)
+        .join(GROK_STATE_DIRECTORY)
+        .join("locks");
+    create_private_directory_all(&locks, "Grok 会话锁目录")?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(locks.join(format!("{conversation_id}.lock")))
+        .map_err(|error| format!("打开 Grok 会话锁失败：{error}"))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(error) => Err(format!("锁定 Grok 会话目录失败：{error}")),
+    }
+}
+
+fn remove_empty_state_parents(app_data_directory: &Path, runtime_directory: &Path) {
+    let conversations = runtime_directory.parent();
+    let grok = conversations.and_then(Path::parent);
+    let provider_state = grok.and_then(Path::parent);
+    for path in [conversations, grok, provider_state].into_iter().flatten() {
+        if path == app_data_directory {
+            break;
+        }
+        if fs::remove_dir(path).is_err() {
+            break;
+        }
+    }
 }
 
 /// Grok 的环境变量也是配置入口；只复制运行和模型连接所需项，禁止外部命令及配置覆盖。
@@ -325,21 +466,72 @@ fn push_secret(environment: &mut Vec<(OsString, OsString)>, secret: &str) -> Str
     unreachable!("u64 environment variable sequence exhausted")
 }
 
-/// OAuth 凭据不复制：Unix 使用符号链接，Windows 使用同卷硬链接。
-fn link_authentication(runtime_directory: &Path) -> Result<(), String> {
+/// OAuth 凭据只投影到当前 Provider 生命周期。Unix 使用符号链接；Windows 优先
+/// 使用硬链接保持 token 刷新一致，跨卷或不支持硬链接时使用受限副本并在退出时删除。
+fn link_authentication(runtime_directory: &Path) -> Result<Option<PathBuf>, String> {
     let Some(source_home) = original_home() else {
-        return Ok(());
+        return Ok(None);
     };
     let source = source_home.join("auth.json");
     if !source.is_file() {
-        return Ok(());
+        return Ok(None);
     }
     let destination = runtime_directory.join("auth.json");
+    remove_owned_file(&destination, "旧 Grok 登录凭据链接")?;
     #[cfg(unix)]
     let result = std::os::unix::fs::symlink(&source, &destination);
     #[cfg(windows)]
-    let result = fs::hard_link(&source, &destination);
-    result.map_err(|error| format!("隔离 Grok 登录凭据失败：{error}"))
+    let result = fs::hard_link(&source, &destination).or_else(|_| {
+        // GROK_HOME 可位于其他磁盘，Windows 硬链接不能跨卷；副本仍受私有目录 ACL
+        // 和进程级清理约束，且启动时会清扫异常退出遗留。
+        fs::copy(&source, &destination).map(|_| ())
+    });
+    match result {
+        Ok(()) => Ok(Some(destination)),
+        Err(error) => {
+            // 复制失败可能留下截断文件，失败路径同样不能保留凭据片段。
+            let _ = fs::remove_file(&destination);
+            Err(format!("隔离 Grok 登录凭据失败：{error}"))
+        }
+    }
+}
+
+/// 应用异常退出时 Drop 不会运行；下次启动只清理没有存活 owner 的认证投影。
+/// 只处理固定层级下的精确文件名，不扫描或修改用户 `~/.grok`。
+pub(crate) fn cleanup_stale_grok_authentication_links(
+    app_data_directory: &Path,
+) -> Result<(), String> {
+    let conversations = app_data_directory
+        .join(PERSISTENT_STATE_DIRECTORY)
+        .join(GROK_STATE_DIRECTORY)
+        .join(CONVERSATION_STATE_DIRECTORY);
+    let entries = match fs::read_dir(&conversations) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("读取 Grok 持久会话目录失败：{error}")),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取 Grok 持久会话目录失败：{error}"))?;
+        if !entry
+            .file_type()
+            .map_err(|error| format!("读取 Grok 持久会话类型失败：{error}"))?
+            .is_dir()
+        {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(conversation_id) = name.to_str() else {
+            continue;
+        };
+        if conversation_runtime_directory(app_data_directory, conversation_id).is_err() {
+            continue;
+        }
+        let Some(_ownership) = try_lock_conversation(app_data_directory, conversation_id)? else {
+            continue;
+        };
+        remove_owned_file(&entry.path().join("auth.json"), "Grok 遗留登录凭据")?;
+    }
+    Ok(())
 }
 
 fn original_home() -> Option<PathBuf> {
@@ -370,6 +562,25 @@ fn write_private_file(path: &Path, contents: &[u8], label: &str) -> Result<(), S
         return Err(format!("创建 {label}失败：{error}"));
     }
     Ok(())
+}
+
+/// 持久目录可能由上一次进程留下生成文件；先移除已知文件再以 create_new 重建，
+/// Provider 创建的未知会话文件不会被扫描、改写或作为配置继承。
+pub(super) fn replace_private_file(
+    path: &Path,
+    contents: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    remove_owned_file(path, label)?;
+    write_private_file(path, contents, label)
+}
+
+fn remove_owned_file(path: &Path, label: &str) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("移除 {label}失败：{error}")),
+    }
 }
 
 #[cfg(test)]

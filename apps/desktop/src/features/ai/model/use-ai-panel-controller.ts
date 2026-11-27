@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { TerminalSession, TerminalSessionId, TerminalStatus } from '../../terminal';
 import { isDesktopRuntime } from '../../../shared/lib/tauri-runtime';
-import { resetAiConversation } from '../api/ai-client';
+import { releaseAiConversation, resetAiConversation } from '../api/ai-client';
 import { getModelCatalogSnapshot, refreshModelCatalog } from '../api/ai-model-catalog';
 import { compatibleReasoningEffort, type AiReasoningEffort } from './ai-reasoning';
 import { useAiPersistence } from '../hooks/use-ai-persistence';
@@ -615,17 +615,35 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
       );
   };
 
-  const resetProviderConversation = async (id: string, noticeKey: string): Promise<boolean> => {
+  const closeProviderConversation = async (
+    id: string,
+    noticeKey: string,
+    action: 'release' | 'reset'
+  ): Promise<boolean> => {
     if (!isDesktopRuntime()) return true;
     try {
-      await resetAiConversation(id);
+      if (action === 'release') await releaseAiConversation(id);
+      else await resetAiConversation(id);
       return true;
     } catch (error: unknown) {
       setTargetPanelNotice(
         noticeKey,
-        error instanceof Error ? error.message : '重置 AI 会话失败。'
+        error instanceof Error ? error.message : '关闭 AI 后台会话失败。'
       );
       return false;
+    }
+  };
+
+  /** 等待后台关闭到提交本地变更之间保持门控，避免旧清空操作删除刚发送的消息。 */
+  const runConversationChange = async (change: () => Promise<void>) => {
+    if (providerChangePendingRef.current) return;
+    providerChangePendingRef.current = true;
+    setProviderChangePending(true);
+    try {
+      await change();
+    } finally {
+      providerChangePendingRef.current = false;
+      setProviderChangePending(false);
     }
   };
 
@@ -635,7 +653,7 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     effort?: AiReasoningEffort,
     selectedFastMode?: boolean
   ) => {
-    if (!nextModel) return;
+    if (!nextModel || providerChangePendingRef.current) return;
     const option = getModelCatalogSnapshot(nextProvider).models?.find(
       (item) => item.id === nextModel
     );
@@ -670,7 +688,7 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     try {
       if (
         requiresReset &&
-        !(await resetProviderConversation(activeConversation.id, panelViewKey))
+        !(await closeProviderConversation(activeConversation.id, panelViewKey, 'reset'))
       ) {
         return;
       }
@@ -710,66 +728,70 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     }
   };
 
-  const handleCreateConversation = async () => {
-    if (
-      !workspaceTargetKey ||
-      !workspaceTarget.binding ||
-      !canBeginAiConversation(workspaceTargetKey, tasks)
-    ) {
-      return;
-    }
-    if (
-      activeConversation &&
-      !runningConversationIdSet.has(activeConversation.id) &&
-      !(await resetProviderConversation(activeConversation.id, panelViewKey))
-    ) {
-      return;
-    }
-    // 新会话可沿用当前目标的 Provider，但权限必须恢复为默认的“变更前确认”。
-    beginConversation(workspaceTargetKey, currentTargetProvider, 'auto_safe');
-    setInspectedConversationId(null);
-    setHistoryOpen(false);
-    setTaskMenuOpen(false);
-    setProviderMenuOpen(false);
-    clearCurrentAttachments();
-    composerRef.current?.focus();
-  };
-
-  const handleClearConversation = async () => {
-    if (!activeConversation || runningConversationIdSet.has(activeConversation.id)) return;
-    if (!(await resetProviderConversation(activeConversation.id, panelViewKey))) return;
-    clearMessages(activeConversation.id);
-    clearConversationPresentation(activeConversation.id);
-  };
-
-  const handleSelectConversation = async (id: string) => {
-    const selected = conversations.find((conversation) => conversation.id === id);
-    if (!selected) return;
-    if (
-      activeConversation &&
-      activeConversation.id !== id &&
-      !runningConversationIdSet.has(activeConversation.id) &&
-      !(await resetProviderConversation(activeConversation.id, panelViewKey))
-    ) {
-      return;
-    }
-    const selectedTargetKey = conversationTargetKey(selected);
-    if (selectedTargetKey && selectedTargetKey === workspaceTargetKey) {
-      selectConversation(selectedTargetKey, id);
+  const handleCreateConversation = () =>
+    runConversationChange(async () => {
+      if (
+        !workspaceTargetKey ||
+        !workspaceTarget.binding ||
+        !canBeginAiConversation(workspaceTargetKey, tasks)
+      ) {
+        return;
+      }
+      if (
+        activeConversation &&
+        !runningConversationIdSet.has(activeConversation.id) &&
+        !(await closeProviderConversation(activeConversation.id, panelViewKey, 'release'))
+      ) {
+        return;
+      }
+      // 新会话可沿用当前目标的 Provider，但权限必须恢复为默认的“变更前确认”。
+      beginConversation(workspaceTargetKey, currentTargetProvider, 'auto_safe');
       setInspectedConversationId(null);
-      setAttachments((current) => ({
-        ...current,
-        [selectedTargetKey]: EMPTY_AI_COMPOSER_ATTACHMENTS,
-      }));
-    } else {
-      setInspectedConversationId(id);
-    }
-    setTaskNavigationNotice(null);
-    setHistoryOpen(false);
-    setTaskMenuOpen(false);
-  };
+      setHistoryOpen(false);
+      setTaskMenuOpen(false);
+      setProviderMenuOpen(false);
+      clearCurrentAttachments();
+      composerRef.current?.focus();
+    });
+
+  const handleClearConversation = () =>
+    runConversationChange(async () => {
+      if (!activeConversation || runningConversationIdSet.has(activeConversation.id)) return;
+      if (!(await closeProviderConversation(activeConversation.id, panelViewKey, 'reset'))) return;
+      clearMessages(activeConversation.id);
+      clearConversationPresentation(activeConversation.id);
+    });
+
+  const handleSelectConversation = (id: string) =>
+    runConversationChange(async () => {
+      const selected = conversations.find((conversation) => conversation.id === id);
+      if (!selected) return;
+      if (
+        activeConversation &&
+        activeConversation.id !== id &&
+        !runningConversationIdSet.has(activeConversation.id) &&
+        !(await closeProviderConversation(activeConversation.id, panelViewKey, 'release'))
+      ) {
+        return;
+      }
+      const selectedTargetKey = conversationTargetKey(selected);
+      if (selectedTargetKey && selectedTargetKey === workspaceTargetKey) {
+        selectConversation(selectedTargetKey, id);
+        setInspectedConversationId(null);
+        setAttachments((current) => ({
+          ...current,
+          [selectedTargetKey]: EMPTY_AI_COMPOSER_ATTACHMENTS,
+        }));
+      } else {
+        setInspectedConversationId(id);
+      }
+      setTaskNavigationNotice(null);
+      setHistoryOpen(false);
+      setTaskMenuOpen(false);
+    });
 
   const handleSelectTask = (task: Parameters<typeof resolveAiTaskNavigation>[0]) => {
+    if (providerChangePendingRef.current) return;
     const destination = resolveAiTaskNavigation(task, sessions, recentRemoteSessionIds);
     selectConversation(destination.targetKey, destination.conversationId);
     setHistoryOpen(false);
@@ -794,14 +816,18 @@ export function useAiPanelController(input: AiPanelControllerInput): AiPanelCont
     });
   };
 
-  const handleDeleteConversation = async (id: string) => {
-    if (runningConversationIdSet.has(id) || !(await resetProviderConversation(id, panelViewKey))) {
-      return;
-    }
-    deleteConversation(id);
-    clearConversationPresentation(id);
-    if (inspectedConversationId === id) setInspectedConversationId(null);
-  };
+  const handleDeleteConversation = (id: string) =>
+    runConversationChange(async () => {
+      if (
+        runningConversationIdSet.has(id) ||
+        !(await closeProviderConversation(id, panelViewKey, 'reset'))
+      ) {
+        return;
+      }
+      deleteConversation(id);
+      clearConversationPresentation(id);
+      if (inspectedConversationId === id) setInspectedConversationId(null);
+    });
 
   const contextText = resolveAiContextBar({
     activeSession,

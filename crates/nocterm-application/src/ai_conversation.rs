@@ -89,6 +89,10 @@ mod tests {
             id: "conv-one".into(),
             title: "排查磁盘".into(),
             provider: "codex".into(),
+            model: None,
+            reasoning_effort: None,
+            fast_mode: None,
+            supports_fast_mode: None,
             command_policy: Some("auto_safe".into()),
             target: Some(AiConversationTargetRecord {
                 kind: "ssh".into(),

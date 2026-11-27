@@ -1,6 +1,7 @@
 pub mod ai_audit;
 pub mod ai_conversation;
 pub mod ai_execution;
+pub mod ai_native_session;
 pub mod connection;
 pub mod error;
 pub mod file_edit;

@@ -3,8 +3,8 @@ import type { AiMessage } from './ai-types';
 const MAX_HISTORY_CHARACTERS = 12_000;
 
 /**
- * Headless Provider 每轮都会启动新进程，因此由 Nocterm 明确携带当前对话历史。
- * 从最近消息向前截取，避免长对话无限放大 Prompt，也不会误恢复 Provider 的其他会话。
+ * 新会话或原生会话明确不存在时，由 Nocterm 提供有界的最近文本上下文。
+ * 按 12,000 字符预算从最近消息向前截取；原生恢复成功只发送当前问题。
  */
 export function buildConversationContext(messages: AiMessage[]): string {
   const selected: string[] = [];

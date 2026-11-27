@@ -12,23 +12,29 @@ use std::{
     time::Duration,
 };
 
+use nocterm_application::ai_native_session::{AiNativeSessionLease, AiNativeSessionService};
+use nocterm_domain::ai_native_session::{AiNativeSessionIdentity, AiNativeSessionRecord};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use super::models::{EFFORT_APPLY_FAILED, EFFORT_REQUEST_ID, EFFORT_UNAVAILABLE, apply_effort};
 use super::protocol::{
     BootstrapMessages, GROK_MCP_SDK_CALL_METHOD, cancel_notification, close_request,
-    initialize_request, is_renderable_update, prompt_completion, prompt_request,
-    require_supported_sdk_mcp, response_error, sdk_call_response, session_new_request,
-    terminate_child, wait_for_mcp_ready_with_requests, wait_for_response_collect,
-    wait_for_response_collect_with_requests, write_message,
+    initialize_request, is_missing_session_response, is_renderable_update, is_success_response,
+    prompt_completion, prompt_request, require_supported_sdk_mcp, resolve_session, response_error,
+    sdk_call_response, session_load_request, session_new_request, terminate_child,
+    wait_for_mcp_ready_with_requests, wait_for_response_collect,
+    wait_for_response_collect_with_requests, wait_for_response_message_collect_with_requests,
+    write_message,
 };
 use crate::{
     commands::{
         ai_bridge::McpRequestDispatcher,
         ai_persistent::{PersistentProviderSession, SessionTermination},
         ai_process::{ManagedChild, StreamCompletion},
-        ai_provider::{PreparedGrokAcpLaunch, ProviderSessionIdentity, prepare_grok_acp_launch},
+        ai_provider::{
+            PreparedGrokAcpLaunch, ProviderSessionIdentity, prepare_grok_conversation_launch,
+        },
         ai_stream::{
             PROVIDER_TURN_OUTPUT_LIMIT_MESSAGE, ProviderStderrRelay, append_startup_diagnostics,
             provider_event_channel, read_bounded_lines, reserve_turn_output,
@@ -41,6 +47,7 @@ use crate::{
 pub(super) struct GrokAcpServer {
     identity: ProviderSessionIdentity,
     acp_session_id: String,
+    resumed_from_native: bool,
     stdin: Mutex<ChildStdin>,
     child: ManagedChild,
     active_turn: Mutex<Option<ActiveTurn>>,
@@ -57,12 +64,16 @@ pub(super) struct GrokAcpServer {
 /// ACP 进程创建参数属于 Grok Adapter，不进入跨 Provider 生命周期接口。
 pub(super) struct GrokAcpServerLaunch {
     pub identity: ProviderSessionIdentity,
+    pub conversation_id: String,
+    pub native_session_id: Option<String>,
+    pub native_session_identity: AiNativeSessionIdentity,
+    pub native_session_lease: AiNativeSessionLease,
+    pub native_session_service: AiNativeSessionService,
+    pub app_data_directory: PathBuf,
     pub bridge_token: Option<String>,
     pub provider_executable: PathBuf,
     pub gateway: Arc<AiGatewayState>,
     pub mcp_dispatcher: Arc<McpRequestDispatcher>,
-    pub timestamp: u128,
-    pub sequence: u64,
 }
 
 #[derive(Clone)]
@@ -84,14 +95,22 @@ impl GrokAcpServer {
     ) -> Result<Arc<Self>, String> {
         let GrokAcpServerLaunch {
             identity,
+            conversation_id,
+            native_session_id,
+            native_session_identity,
+            native_session_lease,
+            native_session_service,
+            app_data_directory,
             bridge_token,
             provider_executable,
             gateway,
             mcp_dispatcher,
-            timestamp,
-            sequence,
         } = launch;
-        let prepared = prepare_grok_acp_launch(timestamp, sequence, identity.model.as_deref())?;
+        let prepared = prepare_grok_conversation_launch(
+            &app_data_directory,
+            &conversation_id,
+            identity.model.as_deref(),
+        )?;
         let mut child = prepared
             .command(&provider_executable)
             .stdin(Stdio::piped())
@@ -147,36 +166,79 @@ impl GrokAcpServer {
                 .current_directory
                 .to_str()
                 .ok_or_else(|| "Grok 隔离目录不是有效 UTF-8".to_string())?;
-            let session_request = session_new_request(cwd, &identity);
+            let is_resume = native_session_id.is_some();
+            let session_request = native_session_id.as_deref().map_or_else(
+                || session_new_request(cwd, &identity),
+                |session_id| session_load_request(cwd, &identity, session_id),
+            );
             write_message(&mut stdin, &session_request)?;
-            let mut handle_request = |request: &Value| {
-                handle_server_request(
-                    &mut stdin,
-                    request,
-                    bridge_token.as_deref(),
-                    &mcp_dispatcher,
-                )
-            };
-            let response = wait_for_response_collect_with_requests(
+            let mut response = wait_for_response_message_collect_with_requests(
                 &line_receiver,
                 2,
-                "创建 Grok ACP 会话",
+                if is_resume {
+                    "加载 Grok ACP 会话"
+                } else {
+                    "创建 Grok ACP 会话"
+                },
                 &mut pending,
                 &startup_cancellation,
-                &mut handle_request,
+                native_session_id.as_deref(),
+                |request| {
+                    handle_server_request(
+                        &mut stdin,
+                        request,
+                        bridge_token.as_deref(),
+                        &mcp_dispatcher,
+                    )
+                },
             )?;
-            let session_id = response
-                .pointer("/result/sessionId")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .ok_or_else(|| "Grok session/new 未返回 session id".to_string())?;
+            let loaded_native_session = if is_success_response(&response) {
+                native_session_id.is_some()
+            } else if native_session_id.is_some() && is_missing_session_response(&response) {
+                native_session_service
+                    .clear_missing_binding(&native_session_lease)
+                    .map_err(|error| error.message)?;
+                write_message(&mut stdin, &session_new_request(cwd, &identity))?;
+                response = wait_for_response_collect_with_requests(
+                    &line_receiver,
+                    2,
+                    "创建 Grok ACP 会话",
+                    &mut pending,
+                    &startup_cancellation,
+                    |request| {
+                        handle_server_request(
+                            &mut stdin,
+                            request,
+                            bridge_token.as_deref(),
+                            &mcp_dispatcher,
+                        )
+                    },
+                )?;
+                false
+            } else {
+                let error =
+                    response_error(&response).unwrap_or("Grok ACP 返回了未说明原因的会话错误");
+                let action = if is_resume { "加载" } else { "创建" };
+                return Err(format!("{action} Grok ACP 会话失败：{error}"));
+            };
+            let resumed_session_id = loaded_native_session
+                .then_some(native_session_id.as_deref())
+                .flatten();
+            let (session_id, resumed_from_native) =
+                resolve_session(&response, resumed_session_id, &pending)?;
             wait_for_mcp_ready_with_requests(
                 &line_receiver,
                 &mut pending,
                 &session_id,
                 &startup_cancellation,
-                &mut handle_request,
+                |request| {
+                    handle_server_request(
+                        &mut stdin,
+                        request,
+                        bridge_token.as_deref(),
+                        &mcp_dispatcher,
+                    )
+                },
             )?;
             // 档位属于已绑定的 ACP 会话。在注册进程和发送首轮前等待 Grok 确认。
             apply_effort(&identity, &initialized, &response, &session_id, |request| {
@@ -197,10 +259,21 @@ impl GrokAcpServer {
                     },
                 )
             })?;
-            Ok(session_id)
+            native_session_service
+                .save(
+                    &native_session_lease,
+                    &AiNativeSessionRecord {
+                        conversation_id: conversation_id.clone(),
+                        native_session_id: session_id.clone(),
+                        identity: native_session_identity.clone(),
+                        updated_at_ms: current_unix_ms(),
+                    },
+                )
+                .map_err(|error| error.message)?;
+            Ok((session_id, resumed_from_native))
         })();
-        let acp_session_id = match bootstrap {
-            Ok(session_id) => session_id,
+        let (acp_session_id, resumed_from_native) = match bootstrap {
+            Ok(result) => result,
             Err(error) => {
                 terminate_child(&mut child);
                 stderr_relay.wait(Duration::from_millis(250));
@@ -217,6 +290,7 @@ impl GrokAcpServer {
         let server = Arc::new(Self {
             identity,
             acp_session_id,
+            resumed_from_native,
             stdin: Mutex::new(stdin),
             child: ManagedChild::new(child),
             active_turn: Mutex::new(None),
@@ -570,6 +644,10 @@ impl PersistentProviderSession for GrokAcpServer {
         GrokAcpServer::is_alive(self)
     }
 
+    fn resumed_from_native(&self) -> bool {
+        self.resumed_from_native
+    }
+
     fn start_turn(
         &self,
         app: Self::TurnContext,
@@ -604,6 +682,14 @@ impl Drop for GrokAcpServer {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+fn current_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .clamp(1, i64::MAX as u128) as i64
 }
 
 #[cfg(all(test, unix))]

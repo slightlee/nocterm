@@ -23,6 +23,7 @@ struct ModelSpec {
 const STANDARD: &[&str] = &["low", "medium", "high"];
 const WITH_MAX: &[&str] = &["low", "medium", "high", "max"];
 const EXTENDED: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+pub(super) const NATIVE_SESSION_MINIMUM: &str = "2.1.257";
 
 // 保留同代模型的展示优先级；固定版本不能改变本机动态别名的调用语义。
 const VERSIONS: &[ModelSpec] = &[
@@ -158,27 +159,64 @@ pub(super) fn parse_version(version: &str) -> Option<[u32; 3]> {
     ])
 }
 
+/// Nocterm 的 Claude 会话契约依赖 safe-mode 与 system-prompt-snapshot；低于该基线
+/// 不能安全恢复旧会话，不能只依赖某个模型自身的最低版本。
+pub(super) fn supports_native_session_contract(version: &str) -> bool {
+    parse_version(version).is_some_and(|actual| {
+        parse_version(NATIVE_SESSION_MINIMUM).is_some_and(|minimum| actual >= minimum)
+    })
+}
+
 pub(super) fn append_versions(
     models: &mut Vec<AiModelOption>,
     version: Option<&str>,
 ) -> Result<(), String> {
     let installed = version.and_then(parse_version);
+    let contract_unavailable = match installed {
+        None => Some(AiModelUnavailableReason::CliVersionUnknown),
+        Some(actual)
+            if parse_version(NATIVE_SESSION_MINIMUM).is_some_and(|minimum| actual < minimum) =>
+        {
+            Some(AiModelUnavailableReason::CliUpdateRequired)
+        }
+        _ => None,
+    };
+    // CLI 动态目录和别名同样依赖会话级参数，不能绕过全局 Provider 兼容门禁。
+    for model in models.iter_mut() {
+        model.minimum_cli_version = Some(NATIVE_SESSION_MINIMUM.to_string());
+        model.unavailable_reason = contract_unavailable;
+        if contract_unavailable.is_some() {
+            model.reasoning_efforts.clear();
+            model.default_reasoning_effort = None;
+            model.supports_fast_mode = false;
+        }
+    }
     for spec in VERSIONS {
+        let required = spec
+            .minimum
+            .and_then(parse_version)
+            .zip(parse_version(NATIVE_SESSION_MINIMUM))
+            .map(|(model, contract)| model.max(contract))
+            .unwrap_or_else(|| parse_version(NATIVE_SESSION_MINIMUM).expect("valid baseline"));
+        let required_label = spec
+            .minimum
+            .filter(|minimum| parse_version(minimum).is_some_and(|version| version >= required))
+            .unwrap_or(NATIVE_SESSION_MINIMUM);
+        let unavailable_reason = match installed {
+            None => Some(AiModelUnavailableReason::CliVersionUnknown),
+            Some(actual) if actual < required => Some(AiModelUnavailableReason::CliUpdateRequired),
+            _ => None,
+        };
         let supports_fast_mode = fast_mode_minimum(spec.id).is_some_and(|required| {
             installed.is_some_and(|actual| Some(actual) >= parse_version(required))
         });
         if let Some(model) = models.iter_mut().find(|model| model.id == spec.id) {
             // CLI 报告项优先，但固定 ID 可以补充已核对且受版本约束的能力。
-            model.supports_fast_mode = supports_fast_mode;
+            model.minimum_cli_version = Some(required_label.to_string());
+            model.unavailable_reason = unavailable_reason;
+            model.supports_fast_mode = unavailable_reason.is_none() && supports_fast_mode;
             continue;
         }
-        let unavailable_reason = spec.minimum.and_then(|required| match installed {
-            None => Some(AiModelUnavailableReason::CliVersionUnknown),
-            Some(actual) if Some(actual) < parse_version(required) => {
-                Some(AiModelUnavailableReason::CliUpdateRequired)
-            }
-            _ => None,
-        });
         // 2.1.284 是已核对过 --effort 的 CLI 基线，不声称是该功能最早版本。
         let reasoning_efforts = if installed.is_some_and(|version| version >= [2, 1, 284]) {
             spec.efforts
@@ -199,7 +237,7 @@ pub(super) fn append_versions(
             default_reasoning_effort,
             supports_fast_mode,
             resolved_model: None,
-            minimum_cli_version: spec.minimum.map(str::to_string),
+            minimum_cli_version: Some(required_label.to_string()),
             unavailable_reason,
         });
     }

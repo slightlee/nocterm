@@ -35,6 +35,11 @@ pub fn ai_session_stop(state: State<'_, AppState>, session_id: String) -> Result
     let mut handled = false;
     let mut errors = Vec::new();
 
+    // 探测尚未创建 Gateway/正式进程时也要记住停止请求。
+    match state.ai_processes().cancel_startup(&session_id) {
+        Ok(cancelled) => handled |= cancelled,
+        Err(error) => errors.push(error),
+    }
     // 每一步都尽力执行：某个状态锁异常不能阻止后续 Provider 和子进程回收。
     match state.ai_gateway().deactivate_session(&session_id) {
         Ok(deactivated) => handled |= deactivated,
@@ -70,14 +75,57 @@ pub fn ai_session_stop(state: State<'_, AppState>, session_id: String) -> Result
 }
 
 #[tauri::command]
+pub fn ai_conversation_release(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<(), String> {
+    let conversation_id = validate_conversation_id(&conversation_id)?;
+    // 关闭占用覆盖整个进程回收；保留绑定，导航返回后仍可原生恢复。
+    let _closing = state
+        .ai_native_session_service()
+        .begin_close(&conversation_id)
+        .map_err(|error| error.message)?;
+    close_headless_conversation(&state, &conversation_id)?;
+    state
+        .ai_provider_runtimes()
+        .release_conversation(&conversation_id)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn ai_conversation_reset(
     state: State<'_, AppState>,
     conversation_id: String,
 ) -> Result<(), String> {
     let conversation_id = validate_conversation_id(&conversation_id)?;
+    // 先失效旧代际并阻止新启动，占用持续到所有 Runtime 和数据库清理完成。
+    let closing = state
+        .ai_native_session_service()
+        .begin_close(&conversation_id)
+        .map_err(|error| error.message)?;
+    close_headless_conversation(&state, &conversation_id)?;
     state
         .ai_provider_runtimes()
         .reset_conversation(&conversation_id)?;
+    state
+        .ai_native_session_service()
+        .delete(&closing)
+        .map_err(|error| error.message)?;
+    Ok(())
+}
+
+/// 三个对话关闭入口共用取消与授权撤销，避免 reset/delete 只清持久状态却遗留探测。
+pub(super) fn close_headless_conversation(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<(), String> {
+    for process in state.ai_processes().close_conversation(conversation_id)? {
+        if let Some(token) = process.bridge_token.as_deref() {
+            state.ai_gateway().revoke(token);
+        }
+        // Drop 在注册表锁外等待退出，避免持锁阻塞其他对话。
+        drop(process);
+    }
     Ok(())
 }
 

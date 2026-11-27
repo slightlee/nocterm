@@ -4,10 +4,11 @@ use serde_json::json;
 
 use super::{
     BootstrapMessages, GROK_MCP_SDK_CALL_METHOD, MAX_BOOTSTRAP_PENDING_BYTES,
-    NOCTERM_MCP_SERVER_ID, cancel_notification, initialize_request, is_renderable_update,
-    prompt_completion, prompt_request, require_supported_sdk_mcp, sdk_call_response,
-    session_new_request, wait_for_mcp_ready_with_requests, wait_for_response,
-    wait_for_response_collect_with_requests, write_message,
+    NOCTERM_MCP_SERVER_ID, cancel_notification, initialize_request, is_missing_session_response,
+    is_renderable_update, prompt_completion, prompt_request, require_supported_sdk_mcp,
+    resolve_session, sdk_call_response, session_load_request, session_new_request,
+    wait_for_mcp_ready_with_requests, wait_for_response, wait_for_response_collect_with_requests,
+    write_message,
 };
 use crate::commands::ai_provider::ProviderSessionIdentity;
 
@@ -20,6 +21,155 @@ fn identity() -> ProviderSessionIdentity {
         target_session_id: None,
         working_directory: Some("/srv/app".into()),
     }
+}
+
+#[test]
+fn session_load_reapplies_target_rules_and_nocterm_mcp() {
+    let request = session_load_request("/private/runtime", &identity(), "session-1");
+
+    assert_eq!(request["method"], "session/load");
+    assert_eq!(request["params"]["sessionId"], "session-1");
+    assert_eq!(request["params"]["cwd"], "/private/runtime");
+    assert_eq!(request["params"]["_meta"]["yoloMode"], true);
+    assert_eq!(
+        request["params"]["_meta"]["x.ai/mcp/servers"][0]["serverId"],
+        "nocterm"
+    );
+    assert!(
+        request["params"]["_meta"]["rules"]
+            .as_str()
+            .is_some_and(|rules| rules.contains("Nocterm SSH connection"))
+    );
+}
+
+#[test]
+fn load_streams_large_history_without_filling_the_handshake_queue() {
+    let (tx, rx) = mpsc::channel();
+    let content = "x".repeat(8192);
+    // 同时超过旧的 128 条与 1 MiB 队列限制，但每条均是合法有界的历史通知。
+    for _ in 0..160 {
+        tx.send(Ok(json!({"method":"session/update", "params":{
+            "sessionId":"saved", "update":{"sessionUpdate":"agent_message_chunk", "content":{"type":"text", "text":content}}
+        }}).to_string())).unwrap();
+    }
+    tx.send(Ok(
+        json!({"method":"_x.ai/mcp_initialized", "params":{"sessionId":"saved", "mcpToolCount":2}})
+            .to_string(),
+    ))
+    .unwrap();
+    tx.send(Ok(json!({"id":2, "result":{}}).to_string()))
+        .unwrap();
+    let mut pending = BootstrapMessages::default();
+    let cancellation = AtomicBool::new(false);
+    let response = super::wait_for_response_message_collect_with_requests(
+        &rx,
+        2,
+        "加载",
+        &mut pending,
+        &cancellation,
+        Some("saved"),
+        |_| Ok(false),
+    )
+    .unwrap();
+    assert_eq!(response["result"], json!({}));
+    assert_eq!(
+        resolve_session(&response, Some("saved"), &pending),
+        Ok(("saved".into(), true))
+    );
+    assert_eq!(pending.messages.len(), 1);
+    wait_for_mcp_ready_with_requests(&rx, &mut pending, "saved", &cancellation, |_| Ok(false))
+        .unwrap();
+}
+
+#[test]
+fn replay_filter_keeps_other_sessions_requests_and_handshake_notifications() {
+    let update = json!({"method":"session/update", "params":{"sessionId":"saved"}});
+    assert!(super::is_session_replay(&update, Some("saved")));
+    assert!(!super::is_session_replay(&update, None));
+    assert!(!super::is_session_replay(&update, Some("other")));
+    let mut request = update;
+    request["id"] = json!(9);
+    assert!(!super::is_session_replay(&request, Some("saved")));
+    assert!(!super::is_session_replay(
+        &json!({"method":"_x.ai/mcp_initialized", "params":{"sessionId":"saved"}}),
+        Some("saved")
+    ));
+}
+
+#[test]
+fn text_fallback_requires_an_explicit_missing_grok_session_error() {
+    assert!(is_missing_session_response(&json!({
+        "id": 2,
+        "error": {"code": -32602, "message": "Session does not exist: session-1"}
+    })));
+    assert!(is_missing_session_response(&json!({
+        "id": 2,
+        "error": {"code": -32602, "message": "No session found with id session-1"}
+    })));
+    assert!(!is_missing_session_response(&json!({
+        "id": 2,
+        "error": {"code": -32603, "message": "storage unavailable"}
+    })));
+}
+
+#[test]
+fn loaded_session_keeps_the_requested_id_without_requiring_it_in_the_response() {
+    let pending = BootstrapMessages::default();
+    assert_eq!(
+        resolve_session(
+            &json!({"id": 2, "result": {}}),
+            Some("persisted-session"),
+            &pending
+        )
+        .map(|(id, _)| id),
+        Ok("persisted-session".into())
+    );
+    // 恢复响应不能把当前会话重绑定到 Provider 返回的另一个 ID。
+    assert_eq!(
+        resolve_session(
+            &json!({"id": 2, "result": {"sessionId": "other-session"}}),
+            Some("persisted-session"),
+            &pending
+        )
+        .map(|(id, _)| id),
+        Ok("persisted-session".into())
+    );
+}
+
+#[test]
+fn loaded_session_rejects_a_response_without_an_explicit_result() {
+    let pending = BootstrapMessages::default();
+    assert!(resolve_session(&json!({"id": 2}), Some("persisted-session"), &pending).is_err());
+    assert!(
+        resolve_session(
+            &json!({"id": 2, "error": {"code": -32603, "message": "failed"}}),
+            Some("persisted-session"),
+            &pending
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn new_session_still_requires_a_non_empty_response_id() {
+    let pending = BootstrapMessages::default();
+    assert_eq!(
+        resolve_session(
+            &json!({"id": 2, "result": {"sessionId": "new-session"}}),
+            None,
+            &pending
+        ),
+        Ok(("new-session".into(), false))
+    );
+    assert!(resolve_session(&json!({"id": 2, "result": {}}), None, &pending).is_err());
+    assert!(
+        resolve_session(
+            &json!({"id": 2, "result": {"sessionId": ""}}),
+            None,
+            &pending
+        )
+        .is_err()
+    );
 }
 
 #[test]

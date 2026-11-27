@@ -16,6 +16,7 @@ use crate::{commands::ai_provider::ProviderSessionIdentity, state::AiCommandPoli
 
 struct TestSession {
     identity: ProviderSessionIdentity,
+    resumed_from_native: bool,
     alive: AtomicBool,
     turns: Mutex<Vec<(String, String)>>,
     shutdown_probe: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -29,6 +30,7 @@ impl TestSession {
     fn with_identity(identity: ProviderSessionIdentity) -> Self {
         Self {
             identity,
+            resumed_from_native: false,
             alive: AtomicBool::new(true),
             turns: Mutex::new(Vec::new()),
             shutdown_probe: Mutex::new(None),
@@ -45,6 +47,10 @@ impl PersistentProviderSession for TestSession {
 
     fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    fn resumed_from_native(&self) -> bool {
+        self.resumed_from_native
     }
 
     fn start_turn(
@@ -155,6 +161,28 @@ fn first_turn_spawns_and_the_next_turn_reuses_the_same_session() {
             ("turn-one".into(), "initial prompt".into()),
             ("turn-two".into(), "continuation prompt".into()),
         ]
+    );
+}
+
+#[test]
+fn a_new_process_resumed_from_native_receives_only_the_current_prompt() {
+    let registry = PersistentSessionRegistry::<TestSession>::new("Test");
+    let mut resumed = TestSession::with_identity(identity("local-one"));
+    resumed.resumed_from_native = true;
+    let resumed = Arc::new(resumed);
+
+    let is_new_process = registry
+        .start_turn(
+            (),
+            request("conversation", "turn-one", identity("local-one")),
+            |_, _| Ok(Arc::clone(&resumed)),
+        )
+        .unwrap();
+
+    assert!(is_new_process);
+    assert_eq!(
+        *resumed.turns.lock().unwrap(),
+        [("turn-one".into(), "continuation prompt".into())]
     );
 }
 

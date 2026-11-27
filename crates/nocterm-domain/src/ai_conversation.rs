@@ -52,6 +52,12 @@ pub struct AiConversationRecord {
     pub id: String,
     pub title: String,
     pub provider: String,
+    /// 恢复原生会话必须保留用户选择；旧历史为空，不猜测当前 CLI 默认值。
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub fast_mode: Option<bool>,
+    /// 选模时的能力快照，避免重启或刷新目录改变有效速度参数。
+    pub supports_fast_mode: Option<bool>,
     /// 会话可能从未设置命令策略；空值表示沿用后端默认策略。
     pub command_policy: Option<String>,
     /// v8 之前的历史没有目标信息，保留为空并在 UI 中按只读历史处理。

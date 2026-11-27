@@ -4,8 +4,8 @@ use serde_json::json;
 
 use super::{
     codex_config_read_request, codex_feature_list_request, codex_provider_config,
-    codex_thread_start_request, configured_mcp_server_names, validate_disabled_features,
-    validate_thread_security, wait_for_response, write_message,
+    codex_thread_resume_request, codex_thread_start_request, configured_mcp_server_names,
+    validate_disabled_features, validate_thread_security, wait_for_response, write_message,
 };
 use crate::commands::codex_app_server::CodexSessionIdentity;
 
@@ -85,6 +85,7 @@ fn target_bound_threads_require_nocterm_and_route_terminal_tools() {
     let request = codex_thread_start_request(&local, config, true);
     assert_eq!(request["method"], "thread/start");
     assert_eq!(request["id"], 3);
+    assert_eq!(request["params"]["ephemeral"], false);
     assert_eq!(request["params"]["model"], "vendor/model-v2");
     assert!(request["params"].get("sandbox").is_none());
     assert!(
@@ -111,6 +112,70 @@ fn target_bound_threads_require_nocterm_and_route_terminal_tools() {
     assert!(codex_thread_start_request(&untargeted, untargeted_config, false)["params"]
         ["developerInstructions"]
         .is_null());
+}
+
+#[test]
+fn thread_resume_reapplies_nocterm_security_overrides() {
+    let identity = CodexSessionIdentity {
+        model: Some("vendor/model-v2".into()),
+        reasoning_effort: None,
+        fast_mode: None,
+        connection_id: None,
+        target_session_id: Some("local:one".into()),
+        working_directory: None,
+    };
+    let request = codex_thread_resume_request(
+        "thread-1",
+        &identity,
+        json!({"sandbox_mode":"read-only"}),
+        true,
+    );
+
+    assert_eq!(request["method"], "thread/resume");
+    assert_eq!(request["params"]["threadId"], "thread-1");
+    assert_eq!(request["params"]["excludeTurns"], true);
+    assert_eq!(request["params"]["approvalPolicy"], "never");
+    assert_eq!(request["params"]["sandbox"], "read-only");
+    assert_eq!(request["params"]["config"]["sandbox_mode"], "read-only");
+    assert!(
+        request["params"]["developerInstructions"]
+            .as_str()
+            .is_some_and(|value| value.contains("Nocterm"))
+    );
+}
+
+#[test]
+fn resume_with_large_history_keeps_the_bounded_reader_limit() {
+    use crate::commands::ai_stream::{MAX_PROVIDER_LINE_BYTES, read_bounded_lines};
+    let identity = CodexSessionIdentity {
+        model: None,
+        reasoning_effort: None,
+        fast_mode: None,
+        connection_id: None,
+        target_session_id: None,
+        working_directory: None,
+    };
+    let request = codex_thread_resume_request("thread-1", &identity, json!({}), false);
+    // 模拟 Provider 根据 excludeTurns 投影元数据；历史保留在 Provider 内而非响应行中。
+    let turns = vec![json!({"text": "x".repeat(MAX_PROVIDER_LINE_BYTES + 1)})];
+    let response = |exclude| {
+        json!({"id":3,"result":{
+            "thread":{"id":"thread-1","turns":if exclude { vec![] } else { turns.clone() }},
+            "approvalPolicy":"never", "sandbox":{"type":"readOnly"}
+        }})
+        .to_string()
+            + "\n"
+    };
+    assert!(read_bounded_lines(response(false).as_bytes(), |_| true).is_err());
+    let (sender, receiver) = mpsc::channel();
+    read_bounded_lines(
+        response(request["params"]["excludeTurns"].as_bool().unwrap()).as_bytes(),
+        |line| sender.send(Ok(line)).is_ok(),
+    )
+    .unwrap();
+    let resumed = wait_for_response(&receiver, 3, "resume", &AtomicBool::new(false)).unwrap();
+    validate_thread_security(&resumed).unwrap();
+    assert_eq!(resumed["result"]["thread"]["id"], "thread-1");
 }
 
 #[test]

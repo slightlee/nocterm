@@ -9,6 +9,7 @@ interface AiHistoryMenuProps {
   currentTargetKey: string | null;
   runningConversationIds: string[];
   canClear: boolean;
+  disabled?: boolean;
   onClear: () => void;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
@@ -21,6 +22,7 @@ export function AiHistoryMenu({
   currentTargetKey,
   runningConversationIds,
   canClear,
+  disabled = false,
   onClear,
   onSelect,
   onDelete,
@@ -40,9 +42,10 @@ export function AiHistoryMenu({
         <div className={styles.historyActions}>
           {canClear ? (
             <button
-              disabled={Boolean(
-                activeConversationId && runningConversationIdSet.has(activeConversationId)
-              )}
+              disabled={
+                disabled ||
+                Boolean(activeConversationId && runningConversationIdSet.has(activeConversationId))
+              }
               onClick={onClear}
               type="button"
             >
@@ -73,6 +76,7 @@ export function AiHistoryMenu({
             >
               <button
                 className={styles.historySelect}
+                disabled={disabled}
                 onClick={() => onSelect(conversation.id)}
                 type="button"
               >
@@ -86,7 +90,7 @@ export function AiHistoryMenu({
               <button
                 aria-label={`删除会话：${conversation.title}`}
                 className={styles.historyDelete}
-                disabled={runningConversationIdSet.has(conversation.id)}
+                disabled={disabled || runningConversationIdSet.has(conversation.id)}
                 onClick={() => onDelete(conversation.id)}
                 title="删除会话"
                 type="button"

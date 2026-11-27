@@ -90,6 +90,11 @@ export function resetAiConversation(conversationId: string) {
   return invoke<void>('ai_conversation_reset', { conversationId });
 }
 
+/** 释放后台进程并保留原生上下文，用于切换或新建其他会话。 */
+export function releaseAiConversation(conversationId: string) {
+  return invoke<void>('ai_conversation_release', { conversationId });
+}
+
 /** 持久化层的单条消息快照；parts 由调用方序列化为 JSON 字符串。 */
 export interface AiMessageSnapshot {
   id: string;
@@ -104,6 +109,10 @@ export interface AiConversationSnapshot {
   id: string;
   title: string;
   provider: AiProviderId;
+  model?: string | null;
+  reasoningEffort?: AiReasoningEffort | null;
+  fastMode?: boolean | null;
+  supportsFastMode?: boolean | null;
   commandPolicy: string | null;
   targetKind: 'local' | 'ssh' | null;
   targetId: string | null;

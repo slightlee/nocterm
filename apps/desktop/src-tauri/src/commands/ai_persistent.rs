@@ -47,6 +47,9 @@ pub trait PersistentProviderSession: Send + Sync + 'static {
 
     fn matches_identity(&self, identity: &ProviderSessionIdentity) -> bool;
     fn is_alive(&self) -> bool;
+    /// 新进程可能通过 Provider 原生 ID 恢复旧上下文，此时首个 turn 也只能发送当前问题。
+    /// 仅加载成功但没有历史的原生空会话必须返回 false，以便首轮补入 UI 上下文。
+    fn resumed_from_native(&self) -> bool;
     fn start_turn(
         &self,
         context: Self::TurnContext,
@@ -112,6 +115,21 @@ impl<S: PersistentProviderSession> PersistentSessionRegistry<S> {
                 next_generation: AtomicU64::new(1),
             }),
         }
+    }
+
+    /// Runtime 回归测试在不加载 GUI/CLI 的情况下固定初始化暂停点。
+    #[cfg(test)]
+    pub(super) fn pending_startup_for_test(&self, conversation_id: &str) -> Arc<AtomicBool> {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.inner.sessions.lock().unwrap().insert(
+            conversation_id.into(),
+            SessionSlot::Starting {
+                generation: self.inner.next_generation.fetch_add(1, Ordering::Relaxed),
+                session_id: "test-startup".into(),
+                cancellation: Arc::clone(&cancellation),
+            },
+        );
+        cancellation
     }
 
     /// 全局锁只保护槽位转换；协议握手和进程关闭都在锁外执行。
@@ -233,10 +251,10 @@ impl<S: PersistentProviderSession> PersistentSessionRegistry<S> {
             (server, true)
         };
 
-        let prompt = if is_new {
-            initial_prompt
-        } else {
+        let prompt = if !is_new || server.resumed_from_native() {
             continuation_prompt
+        } else {
+            initial_prompt
         };
         if let Err(error) = server.start_turn(context, session_id, prompt, command_policy) {
             if is_new || !server.is_alive() {

@@ -29,6 +29,16 @@ const conversation = (id: string, overrides: Partial<AiConversation> = {}): AiCo
 });
 
 describe('conversation snapshots', () => {
+  it.each([true, false, undefined])('preserves native resume options with speed %s', (fastMode) => {
+    const original = conversation('resume', {
+      model: 'resume-model',
+      reasoningEffort: 'high',
+      fastMode,
+      supportsFastMode: true,
+    });
+    expect(snapshotToConversation(conversationToSnapshot(original))).toEqual(original);
+  });
+
   it('round trips through the persistence snapshot without losing data', () => {
     const original = conversation('conv-1');
 

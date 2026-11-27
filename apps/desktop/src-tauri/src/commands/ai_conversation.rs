@@ -4,8 +4,8 @@ use tauri::State;
 
 use crate::{
     commands::ai_validation::{
-        validate_conversation_id, validate_message_content, validate_message_id,
-        validate_provider_id, validate_timestamp_ms,
+        valid_model_id, valid_reasoning_effort, validate_conversation_id, validate_message_content,
+        validate_message_id, validate_provider_id, validate_timestamp_ms,
     },
     dto::ai::{AiConversationDto, AiMessageDto},
     state::AppState,
@@ -56,6 +56,27 @@ fn validate_conversation(conversation: &AiConversationDto) -> Result<AiConversat
         return Err("AI 会话标题无效".to_string());
     }
     let provider = validate_provider_id(&conversation.provider)?;
+    // 历史选项沿用发送边界；速度偏好可保留在暂不支持速度的模型上，由能力快照决定是否发送。
+    if conversation
+        .model
+        .as_deref()
+        .is_some_and(|model| !valid_model_id(model))
+    {
+        return Err("AI_MODEL_ID_INVALID".into());
+    }
+    if let Some(effort) = &conversation.reasoning_effort {
+        if !valid_reasoning_effort(&provider, effort) {
+            return Err("AI_REASONING_EFFORT_INVALID".into());
+        }
+        if conversation.model.is_none() {
+            return Err("AI_REASONING_MODEL_REQUIRED".into());
+        }
+    }
+    if conversation.model.is_none()
+        && (conversation.fast_mode.is_some() || conversation.supports_fast_mode.is_some())
+    {
+        return Err("AI_SPEED_MODEL_REQUIRED".into());
+    }
     let command_policy = match conversation.command_policy.as_deref() {
         None | Some("") => None,
         Some(raw) if ALLOWED_COMMAND_POLICIES.contains(&raw) => Some(raw.to_string()),
@@ -100,6 +121,10 @@ fn validate_conversation(conversation: &AiConversationDto) -> Result<AiConversat
         id,
         title: title.to_string(),
         provider,
+        model: conversation.model.clone(),
+        reasoning_effort: conversation.reasoning_effort.clone(),
+        fast_mode: conversation.fast_mode,
+        supports_fast_mode: conversation.supports_fast_mode,
         command_policy,
         target,
         created_at_ms: conversation.created_at_ms,
@@ -113,6 +138,10 @@ fn conversation_to_dto(record: &AiConversationRecord) -> AiConversationDto {
         id: record.id.clone(),
         title: record.title.clone(),
         provider: record.provider.clone(),
+        model: record.model.clone(),
+        reasoning_effort: record.reasoning_effort.clone(),
+        fast_mode: record.fast_mode,
+        supports_fast_mode: record.supports_fast_mode,
         command_policy: record.command_policy.clone(),
         target_kind: record.target.as_ref().map(|target| target.kind.clone()),
         target_id: record.target.as_ref().map(|target| target.id.clone()),
@@ -160,6 +189,16 @@ pub fn ai_conversation_delete(
     conversation_id: String,
 ) -> Result<(), String> {
     let conversation_id = validate_conversation_id(&conversation_id)?;
+    // 关闭占用覆盖进程回收和删除事务，既拒绝旧响应回写，也拒绝清理途中的新启动。
+    let _closing = state
+        .ai_native_session_service()
+        .begin_close(&conversation_id)
+        .map_err(|error| error.message)?;
+    super::ai::close_headless_conversation(&state, &conversation_id)?;
+    // 清理失败保留数据库记录供重试；Repository 在删除对话的事务中清理原生绑定。
+    state
+        .ai_provider_runtimes()
+        .reset_conversation(&conversation_id)?;
     state
         .ai_conversation_service()
         .delete(&conversation_id)
@@ -177,6 +216,10 @@ mod tests {
             id: "123e4567-e89b-12d3-a456-426614174000".into(),
             title: "排查磁盘".into(),
             provider: "codex".into(),
+            model: Some("test-model".into()),
+            reasoning_effort: Some("high".into()),
+            fast_mode: Some(true),
+            supports_fast_mode: Some(true),
             command_policy: Some("auto_safe".into()),
             target_kind: Some("ssh".into()),
             target_id: Some("7".into()),
@@ -191,6 +234,106 @@ mod tests {
                 created_at_ms: 1_500,
             }],
         }
+    }
+
+    #[test]
+    fn persisted_options_restore_the_native_identity_after_reopening_database() {
+        use nocterm_application::{
+            ai_conversation::AiConversationService, ai_native_session::AiNativeSessionService,
+        };
+        use nocterm_domain::ai_native_session::{AiNativeSessionIdentity, AiNativeSessionRecord};
+        use nocterm_infrastructure::persistence::SqliteConnectionRepository;
+        use std::sync::Arc;
+
+        let path = std::env::temp_dir().join(format!(
+            "nocterm-options-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let dto = conversation();
+        let expected = validate_conversation(&dto).unwrap();
+        let identity = AiNativeSessionIdentity {
+            provider: dto.provider.clone(),
+            model: dto.model.clone(),
+            reasoning_effort: dto.reasoning_effort.clone(),
+            fast_mode: dto.fast_mode,
+            connection_id: Some(7),
+            target_session_id: None,
+        };
+        {
+            let repository = Arc::new(SqliteConnectionRepository::open(&path).unwrap());
+            AiConversationService::new(repository.clone())
+                .save(&expected)
+                .unwrap();
+            let native = AiNativeSessionService::new(repository);
+            let session = native.prepare_session(&dto.id, &identity).unwrap();
+            native
+                .save(
+                    &session.lease,
+                    &AiNativeSessionRecord {
+                        conversation_id: dto.id.clone(),
+                        native_session_id: "existing-thread".into(),
+                        identity: identity.clone(),
+                        updated_at_ms: 2,
+                    },
+                )
+                .unwrap();
+        }
+        {
+            let repository = Arc::new(SqliteConnectionRepository::open(&path).unwrap());
+            let records = AiConversationService::new(repository.clone())
+                .list()
+                .unwrap();
+            let restored = super::conversation_to_dto(&records[0]);
+            assert_eq!(validate_conversation(&restored).unwrap(), expected);
+            let restored_identity = AiNativeSessionIdentity {
+                provider: restored.provider,
+                model: restored.model,
+                reasoning_effort: restored.reasoning_effort,
+                fast_mode: if restored.supports_fast_mode == Some(true) {
+                    restored.fast_mode
+                } else {
+                    None
+                },
+                connection_id: Some(7),
+                target_session_id: None,
+            };
+            let native = AiNativeSessionService::new(repository);
+            assert_eq!(
+                native
+                    .prepare_session(&dto.id, &restored_identity)
+                    .unwrap()
+                    .native_session_id
+                    .as_deref(),
+                Some("existing-thread")
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn accepts_legacy_missing_options_and_rejects_invalid_model_choices() {
+        let mut legacy = serde_json::to_value(conversation()).unwrap();
+        for key in ["model", "reasoningEffort", "fastMode", "supportsFastMode"] {
+            legacy.as_object_mut().unwrap().remove(key);
+        }
+        let legacy: AiConversationDto = serde_json::from_value(legacy).unwrap();
+        assert!(validate_conversation(&legacy).unwrap().model.is_none());
+        let mut invalid = conversation();
+        invalid.model = Some("--untrusted-option".into());
+        assert_eq!(
+            validate_conversation(&invalid).unwrap_err(),
+            "AI_MODEL_ID_INVALID"
+        );
+        invalid = conversation();
+        invalid.reasoning_effort = Some("invented".into());
+        assert_eq!(
+            validate_conversation(&invalid).unwrap_err(),
+            "AI_REASONING_EFFORT_INVALID"
+        );
     }
 
     #[test]
