@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::{
-    ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
-    ProviderToolTransport, combined_search_path, find_provider_executable_in, http_endpoint_host,
-    merge_no_proxy, provider_adapter, provider_environment_path_from,
-    supplementary_search_directories,
+    HeadlessNativeSession, ProviderBridge, ProviderLaunch, ProviderLaunchPlan,
+    ProviderSessionIdentity, ProviderToolTransport, combined_search_path,
+    find_provider_executable_in, http_endpoint_host, merge_no_proxy, provider_adapter,
+    provider_environment_path_from, supplementary_search_directories,
 };
 
 fn identity() -> ProviderSessionIdentity {
@@ -27,8 +27,10 @@ fn launch<'a>(
 ) -> ProviderLaunch<'a> {
     ProviderLaunch {
         prompt,
+        continuation_prompt: prompt,
         bridge,
         identity,
+        native_session_id: None,
     }
 }
 
@@ -95,11 +97,25 @@ fn adapters_keep_machine_output_and_disable_owned_shells_for_bridge_tasks() {
     assert!(!claude.args.iter().any(|argument| argument == "inspect"));
     assert_eq!(claude.stdin_payload.as_deref(), Some("inspect"));
     assert!(
-        claude
+        !claude
             .args
             .contains(&"--no-session-persistence".to_string())
     );
+    let native = claude.native_session().expect("Claude native session");
+    assert!(!native.resumed);
+    assert!(
+        claude
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--session-id" && pair[1] == native.id)
+    );
     assert!(claude.args.contains(&"--strict-mcp-config".to_string()));
+    assert!(
+        claude
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--system-prompt-snapshot", "off"])
+    );
     assert!(claude.args.windows(2).any(|pair| pair == ["--tools", ""]));
     assert!(
         claude
@@ -186,6 +202,40 @@ fn adapters_keep_machine_output_and_disable_owned_shells_for_bridge_tasks() {
         .prepare_launch(launch("inspect", Some(bridge()), &identity))
         .unwrap();
     assert!(matches!(grok, ProviderLaunchPlan::Persistent));
+}
+
+#[test]
+fn claude_resume_uses_only_the_current_turn_prompt() {
+    let identity = identity();
+    let launch = ProviderLaunch {
+        prompt: "历史\n当前问题",
+        continuation_prompt: "当前问题",
+        bridge: None,
+        identity: &identity,
+        native_session_id: Some("123e4567-e89b-42d3-a456-426614174000"),
+    };
+    let ProviderLaunchPlan::Headless(prepared) = provider_adapter("claude-code")
+        .unwrap()
+        .prepare_launch(launch)
+        .unwrap()
+    else {
+        panic!("Claude Code should use a headless launch");
+    };
+
+    assert_eq!(prepared.stdin_payload.as_deref(), Some("当前问题"));
+    assert!(
+        prepared
+            .args
+            .windows(2)
+            .any(|pair| { pair == ["--resume", "123e4567-e89b-42d3-a456-426614174000"] })
+    );
+    assert_eq!(
+        prepared.native_session(),
+        Some(&HeadlessNativeSession {
+            id: "123e4567-e89b-42d3-a456-426614174000".into(),
+            resumed: true,
+        })
+    );
 }
 
 /// 私有网段绕过必须合并且幂等：保留用户已有项与顺序，追加缺失项，大小写不敏感去重。

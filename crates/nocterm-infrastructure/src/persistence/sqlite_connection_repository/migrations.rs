@@ -8,7 +8,7 @@ use nocterm_domain::connection::ConnectionRepositoryError;
 use rusqlite::{Connection, OptionalExtension};
 
 /// 当前数据库结构版本；每次结构变更递增并追加一段 `current_version < N` 增量。
-pub(super) const SCHEMA_VERSION: i64 = 10;
+pub(super) const SCHEMA_VERSION: i64 = 12;
 
 /// 打开应用数据库并在提供服务前原子执行所有待处理迁移。
 pub(super) fn open_database(path: &Path) -> Result<Connection, ConnectionRepositoryError> {
@@ -451,6 +451,56 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<(), ConnectionRepos
             .map_err(repository_error)?;
     }
 
+    if current_version < 11 {
+        // Provider 原生 ID 与 UI 历史分表保存：前端快照不能覆盖后端绑定，且首次
+        // turn 可能早于会话历史的异步落盘，因此这里不建立外键。正常删除由同一
+        // SQLite Repository 显式清理，启动恢复只读取仍被 UI 会话引用的记录。
+        transaction
+            .execute_batch(
+                "CREATE TABLE ai_native_sessions (
+                     conversation_id TEXT PRIMARY KEY NOT NULL CHECK (
+                         length(conversation_id) BETWEEN 1 AND 64
+                     ),
+                     native_session_id TEXT NOT NULL CHECK (
+                         length(native_session_id) BETWEEN 1 AND 256
+                     ),
+                     provider TEXT NOT NULL CHECK (
+                         provider IN ('codex', 'claude-code', 'grok')
+                     ),
+                     model TEXT CHECK (model IS NULL OR length(model) BETWEEN 1 AND 256),
+                     reasoning_effort TEXT CHECK (
+                         reasoning_effort IS NULL OR length(reasoning_effort) BETWEEN 1 AND 32
+                     ),
+                     fast_mode INTEGER CHECK (fast_mode IS NULL OR fast_mode IN (0, 1)),
+                     connection_id INTEGER CHECK (connection_id IS NULL OR connection_id > 0),
+                     target_session_id TEXT CHECK (
+                         target_session_id IS NULL OR
+                         length(target_session_id) BETWEEN 1 AND 256
+                     ),
+                     updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms > 0)
+                 );
+                 INSERT INTO schema_migrations (version) VALUES (11);",
+            )
+            .map_err(repository_error)?;
+    }
+
+    if current_version < 12 {
+        // 可选会话参数随展示历史保存；旧数据保持 NULL，不把当前默认值当成用户旧选择。
+        transaction
+            .execute_batch(
+                "ALTER TABLE ai_conversations ADD COLUMN model TEXT
+                 CHECK (model IS NULL OR length(model) BETWEEN 1 AND 200);
+             ALTER TABLE ai_conversations ADD COLUMN reasoning_effort TEXT
+                 CHECK (reasoning_effort IS NULL OR length(reasoning_effort) BETWEEN 1 AND 32);
+             ALTER TABLE ai_conversations ADD COLUMN fast_mode INTEGER
+                 CHECK (fast_mode IS NULL OR fast_mode IN (0, 1));
+             ALTER TABLE ai_conversations ADD COLUMN supports_fast_mode INTEGER
+                 CHECK (supports_fast_mode IS NULL OR supports_fast_mode IN (0, 1));
+             INSERT INTO schema_migrations (version) VALUES (12);",
+            )
+            .map_err(repository_error)?;
+    }
+
     transaction.commit().map_err(repository_error)
 }
 
@@ -513,6 +563,7 @@ mod tests {
                  DROP TABLE ai_messages;
                  DROP TABLE ai_conversations;
                  DROP TABLE ai_tool_audit_events;
+                 DROP TABLE ai_native_sessions;
                  DELETE FROM schema_migrations WHERE version >= 6;",
             )
             .expect("restore complete v5 schema");
@@ -608,6 +659,106 @@ mod tests {
     }
 
     #[test]
+    fn upgrades_v11_with_unknown_options_and_rolls_back_a_failed_upgrade() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        configure_connection(&connection).unwrap();
+        migrate(&mut connection).unwrap();
+        connection.execute_batch(
+            "ALTER TABLE ai_conversations DROP COLUMN model;
+             ALTER TABLE ai_conversations DROP COLUMN reasoning_effort;
+             ALTER TABLE ai_conversations DROP COLUMN fast_mode;
+             ALTER TABLE ai_conversations DROP COLUMN supports_fast_mode;
+             DELETE FROM schema_migrations WHERE version = 12;
+             INSERT INTO ai_conversations (id, title, provider, created_at_ms, updated_at_ms)
+                 VALUES ('legacy-v11', '旧会话', 'codex', 1, 2);
+             INSERT INTO ai_native_sessions (conversation_id, native_session_id, provider, updated_at_ms)
+                 VALUES ('legacy-v11', 'existing-thread', 'codex', 2);
+             CREATE TRIGGER reject_v12 BEFORE INSERT ON schema_migrations
+                 WHEN NEW.version = 12 BEGIN SELECT RAISE(ABORT, 'synthetic migration failure'); END;"
+        ).unwrap();
+        assert!(migrate(&mut connection).is_err());
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 11);
+        assert!(
+            connection
+                .prepare("SELECT model FROM ai_conversations")
+                .is_err()
+        );
+        connection
+            .execute_batch("DROP TRIGGER reject_v12;")
+            .unwrap();
+        migrate(&mut connection).unwrap();
+        let restored: (String, Option<String>, Option<String>, Option<bool>, Option<bool>, String) = connection.query_row(
+            "SELECT c.title, c.model, c.reasoning_effort, c.fast_mode, c.supports_fast_mode, n.native_session_id
+             FROM ai_conversations c JOIN ai_native_sessions n ON n.conversation_id = c.id",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+        ).unwrap();
+        assert_eq!(
+            restored,
+            (
+                "旧会话".into(),
+                None,
+                None,
+                None,
+                None,
+                "existing-thread".into()
+            )
+        );
+    }
+
+    #[test]
+    fn upgrades_v10_without_changing_existing_conversation_history() {
+        let mut connection = Connection::open_in_memory().expect("open database");
+        configure_connection(&connection).expect("configure");
+        // 由正式迁移生成结构，移除 v11/v12 增量后验证升级仍保留旧历史。
+        migrate(&mut connection).expect("create current schema");
+        connection
+            .execute_batch(
+                "DROP TABLE ai_native_sessions;
+                 ALTER TABLE ai_conversations DROP COLUMN model;
+                 ALTER TABLE ai_conversations DROP COLUMN reasoning_effort;
+                 ALTER TABLE ai_conversations DROP COLUMN fast_mode;
+                 ALTER TABLE ai_conversations DROP COLUMN supports_fast_mode;
+                 DELETE FROM schema_migrations WHERE version >= 11;
+                 INSERT INTO ai_conversations
+                     (id, title, provider, command_policy, created_at_ms, updated_at_ms)
+                 VALUES ('legacy-v10', '保留会话', 'claude-code', 'confirm_each', 1000, 2000);
+                 INSERT INTO ai_messages
+                     (id, conversation_id, role, content, parts_json, created_at_ms)
+                 VALUES ('legacy-v10-message', 'legacy-v10', 'user', '保留消息', NULL, 1500);",
+            )
+            .expect("restore and seed v10 schema");
+
+        migrate(&mut connection).expect("migrate v10 database");
+
+        let history: (String, String) = connection
+            .query_row(
+                "SELECT c.title, m.content
+                 FROM ai_conversations c
+                 JOIN ai_messages m ON m.conversation_id = c.id
+                 WHERE c.id = 'legacy-v10'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read migrated history");
+        let native_table: String = connection
+            .query_row(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name = 'ai_native_sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read native session table");
+
+        assert_eq!(history, ("保留会话".into(), "保留消息".into()));
+        assert_eq!(native_table, "ai_native_sessions");
+    }
+
+    #[test]
     fn fresh_database_creates_privacy_safe_execution_ledger_and_snapshot_indexes() {
         let mut connection = Connection::open_in_memory().expect("open database");
         configure_connection(&connection).expect("configure");
@@ -656,10 +807,33 @@ mod tests {
         assert!(indexes.contains(&"idx_ai_tool_executions_retention".to_string()));
     }
 
+    // 旧审计测试只构建审计表；补入真实的旧历史表，使后续历史迁移也经过实际 SQL。
+    fn create_pre_v12_conversation_table(connection: &Connection) {
+        let mut template = Connection::open_in_memory().unwrap();
+        migrate(&mut template).unwrap();
+        template
+            .execute_batch(
+                "ALTER TABLE ai_conversations DROP COLUMN model;
+             ALTER TABLE ai_conversations DROP COLUMN reasoning_effort;
+             ALTER TABLE ai_conversations DROP COLUMN fast_mode;
+             ALTER TABLE ai_conversations DROP COLUMN supports_fast_mode;",
+            )
+            .unwrap();
+        let schema: String = template
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'ai_conversations'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection.execute_batch(&schema).unwrap();
+    }
+
     #[test]
     fn upgrades_v8_without_losing_audit_data() {
         let mut connection = Connection::open_in_memory().expect("open database");
         configure_connection(&connection).expect("configure");
+        create_pre_v12_conversation_table(&connection);
         connection
             .execute_batch(
                 "CREATE TABLE schema_migrations (
@@ -710,6 +884,7 @@ mod tests {
     fn upgrades_connection_scoped_v9_ledger_without_fabricating_ssh_terminal_identity() {
         let mut connection = Connection::open_in_memory().expect("open database");
         configure_connection(&connection).expect("configure");
+        create_pre_v12_conversation_table(&connection);
         connection
             .execute_batch(
                 "CREATE TABLE schema_migrations (

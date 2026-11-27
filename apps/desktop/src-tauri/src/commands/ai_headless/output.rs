@@ -97,6 +97,7 @@ pub(super) fn emit_lines<T: std::io::Read, E: AiOutputEmitter + ?Sized>(
     reader: T,
     context: &HeadlessOutputContext<'_, E>,
     readiness_requirement: Option<&HeadlessReadinessRequirement>,
+    on_readiness: Option<&dyn Fn() -> Result<(), String>>,
 ) -> bool {
     let mut readiness_satisfied = readiness_requirement.is_none();
     let mut readiness_failed = false;
@@ -110,7 +111,17 @@ pub(super) fn emit_lines<T: std::io::Read, E: AiOutputEmitter + ?Sized>(
             && let Some(result) = validate_readiness_event(&line, requirement)
         {
             match result {
-                Ok(()) => readiness_satisfied = true,
+                Ok(()) => {
+                    if let Some(on_readiness) = on_readiness
+                        && let Err(message) = on_readiness()
+                    {
+                        readiness_failed = true;
+                        context.failed.store(true, Ordering::Release);
+                        emit_headless_error(context, message);
+                        return false;
+                    }
+                    readiness_satisfied = true;
+                }
                 Err(message) => {
                     readiness_failed = true;
                     context.failed.store(true, Ordering::Release);

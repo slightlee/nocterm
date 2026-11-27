@@ -9,6 +9,11 @@ export function conversationToSnapshot(conversation: AiConversation): AiConversa
     id: conversation.id,
     title: conversation.title,
     provider: conversation.provider,
+    // 恢复时沿用选模快照；false 与未设置必须区分，否则原生会话身份会变化。
+    model: conversation.model ?? null,
+    reasoningEffort: conversation.reasoningEffort ?? null,
+    fastMode: conversation.fastMode ?? null,
+    supportsFastMode: conversation.supportsFastMode ?? null,
     commandPolicy: conversation.commandPolicy ?? null,
     targetKind: conversation.target?.kind ?? null,
     targetId: conversation.target?.id ?? null,
@@ -31,6 +36,10 @@ export function snapshotToConversation(snapshot: AiConversationSnapshot): AiConv
     id: snapshot.id,
     title: snapshot.title,
     provider: snapshot.provider,
+    model: snapshot.model ?? undefined,
+    reasoningEffort: snapshot.reasoningEffort ?? undefined,
+    fastMode: snapshot.fastMode ?? undefined,
+    supportsFastMode: snapshot.supportsFastMode ?? undefined,
     commandPolicy: (snapshot.commandPolicy ?? undefined) as AiConversation['commandPolicy'],
     target:
       snapshot.targetKind && snapshot.targetId && snapshot.targetLabel

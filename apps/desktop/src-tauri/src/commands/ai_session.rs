@@ -3,12 +3,14 @@
 
 use std::sync::Arc;
 
+use nocterm_domain::ai_native_session::AiNativeSessionIdentity;
 use tauri::AppHandle;
 
 use crate::{
     commands::{
         ai_bridge::McpRequestDispatcher,
         ai_headless::{HeadlessSessionLaunch, start_headless_session},
+        ai_models::ensure_claude_native_session_support,
         ai_provider::{
             ProviderBridge, ProviderLaunch, ProviderLaunchPlan, ProviderSessionIdentity,
             ProviderToolTransport, provider_adapter,
@@ -44,6 +46,40 @@ pub(super) fn start_session(
         .executable()
         .ok_or_else(|| format!("未找到本机 AI Provider：{provider_command}"))?;
     let tool_transport = adapter.tool_transport();
+    let native_session_identity = AiNativeSessionIdentity {
+        provider: provider_id.into(),
+        model: request.model.clone(),
+        reasoning_effort: request.reasoning_effort.clone(),
+        fast_mode: request.fast_mode,
+        connection_id,
+        // SSH 原生上下文绑定稳定连接；本轮 Gateway 仍使用上面解析的精确终端身份。
+        target_session_id: if connection_id.is_some() {
+            None
+        } else {
+            workspace_session_id.clone()
+        },
+    };
+    let native_session = state
+        .ai_native_session_service()
+        .prepare_session(&conversation_id, &native_session_identity)
+        .map_err(|error| error.message)?;
+    let native_session_id = native_session.native_session_id;
+    let native_session_lease = native_session.lease;
+    // Claude 的版本和恢复探测也属于可停止任务，必须在任何外部进程前登记。
+    let headless_startup = if provider_id == "claude-code" {
+        let startup = state
+            .ai_processes()
+            .begin_start(&session_id, &conversation_id)?;
+        state
+            .ai_native_session_service()
+            .ensure_current(&native_session_lease)
+            .map_err(|error| error.message)?;
+        ensure_claude_native_session_support(&provider_executable, startup.cancellation())?;
+        startup.check()?;
+        Some(startup)
+    } else {
+        None
+    };
 
     // 只有 stdio Provider 需要启动 Bridge 子进程；ACP 直接进入进程内公共分发器。
     let bridge_executable = if tool_transport == ProviderToolTransport::Stdio {
@@ -92,8 +128,10 @@ pub(super) fn start_session(
     };
     let launch_plan = match adapter.prepare_launch(ProviderLaunch {
         prompt: &request.prompt,
+        continuation_prompt: &request.continuation_prompt,
         bridge: provider_bridge,
         identity: &identity,
+        native_session_id: native_session_id.as_deref(),
     }) {
         Ok(plan) => plan,
         Err(error) => {
@@ -112,6 +150,10 @@ pub(super) fn start_session(
                     conversation_id,
                     session_id: session_id.clone(),
                     identity,
+                    native_session_id,
+                    native_session_identity,
+                    native_session_lease,
+                    native_session_service: state.ai_native_session_service().clone(),
                     initial_prompt: request.prompt,
                     continuation_prompt: request.continuation_prompt,
                     bridge: bridge.clone(),
@@ -147,19 +189,27 @@ pub(super) fn start_session(
                 state.ai_gateway().revoke(token);
                 return Err(error);
             }
-            start_headless_session(
+            if let Err(error) = start_headless_session(
                 app,
                 state,
                 HeadlessSessionLaunch {
+                    startup: headless_startup.ok_or("Headless 启动状态未登记")?,
                     session_id: session_id.clone(),
                     provider_command,
                     provider_executable,
                     prepared: *prepared,
                     working_directory,
                     connection_id,
-                    bridge_token: gateway_token,
+                    bridge_token: gateway_token.clone(),
+                    conversation_id,
+                    native_session_identity,
+                    native_session_lease,
+                    native_session_service: state.ai_native_session_service().clone(),
                 },
-            )?;
+            ) {
+                revoke_gateway(state, gateway_token.as_deref());
+                return Err(error);
+            }
             Ok(AiSessionStartResponse { session_id })
         }
     }

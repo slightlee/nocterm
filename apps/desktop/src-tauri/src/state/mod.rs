@@ -18,6 +18,7 @@ use nocterm_application::{
     ai_audit::AiAuditService,
     ai_conversation::AiConversationService,
     ai_execution::AiExecutionService,
+    ai_native_session::AiNativeSessionService,
     connection::ConnectionService,
     file_target::FileTargetRegistry,
     health::HealthService,
@@ -45,6 +46,7 @@ pub struct AppState {
     ai_audit_service: AiAuditService,
     ai_conversation_service: AiConversationService,
     ai_execution_service: AiExecutionService,
+    ai_native_session_service: AiNativeSessionService,
     terminal_service: TerminalService,
     local_terminal_service: LocalTerminalService,
     /// 进程内 SFTP 会话管理器：与终端共用 russh 后端，承载远程文件浏览与传输。
@@ -484,14 +486,16 @@ impl AiGatewayState {
 }
 
 impl AppState {
-    pub fn new(
-        health_service: HealthService,
-        connection_service: ConnectionService,
-        settings_service: SettingsService,
-        ai_audit_service: AiAuditService,
-        ai_conversation_service: AiConversationService,
-        ai_execution_service: AiExecutionService,
-    ) -> Self {
+    pub fn new(services: AppStateServices, app_data_directory: std::path::PathBuf) -> Self {
+        let AppStateServices {
+            health_service,
+            connection_service,
+            settings_service,
+            ai_audit_service,
+            ai_conversation_service,
+            ai_execution_service,
+            ai_native_session_service,
+        } = services;
         Self {
             health_service,
             connection_service,
@@ -499,6 +503,7 @@ impl AppState {
             ai_audit_service,
             ai_conversation_service,
             ai_execution_service,
+            ai_native_session_service,
             terminal_service: TerminalService::new(Arc::new(SshTerminalManager::default())),
             local_terminal_service: LocalTerminalService::new(Arc::new(
                 LocalTerminalManager::default(),
@@ -507,7 +512,9 @@ impl AppState {
             file_targets: Arc::new(FileTargetRegistry::default()),
             session_passwords: Arc::new(SessionPasswords::default()),
             ai_processes: Arc::new(AiProcessManager::default()),
-            ai_provider_runtimes: Arc::new(PersistentProviderRuntimeRegistry::default()),
+            ai_provider_runtimes: Arc::new(
+                PersistentProviderRuntimeRegistry::with_app_data_directory(app_data_directory),
+            ),
             ai_gateway: Arc::new(AiGatewayState::default()),
             local_terminals: Arc::new(LocalTerminalRegistry::default()),
             ssh_terminals: Arc::new(SshTerminalRegistry::default()),
@@ -536,6 +543,10 @@ impl AppState {
 
     pub fn ai_execution_service(&self) -> &AiExecutionService {
         &self.ai_execution_service
+    }
+
+    pub fn ai_native_session_service(&self) -> &AiNativeSessionService {
+        &self.ai_native_session_service
     }
 
     pub fn terminal_service(&self) -> &TerminalService {
@@ -581,6 +592,17 @@ impl AppState {
     pub fn ssh_terminals(&self) -> &Arc<SshTerminalRegistry> {
         &self.ssh_terminals
     }
+}
+
+/// AppState 的持久服务依赖在装配边界集中传递，避免构造函数随服务数量持续膨胀。
+pub struct AppStateServices {
+    pub health_service: HealthService,
+    pub connection_service: ConnectionService,
+    pub settings_service: SettingsService,
+    pub ai_audit_service: AiAuditService,
+    pub ai_conversation_service: AiConversationService,
+    pub ai_execution_service: AiExecutionService,
+    pub ai_native_session_service: AiNativeSessionService,
 }
 
 #[cfg(test)]

@@ -8,9 +8,9 @@ export interface AiConversation {
   id: string;
   title: string;
   provider: AiProviderId;
-  /** 空值随本机 CLI 默认模型。模型 ID 始终与 Provider 一起切换。 */
+  /** 与 Provider 一起持久化；旧历史为空时要求用户显式选模。 */
   model?: string;
-  /** 会话内存选项，不写入历史数据库。空值交给 Agent 的生效配置。 */
+  /** 原样持久化用户选择，空值交给 Agent 的生效配置。 */
   reasoningEffort?: AiReasoningEffort;
   /** 仅在模型明确支持时存在；false 表示显式使用标准速度。 */
   fastMode?: boolean;

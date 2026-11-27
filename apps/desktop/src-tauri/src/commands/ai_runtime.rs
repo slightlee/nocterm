@@ -3,6 +3,8 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use nocterm_application::ai_native_session::{AiNativeSessionLease, AiNativeSessionService};
+use nocterm_domain::ai_native_session::AiNativeSessionIdentity;
 use tauri::AppHandle;
 
 use crate::{
@@ -18,6 +20,10 @@ pub struct PersistentProviderLaunch {
     pub conversation_id: String,
     pub session_id: String,
     pub identity: ProviderSessionIdentity,
+    pub native_session_id: Option<String>,
+    pub native_session_identity: AiNativeSessionIdentity,
+    pub native_session_lease: AiNativeSessionLease,
+    pub native_session_service: AiNativeSessionService,
     pub initial_prompt: String,
     pub continuation_prompt: String,
     pub bridge: Option<(String, String)>,
@@ -40,6 +46,10 @@ pub trait PersistentProviderRuntime: Send + Sync {
         gateway: Arc<AiGatewayState>,
     ) -> Result<bool, String>;
     fn stop_turn(&self, session_id: &str) -> Result<bool, String>;
+    /// 普通导航只释放进程。没有独立磁盘文件的 Runtime 可沿用原进程重置实现。
+    fn release_conversation(&self, conversation_id: &str) -> Result<bool, String> {
+        self.reset_conversation(conversation_id)
+    }
     fn reset_conversation(&self, conversation_id: &str) -> Result<bool, String>;
 }
 
@@ -50,14 +60,18 @@ pub struct PersistentProviderRuntimeRegistry {
 
 impl Default for PersistentProviderRuntimeRegistry {
     fn default() -> Self {
-        Self::new(vec![
-            Box::new(CodexAppServerManager::default()),
-            Box::new(GrokAcpServerManager::default()),
-        ])
+        Self::with_app_data_directory(std::env::temp_dir().join("nocterm-ai-provider-state"))
     }
 }
 
 impl PersistentProviderRuntimeRegistry {
+    pub fn with_app_data_directory(app_data_directory: PathBuf) -> Self {
+        Self::new(vec![
+            Box::new(CodexAppServerManager::default()),
+            Box::new(GrokAcpServerManager::new(app_data_directory)),
+        ])
+    }
+
     fn new(runtimes: Vec<Box<dyn PersistentProviderRuntime>>) -> Self {
         debug_assert!(
             runtimes
@@ -95,16 +109,34 @@ impl PersistentProviderRuntimeRegistry {
     }
 
     pub fn reset_conversation(&self, conversation_id: &str) -> Result<bool, String> {
+        self.close_conversation(conversation_id, true)
+    }
+
+    pub fn release_conversation(&self, conversation_id: &str) -> Result<bool, String> {
+        self.close_conversation(conversation_id, false)
+    }
+
+    fn close_conversation(&self, conversation_id: &str, reset_state: bool) -> Result<bool, String> {
         let mut reset = false;
         let mut errors = Vec::new();
         // 异常状态下同一对话可能同时残留多个 Provider，清理必须遍历全部 Runtime。
         for runtime in &self.runtimes {
-            match runtime.reset_conversation(conversation_id) {
+            let result = if reset_state {
+                runtime.reset_conversation(conversation_id)
+            } else {
+                runtime.release_conversation(conversation_id)
+            };
+            match result {
                 Ok(handled) => reset |= handled,
                 Err(error) => errors.push(format!("{}: {error}", runtime.id())),
             }
         }
-        finish_lifecycle_sweep("重置持续 AI 会话失败", reset, errors)
+        let action = if reset_state {
+            "重置持续 AI 会话失败"
+        } else {
+            "释放持续 AI 会话失败"
+        };
+        finish_lifecycle_sweep(action, reset, errors)
     }
 
     fn runtime(&self, provider_id: &str) -> Result<&dyn PersistentProviderRuntime, String> {

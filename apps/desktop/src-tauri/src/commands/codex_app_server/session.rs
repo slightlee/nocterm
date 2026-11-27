@@ -12,6 +12,8 @@ use std::{
     time::Duration,
 };
 
+use nocterm_application::ai_native_session::{AiNativeSessionLease, AiNativeSessionService};
+use nocterm_domain::ai_native_session::{AiNativeSessionIdentity, AiNativeSessionRecord};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Runtime};
 
@@ -19,9 +21,10 @@ use super::{
     CodexSessionIdentity,
     protocol::{
         codex_config_read_request, codex_feature_list_request, codex_provider_config,
-        codex_thread_start_request, codex_turn_start_request, configured_mcp_server_names,
-        terminate_child, validate_disabled_features, validate_thread_security, wait_for_response,
-        write_message,
+        codex_thread_resume_request, codex_thread_start_request, codex_turn_start_request,
+        configured_mcp_server_names, is_missing_thread_response, terminate_child,
+        validate_disabled_features, validate_thread_security, wait_for_response,
+        wait_for_response_message, write_message,
     },
 };
 use crate::{
@@ -40,6 +43,7 @@ use crate::{
 pub(super) struct CodexAppServer {
     identity: CodexSessionIdentity,
     thread_id: String,
+    resumed_from_native: bool,
     stdin: Mutex<ChildStdin>,
     child: ManagedChild,
     active_turn: Mutex<Option<ActiveTurn>>,
@@ -54,6 +58,11 @@ pub(super) struct CodexAppServer {
 /// 创建 app-server 所需的 Provider 专属依赖；公共注册表只传递取消和终止钩子。
 pub(super) struct CodexAppServerLaunch {
     pub identity: CodexSessionIdentity,
+    pub conversation_id: String,
+    pub native_session_id: Option<String>,
+    pub native_session_identity: AiNativeSessionIdentity,
+    pub native_session_lease: AiNativeSessionLease,
+    pub native_session_service: AiNativeSessionService,
     pub bridge: Option<(String, String)>,
     pub bridge_executable: String,
     pub provider_executable: PathBuf,
@@ -80,6 +89,11 @@ impl CodexAppServer {
     ) -> Result<Arc<Self>, String> {
         let CodexAppServerLaunch {
             identity,
+            conversation_id,
+            native_session_id,
+            native_session_identity,
+            native_session_lease,
+            native_session_service,
             bridge,
             bridge_executable,
             provider_executable,
@@ -175,14 +189,63 @@ impl CodexAppServer {
                 bridge.as_ref().map(|(endpoint, _)| endpoint.as_str()),
                 &configured_mcp_servers,
             );
-            let thread_request = codex_thread_start_request(&identity, config, bridge.is_some());
-            write_message(&mut stdin, &thread_request)?;
-            let response = wait_for_response(
-                &line_receiver,
-                3,
-                "创建 Codex thread",
-                &startup_cancellation,
-            )?;
+            let (response, resumed_from_native, thread_request_id) =
+                if let Some(thread_id) = native_session_id.as_deref() {
+                    write_message(
+                        &mut stdin,
+                        &codex_thread_resume_request(
+                            thread_id,
+                            &identity,
+                            config.clone(),
+                            bridge.is_some(),
+                        ),
+                    )?;
+                    let response = wait_for_response_message(
+                        &line_receiver,
+                        3,
+                        "恢复 Codex thread",
+                        &startup_cancellation,
+                    )?;
+                    if is_missing_thread_response(&response) {
+                        // 旧 ID 已被 Provider 明确判定不存在；先使绑定失效，再创建新 thread。
+                        native_session_service
+                            .clear_missing_binding(&native_session_lease)
+                            .map_err(|error| error.message)?;
+                        let mut request =
+                            codex_thread_start_request(&identity, config, bridge.is_some());
+                        request["id"] = json!(4);
+                        write_message(&mut stdin, &request)?;
+                        (
+                            wait_for_response(
+                                &line_receiver,
+                                4,
+                                "创建 Codex thread",
+                                &startup_cancellation,
+                            )?,
+                            false,
+                            4,
+                        )
+                    } else if let Some(error) =
+                        response.pointer("/error/message").and_then(Value::as_str)
+                    {
+                        return Err(format!("恢复 Codex thread失败：{error}"));
+                    } else {
+                        (response, true, 3)
+                    }
+                } else {
+                    let request = codex_thread_start_request(&identity, config, bridge.is_some());
+                    write_message(&mut stdin, &request)?;
+                    (
+                        wait_for_response(
+                            &line_receiver,
+                            3,
+                            "创建 Codex thread",
+                            &startup_cancellation,
+                        )?,
+                        false,
+                        3,
+                    )
+                };
             validate_thread_security(&response)?;
             let thread_id = response
                 .pointer("/result/thread/id")
@@ -190,18 +253,32 @@ impl CodexAppServer {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
                 .ok_or_else(|| "Codex thread/start 未返回 thread id".to_string())?;
-            write_message(&mut stdin, &codex_feature_list_request(&thread_id))?;
+            let feature_request_id = thread_request_id + 1;
+            let mut feature_request = codex_feature_list_request(&thread_id);
+            feature_request["id"] = json!(feature_request_id);
+            write_message(&mut stdin, &feature_request)?;
             let feature_response = wait_for_response(
                 &line_receiver,
-                4,
+                feature_request_id,
                 "验证 Codex 执行能力隔离",
                 &startup_cancellation,
             )?;
             validate_disabled_features(&feature_response)?;
-            Ok(thread_id)
+            native_session_service
+                .save(
+                    &native_session_lease,
+                    &AiNativeSessionRecord {
+                        conversation_id: conversation_id.clone(),
+                        native_session_id: thread_id.clone(),
+                        identity: native_session_identity.clone(),
+                        updated_at_ms: current_unix_ms(),
+                    },
+                )
+                .map_err(|error| error.message)?;
+            Ok((thread_id, resumed_from_native, feature_request_id + 1))
         })();
-        let thread_id = match bootstrap {
-            Ok(thread_id) => thread_id,
+        let (thread_id, resumed_from_native, next_request_id) = match bootstrap {
+            Ok(result) => result,
             Err(error) => {
                 terminate_child(&mut child);
                 stderr_relay.wait(Duration::from_millis(250));
@@ -215,10 +292,11 @@ impl CodexAppServer {
         let server = Arc::new(Self {
             identity,
             thread_id,
+            resumed_from_native,
             stdin: Mutex::new(stdin),
             child: ManagedChild::new(child),
             active_turn: Mutex::new(None),
-            next_request_id: AtomicU64::new(5),
+            next_request_id: AtomicU64::new(next_request_id),
             alive: AtomicBool::new(true),
             bridge_token: bridge.map(|(_, token)| token),
             gateway,
@@ -580,6 +658,10 @@ impl PersistentProviderSession for CodexAppServer {
         CodexAppServer::is_alive(self)
     }
 
+    fn resumed_from_native(&self) -> bool {
+        self.resumed_from_native
+    }
+
     fn start_turn(
         &self,
         app: Self::TurnContext,
@@ -607,6 +689,14 @@ impl Drop for CodexAppServer {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+fn current_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .clamp(1, i64::MAX as u128) as i64
 }
 
 #[cfg(test)]

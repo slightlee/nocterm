@@ -227,6 +227,51 @@ fn builtin_effort_catalog_does_not_invent_levels_for_older_models_or_cli() {
 }
 
 #[test]
+fn claude_native_session_contract_blocks_old_cli_and_dynamic_models() {
+    assert!(!claude_catalog::supports_native_session_contract("2.1.219"));
+    assert!(claude_catalog::supports_native_session_contract("2.1.257"));
+    for version in ["2.1.257-alpha.1", "2.1.330+custom", "unknown", "2.1"] {
+        assert!(
+            !claude_catalog::supports_native_session_contract(version),
+            "{version}"
+        );
+        let mut catalog = Vec::new();
+        claude_catalog::append_versions(&mut catalog, Some(version)).unwrap();
+        assert!(
+            catalog.iter().all(|model| model.unavailable_reason
+                == Some(AiModelUnavailableReason::CliVersionUnknown))
+        );
+    }
+    let mut models = vec![AiModelOption {
+        id: "local-model".into(),
+        name: "Local model".into(),
+        source: AiModelSource::Cli,
+        is_legacy: false,
+        reasoning_efforts: Vec::new(),
+        default_reasoning_effort: None,
+        supports_fast_mode: false,
+        resolved_model: None,
+        minimum_cli_version: None,
+        unavailable_reason: None,
+    }];
+
+    claude_catalog::append_versions(&mut models, Some("2.1.219")).unwrap();
+
+    let dynamic = models
+        .iter()
+        .find(|model| model.id == "local-model")
+        .unwrap();
+    assert_eq!(
+        dynamic.unavailable_reason,
+        Some(AiModelUnavailableReason::CliUpdateRequired)
+    );
+    assert_eq!(
+        dynamic.minimum_cli_version.as_deref(),
+        Some(claude_catalog::NATIVE_SESSION_MINIMUM)
+    );
+}
+
+#[test]
 fn claude_catalog_includes_documented_compatible_defaults() {
     let mut models = vec![];
     claude_catalog::append_versions(&mut models, Some("2.1.330")).unwrap();
@@ -457,4 +502,52 @@ fn local_catalog_probe() {
         println!("{provider}: {}", serde_json::to_string(&models).unwrap());
         assert!(!models.models.is_empty());
     }
+}
+#[test]
+fn version_probe_observes_stop_while_waiting_for_output() {
+    use super::Probe;
+    use crate::commands::ai_process::AiProcessManager;
+    use std::{
+        process::{Command, Stdio},
+        sync::Arc,
+        thread,
+        time::{Duration, Instant},
+    };
+    let manager = Arc::new(AiProcessManager::default());
+    let startup = manager
+        .begin_start("version-probe", "conversation")
+        .unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "commands::ai_headless::tests::probe_subprocess_fixture",
+            "--nocapture",
+        ])
+        .env("NOCTERM_TEST_PROBE_MODE", "wait")
+        .stderr(Stdio::null());
+    super::hide_console_window(&mut command);
+    let mut probe = Probe::start(&mut command, false).unwrap();
+    let stop = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        manager.cancel_startup("version-probe").unwrap();
+    });
+    let started = Instant::now();
+    // libtest 可能先输出测试标题，继续消费直到等待被取消。
+    let error = loop {
+        match probe.next_line_cancellable(startup.cancellation()) {
+            Ok(_) => continue,
+            Err(error) => break error,
+        }
+    };
+    stop.join().unwrap();
+    assert!(error.contains("取消"));
+    assert!(
+        probe
+            .finish_cancellable(startup.cancellation())
+            .unwrap_err()
+            .contains("取消")
+    );
+    drop(probe);
+    assert!(started.elapsed() < Duration::from_secs(3));
 }

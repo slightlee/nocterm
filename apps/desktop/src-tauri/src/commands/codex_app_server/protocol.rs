@@ -215,10 +215,46 @@ pub(super) fn codex_thread_start_request(
             "cwd": identity.working_directory,
             "model": identity.model,
             "developerInstructions": developer_instructions,
-            "ephemeral": true,
+            "ephemeral": false,
             "config": config
         }
     })
+}
+
+/// 恢复请求重新覆盖 Nocterm 的安全配置；不能信任原 thread 创建时的历史策略。
+/// UI 已持有展示历史，只接收元数据，避免长历史突破单行协议输出上限。
+pub(super) fn codex_thread_resume_request(
+    thread_id: &str,
+    identity: &CodexSessionIdentity,
+    config: Value,
+    bridge_enabled: bool,
+) -> Value {
+    let developer_instructions = bridge_enabled
+        .then(|| terminal_session_instructions(identity))
+        .flatten();
+    json!({
+        "id": 3,
+        "method": "thread/resume",
+        "params": {
+            "threadId": thread_id,
+            "excludeTurns": true,
+            "approvalPolicy": "never",
+            "sandbox": "read-only",
+            "cwd": identity.working_directory,
+            "model": identity.model,
+            "developerInstructions": developer_instructions,
+            "config": config
+        }
+    })
+}
+
+/// 仅 Codex 明确报告本地 rollout 不存在时允许退回 thread/start。
+pub(super) fn is_missing_thread_response(response: &Value) -> bool {
+    response.pointer("/error/code").and_then(Value::as_i64) == Some(-32600)
+        && response
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.starts_with("no rollout found for thread id "))
 }
 
 /// effort 是 turn/start 的原生字段；默认不发送覆盖值，保留 CLI 生效配置。
@@ -263,6 +299,20 @@ pub(super) fn wait_for_response(
     action: &str,
     cancellation: &AtomicBool,
 ) -> Result<Value, String> {
+    let message = wait_for_response_message(lines, expected_id, action, cancellation)?;
+    if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
+        return Err(format!("{action}失败：{error}"));
+    }
+    Ok(message)
+}
+
+/// 恢复流程需要检查结构化错误码，且必须在发送 Prompt 前决定是否允许降级。
+pub(super) fn wait_for_response_message(
+    lines: &mpsc::Receiver<Result<String, String>>,
+    expected_id: u64,
+    action: &str,
+    cancellation: &AtomicBool,
+) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -281,9 +331,6 @@ pub(super) fn wait_for_response(
         };
         if message.get("id").and_then(Value::as_u64) != Some(expected_id) {
             continue;
-        }
-        if let Some(error) = message.pointer("/error/message").and_then(Value::as_str) {
-            return Err(format!("{action}失败：{error}"));
         }
         return Ok(message);
     }

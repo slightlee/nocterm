@@ -15,6 +15,7 @@ struct TestRuntime {
     handled_session: Option<&'static str>,
     stop_calls: Arc<AtomicUsize>,
     reset_calls: Arc<AtomicUsize>,
+    release_calls: Arc<AtomicUsize>,
     stop_error: Option<&'static str>,
     reset_error: Option<&'static str>,
 }
@@ -48,6 +49,14 @@ impl PersistentProviderRuntime for TestRuntime {
         }
         Ok(self.handled_session.is_some())
     }
+
+    fn release_conversation(&self, _conversation_id: &str) -> Result<bool, String> {
+        self.release_calls.fetch_add(1, Ordering::Relaxed);
+        if let Some(error) = self.reset_error {
+            return Err(error.into());
+        }
+        Ok(self.handled_session.is_some())
+    }
 }
 
 fn runtime(
@@ -61,6 +70,7 @@ fn runtime(
         handled_session,
         stop_calls,
         reset_calls,
+        release_calls: Arc::new(AtomicUsize::new(0)),
         stop_error: None,
         reset_error: None,
     })
@@ -76,6 +86,7 @@ fn failing_runtime(
         handled_session: None,
         stop_calls,
         reset_calls,
+        release_calls: Arc::new(AtomicUsize::new(0)),
         stop_error: Some("stop state unavailable"),
         reset_error: Some("reset state unavailable"),
     })
@@ -88,6 +99,28 @@ fn default_registry_contains_every_persistent_provider() {
     assert!(registry.runtime("codex").is_ok());
     assert!(registry.runtime("grok").is_ok());
     assert!(registry.runtime("claude-code").is_err());
+}
+
+#[test]
+fn release_never_resets_history_and_continues_after_a_runtime_error() {
+    let releases = Arc::new(AtomicUsize::new(0));
+    let resets = Arc::new(AtomicUsize::new(0));
+    let registry = PersistentProviderRuntimeRegistry::new(vec![
+        failing_runtime("broken", Arc::new(AtomicUsize::new(0)), Arc::clone(&resets)),
+        Box::new(TestRuntime {
+            id: "owner",
+            handled_session: Some("turn-one"),
+            stop_calls: Arc::new(AtomicUsize::new(0)),
+            reset_calls: Arc::clone(&resets),
+            release_calls: Arc::clone(&releases),
+            stop_error: None,
+            reset_error: None,
+        }),
+    ]);
+
+    assert!(registry.release_conversation("conversation-one").is_err());
+    assert_eq!(releases.load(Ordering::Relaxed), 1);
+    assert_eq!(resets.load(Ordering::Relaxed), 0);
 }
 
 #[test]

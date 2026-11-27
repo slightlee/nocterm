@@ -5,7 +5,7 @@ use std::{ffi::OsString, fs, path::Path};
 
 use toml::{Table, Value};
 
-use super::{original_home, push_secret, write_private_file};
+use super::{original_home, push_secret, replace_private_file};
 use crate::commands::ai_provider::http_endpoint_host;
 
 const ALLOWED_ENDPOINTS: [&str; 5] = [
@@ -85,7 +85,7 @@ pub(super) fn create_runtime_config(
         source_contents.as_deref(),
         selected_model.or(environment_default.as_deref()),
     )?;
-    write_private_file(
+    replace_private_file(
         &runtime_directory.join("config.toml"),
         contents.as_bytes(),
         "Grok 隔离配置",

@@ -12,7 +12,10 @@ mod codex;
 mod grok;
 mod terminal_contract;
 
-pub(crate) use grok::{PreparedGrokAcpLaunch, prepare_grok_acp_launch, read_grok_model_metadata};
+pub(crate) use grok::{
+    PreparedGrokAcpLaunch, cleanup_grok_conversation, cleanup_stale_grok_authentication_links,
+    prepare_grok_acp_launch, prepare_grok_conversation_launch, read_grok_model_metadata,
+};
 pub(crate) use terminal_contract::{terminal_session_instructions, terminal_task_instructions};
 
 pub struct ProviderBridge<'a> {
@@ -30,8 +33,11 @@ pub enum ProviderToolTransport {
 /// 通用启动上下文只描述 Nocterm 能力，不暴露任何厂商专用参数或配置格式。
 pub struct ProviderLaunch<'a> {
     pub prompt: &'a str,
+    pub continuation_prompt: &'a str,
     pub bridge: Option<ProviderBridge<'a>>,
     pub identity: &'a ProviderSessionIdentity,
+    /// 后端校验身份后提供的原生恢复候选；Adapter 不能自行读取前端历史推断 ID。
+    pub native_session_id: Option<&'a str>,
 }
 
 /// 启动结果持有任务级临时文件；若进程启动失败，Drop 会立即清理。
@@ -42,6 +48,26 @@ pub struct PreparedHeadlessLaunch {
     stdin_payload: Option<String>,
     readiness_requirement: Option<HeadlessReadinessRequirement>,
     cleanup_paths: Vec<PathBuf>,
+    native_session: Option<HeadlessNativeSession>,
+    resume_fallback: Option<HeadlessResumeFallback>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadlessNativeSession {
+    pub id: String,
+    pub resumed: bool,
+}
+
+pub struct HeadlessResumeFallback {
+    args: Vec<String>,
+    stdin_payload: String,
+    native_session_id: String,
+}
+
+/// Headless Provider 的原生会话状态作为一个整体传入，避免启动参数与降级策略失配。
+pub struct HeadlessNativeSessionPlan {
+    pub session: HeadlessNativeSession,
+    pub resume_fallback: Option<HeadlessResumeFallback>,
 }
 
 /// Headless Provider 必须在首个初始化事件中证明任务级工具已经可用。
@@ -64,7 +90,11 @@ impl PreparedHeadlessLaunch {
         current_directory: Option<PathBuf>,
         readiness_requirement: Option<HeadlessReadinessRequirement>,
         cleanup_paths: Vec<PathBuf>,
+        native_session_plan: Option<HeadlessNativeSessionPlan>,
     ) -> Self {
+        let (native_session, resume_fallback) = native_session_plan
+            .map(|plan| (Some(plan.session), plan.resume_fallback))
+            .unwrap_or_default();
         Self {
             args,
             environment,
@@ -72,6 +102,8 @@ impl PreparedHeadlessLaunch {
             stdin_payload,
             readiness_requirement,
             cleanup_paths,
+            native_session,
+            resume_fallback,
         }
     }
 
@@ -87,6 +119,22 @@ impl PreparedHeadlessLaunch {
 
     pub fn take_readiness_requirement(&mut self) -> Option<HeadlessReadinessRequirement> {
         self.readiness_requirement.take()
+    }
+
+    pub fn native_session(&self) -> Option<&HeadlessNativeSession> {
+        self.native_session.as_ref()
+    }
+
+    /// 仅在 Provider 明确确认旧 ID 不存在且尚未发送 Prompt 时切换到文本历史降级。
+    pub fn apply_resume_fallback(&mut self) -> Option<&HeadlessNativeSession> {
+        let fallback = self.resume_fallback.take()?;
+        self.args = fallback.args;
+        self.stdin_payload = Some(fallback.stdin_payload);
+        self.native_session = Some(HeadlessNativeSession {
+            id: fallback.native_session_id,
+            resumed: false,
+        });
+        self.native_session.as_ref()
     }
 }
 

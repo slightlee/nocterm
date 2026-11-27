@@ -3,7 +3,8 @@
 use std::{fs::DirBuilder, path::PathBuf};
 
 use super::{
-    HeadlessReadinessRequirement, PreparedHeadlessLaunch, ProviderAdapter, ProviderLaunch,
+    HeadlessNativeSession, HeadlessNativeSessionPlan, HeadlessReadinessRequirement,
+    HeadlessResumeFallback, PreparedHeadlessLaunch, ProviderAdapter, ProviderLaunch,
     ProviderLaunchPlan, terminal_session_instructions,
 };
 
@@ -40,13 +41,27 @@ impl ProviderAdapter for ClaudeCodeAdapter {
             "--include-partial-messages".into(),
             "--input-format".into(),
             "text".into(),
-            "--no-session-persistence".into(),
+            // 恢复时必须重新应用当前 Nocterm 终端契约，不能沿用旧版本记录的提示词快照。
+            "--system-prompt-snapshot".into(),
+            "off".into(),
             "--permission-mode".into(),
             "dontAsk".into(),
             "--tools".into(),
             "".into(),
             "--strict-mcp-config".into(),
         ];
+        let fallback_session_id = generate_session_id()?;
+        let (native_session_id, resumed, prompt) = match launch.native_session_id {
+            Some(session_id) => {
+                args.extend(["--resume".into(), session_id.into()]);
+                (session_id.to_string(), true, launch.continuation_prompt)
+            }
+            None => {
+                let session_id = generate_session_id()?;
+                args.extend(["--session-id".into(), session_id.clone()]);
+                (session_id, false, launch.prompt)
+            }
+        };
         if let Some(model) = &launch.identity.model {
             args.extend(["--model".into(), model.clone()]);
         }
@@ -77,10 +92,24 @@ impl ProviderAdapter for ClaudeCodeAdapter {
             |bridge| crate::commands::ai_bridge::mcp_config(bridge.executable, bridge.endpoint),
         );
         args.extend(["--mcp-config".into(), mcp_config]);
+        let resume_fallback = resumed.then(|| {
+            let mut fallback_args = args.clone();
+            let resume_index = fallback_args
+                .iter()
+                .position(|argument| argument == "--resume")
+                .expect("resume argument created above");
+            fallback_args[resume_index] = "--session-id".into();
+            fallback_args[resume_index + 1] = fallback_session_id.clone();
+            HeadlessResumeFallback {
+                args: fallback_args,
+                stdin_payload: launch.prompt.to_string(),
+                native_session_id: fallback_session_id,
+            }
+        });
         let cleanup_paths = runtime_directory.iter().cloned().collect();
         let prepared = PreparedHeadlessLaunch::new(
             args,
-            Some(launch.prompt.to_string()),
+            Some(prompt.to_string()),
             Vec::new(),
             runtime_directory,
             has_bridge.then_some(HeadlessReadinessRequirement {
@@ -96,9 +125,43 @@ impl ProviderAdapter for ClaudeCodeAdapter {
                     "Claude Code 未通过当前终端能力取得结果，已丢弃未经验证的回答",
             }),
             cleanup_paths,
+            Some(HeadlessNativeSessionPlan {
+                session: HeadlessNativeSession {
+                    id: native_session_id,
+                    resumed,
+                },
+                resume_fallback,
+            }),
         );
         Ok(ProviderLaunchPlan::Headless(Box::new(prepared)))
     }
+}
+
+/// Claude 要求标准 UUID；由系统 CSPRNG 生成 v4，避免引入只为格式化的生产依赖。
+fn generate_session_id() -> Result<String, String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| "无法生成 Claude Code 会话标识".to_string())?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    ))
 }
 
 /// 使用不可预测名称和仅当前用户可访问的目录隔离项目指令与宿主 cwd。

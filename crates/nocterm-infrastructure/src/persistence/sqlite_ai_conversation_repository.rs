@@ -21,7 +21,8 @@ impl AiConversationRepository for SqliteConnectionRepository {
         let mut statement = connection
             .prepare(
                 "SELECT id, title, provider, command_policy, created_at_ms, updated_at_ms,
-                        target_kind, target_id, target_label
+                        target_kind, target_id, target_label, model, reasoning_effort,
+                        fast_mode, supports_fast_mode
                  FROM ai_conversations
                  ORDER BY updated_at_ms DESC",
             )
@@ -58,8 +59,9 @@ impl AiConversationRepository for SqliteConnectionRepository {
             .execute(
                 "INSERT INTO ai_conversations
                      (id, title, provider, command_policy, created_at_ms, updated_at_ms,
-                      target_kind, target_id, target_label)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                      target_kind, target_id, target_label, model, reasoning_effort,
+                      fast_mode, supports_fast_mode)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(id) DO UPDATE SET
                      title = excluded.title,
                      provider = excluded.provider,
@@ -68,7 +70,11 @@ impl AiConversationRepository for SqliteConnectionRepository {
                      updated_at_ms = excluded.updated_at_ms,
                      target_kind = excluded.target_kind,
                      target_id = excluded.target_id,
-                     target_label = excluded.target_label",
+                     target_label = excluded.target_label,
+                     model = excluded.model,
+                     reasoning_effort = excluded.reasoning_effort,
+                     fast_mode = excluded.fast_mode,
+                     supports_fast_mode = excluded.supports_fast_mode",
                 params![
                     conversation.id,
                     conversation.title,
@@ -88,6 +94,10 @@ impl AiConversationRepository for SqliteConnectionRepository {
                         .target
                         .as_ref()
                         .map(|target| target.label.as_str()),
+                    conversation.model,
+                    conversation.reasoning_effort,
+                    conversation.fast_mode,
+                    conversation.supports_fast_mode,
                 ],
             )
             .map_err(ai_conversation_error)?;
@@ -118,14 +128,23 @@ impl AiConversationRepository for SqliteConnectionRepository {
     }
 
     fn delete(&self, id: &str) -> Result<(), AiConversationRepositoryError> {
-        let connection = self
+        let mut connection = self
             .connection
             .lock()
             .map_err(|_| ai_conversation_error("database lock poisoned"))?;
-        connection
+        let transaction = connection.transaction().map_err(ai_conversation_error)?;
+        // 原生绑定没有外键，允许首次 turn 先于前端历史落盘；正常删除必须在同一事务
+        // 内显式清理，避免后续重建同 ID 的会话误接旧 Provider 上下文。
+        transaction
+            .execute(
+                "DELETE FROM ai_native_sessions WHERE conversation_id = ?1",
+                [id],
+            )
+            .map_err(ai_conversation_error)?;
+        transaction
             .execute("DELETE FROM ai_conversations WHERE id = ?1", [id])
             .map_err(ai_conversation_error)?;
-        Ok(())
+        transaction.commit().map_err(ai_conversation_error)
     }
 }
 
@@ -187,6 +206,10 @@ fn map_conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiConversat
         id: row.get(0)?,
         title: row.get(1)?,
         provider: row.get(2)?,
+        model: row.get(9)?,
+        reasoning_effort: row.get(10)?,
+        fast_mode: row.get(11)?,
+        supports_fast_mode: row.get(12)?,
         command_policy: row.get(3)?,
         target,
         created_at_ms: row.get(4)?,
@@ -211,6 +234,10 @@ mod tests {
             id: id.into(),
             title: "排查磁盘".into(),
             provider: "codex".into(),
+            model: Some("test-model".into()),
+            reasoning_effort: Some("high".into()),
+            fast_mode: Some(true),
+            supports_fast_mode: Some(true),
             command_policy: Some("auto_safe".into()),
             target: Some(AiConversationTargetRecord {
                 kind: "ssh".into(),
@@ -236,6 +263,22 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn conversation_options_round_trip_and_can_be_cleared() {
+        let repository = SqliteConnectionRepository::open_in_memory().unwrap();
+        let mut snapshot = conversation("options");
+        for speed in [Some(true), Some(false), None] {
+            snapshot.fast_mode = speed;
+            repository.upsert(&snapshot).unwrap();
+            assert_eq!(repository.list().unwrap(), vec![snapshot.clone()]);
+        }
+        snapshot.model = None;
+        snapshot.reasoning_effort = None;
+        snapshot.supports_fast_mode = None;
+        repository.upsert(&snapshot).unwrap();
+        assert_eq!(repository.list().unwrap(), vec![snapshot]);
     }
 
     #[test]
@@ -293,6 +336,17 @@ mod tests {
     fn deleting_a_conversation_cascades_to_its_messages() {
         let repository = SqliteConnectionRepository::open_in_memory().expect("open database");
         repository.upsert(&conversation("conv-1")).expect("seed");
+        repository
+            .connection
+            .lock()
+            .expect("database lock")
+            .execute(
+                "INSERT INTO ai_native_sessions
+                     (conversation_id, native_session_id, provider, updated_at_ms)
+                 VALUES ('conv-1', 'thread-1', 'codex', 2000)",
+                [],
+            )
+            .expect("seed native session binding");
         repository.delete("conv-1").expect("delete");
 
         let listed = repository.list().expect("list");
@@ -302,6 +356,12 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM ai_messages", [], |row| row.get(0))
             .expect("count messages");
         assert_eq!(remaining, 0);
+        let native_sessions: i64 = connection
+            .query_row("SELECT COUNT(*) FROM ai_native_sessions", [], |row| {
+                row.get(0)
+            })
+            .expect("count native sessions");
+        assert_eq!(native_sessions, 0);
     }
 
     #[test]

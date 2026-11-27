@@ -46,6 +46,8 @@ const MIN_SUPPORTED_GROK_VERSION_TEXT: &str = "1.0.34";
 pub(super) struct BootstrapMessages {
     messages: VecDeque<(Value, usize)>,
     bytes: usize,
+    // 只记录是否重放过对话内容，不缓存正文；加载空会话不等于恢复了上下文。
+    replayed_history: bool,
 }
 
 impl BootstrapMessages {
@@ -95,6 +97,24 @@ pub(in crate::commands) fn initialize_request() -> Value {
 
 /// Nocterm 是会话唯一 MCP；Grok 通过官方 ACP 反向请求调用进程内公共 Gateway。
 pub(super) fn session_new_request(cwd: &str, identity: &ProviderSessionIdentity) -> Value {
+    session_request("session/new", cwd, identity, None)
+}
+
+/// session/load 与 session/new 使用同一 Nocterm MCP 和规则覆盖，恢复不能继承旧客户端权限。
+pub(super) fn session_load_request(
+    cwd: &str,
+    identity: &ProviderSessionIdentity,
+    session_id: &str,
+) -> Value {
+    session_request("session/load", cwd, identity, Some(session_id))
+}
+
+fn session_request(
+    method: &str,
+    cwd: &str,
+    identity: &ProviderSessionIdentity,
+    session_id: Option<&str>,
+) -> Value {
     let rules = if identity.connection_id.is_some() {
         Some(GROK_SSH_TERMINAL_RULES)
     } else if identity.target_session_id.is_some() {
@@ -102,10 +122,10 @@ pub(super) fn session_new_request(cwd: &str, identity: &ProviderSessionIdentity)
     } else {
         None
     };
-    json!({
+    let mut request = json!({
         "jsonrpc": "2.0",
         "id": 2,
-        "method": "session/new",
+        "method": method,
         "params": {
             "cwd": cwd,
             "mcpServers": [],
@@ -118,7 +138,11 @@ pub(super) fn session_new_request(cwd: &str, identity: &ProviderSessionIdentity)
                 }]
             }
         }
-    })
+    });
+    if let Some(session_id) = session_id {
+        request["params"]["sessionId"] = json!(session_id);
+    }
+    request
 }
 
 /// 当前产品只支持经过真实握手验证的 Grok MCP-over-ACP，旧版必须显式升级。
@@ -331,6 +355,34 @@ pub(super) fn wait_for_response_collect_with_requests(
     cancellation: &AtomicBool,
     mut handle_request: impl FnMut(&Value) -> Result<bool, String>,
 ) -> Result<Value, String> {
+    let message = wait_for_response_message_collect_with_requests(
+        lines,
+        expected_id,
+        action,
+        pending,
+        cancellation,
+        None,
+        &mut handle_request,
+    )?;
+    if let Some(error) = response_error(&message) {
+        return Err(format!("{action}失败：{error}"));
+    }
+    Ok(message)
+}
+
+/// 恢复流程需要读取结构化错误，并在任何 Prompt 发出前决定是否允许创建新会话。
+pub(super) fn wait_for_response_message_collect_with_requests(
+    lines: &mpsc::Receiver<Result<String, String>>,
+    expected_id: u64,
+    action: &str,
+    pending: &mut BootstrapMessages,
+    cancellation: &AtomicBool,
+    replayed_session_id: Option<&str>,
+    mut handle_request: impl FnMut(&Value) -> Result<bool, String>,
+) -> Result<Value, String> {
+    if replayed_session_id.is_some() {
+        pending.replayed_history = false;
+    }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -346,6 +398,12 @@ pub(super) fn wait_for_response_collect_with_requests(
         )?;
         let message = serde_json::from_str::<Value>(&line)
             .map_err(|_| format!("{action}失败：Grok ACP 返回了无效 JSON"))?;
+        // session/load 在响应前重放完整历史。UI 已有历史，只流式消费本会话通知，
+        // 不占用启动队列；单行读取限制和本次握手截止时间继续约束不可信输出。
+        if is_session_replay(&message, replayed_session_id) {
+            pending.replayed_history |= replay_contains_history(&message)?;
+            continue;
+        }
         if message.get("id").is_some()
             && message.get("method").is_some()
             && handle_request(&message)?
@@ -356,11 +414,78 @@ pub(super) fn wait_for_response_collect_with_requests(
             pending.push(message, line.len())?;
             continue;
         }
-        if let Some(error) = response_error(&message) {
-            return Err(format!("{action}失败：{error}"));
-        }
         return Ok(message);
     }
+}
+
+fn is_session_replay(message: &Value, session_id: Option<&str>) -> bool {
+    session_id.is_some()
+        && message.get("id").is_none()
+        && message.get("method").and_then(Value::as_str) == Some("session/update")
+        && message.pointer("/params/sessionId").and_then(Value::as_str) == session_id
+}
+
+/// 只有对话内容证明 Provider 已持有上下文；菜单、模式等初始化状态不算历史。
+/// 未识别的通知不能证明会话为空，应中止恢复，避免在协议漂移时盲目重放 UI 历史。
+fn replay_contains_history(message: &Value) -> Result<bool, String> {
+    match message
+        .pointer("/params/update/sessionUpdate")
+        .and_then(Value::as_str)
+    {
+        Some(
+            "user_message_chunk"
+            | "agent_message_chunk"
+            | "agent_thought_chunk"
+            | "tool_call"
+            | "tool_call_update"
+            | "plan",
+        ) => Ok(true),
+        Some(
+            "available_commands_update"
+            | "current_mode_update"
+            | "config_option_update"
+            | "session_info_update"
+            | "usage_update",
+        ) => Ok(false),
+        _ => Err("Grok ACP 返回了无法识别的历史通知，无法确认恢复上下文".into()),
+    }
+}
+
+pub(super) fn is_missing_session_response(message: &Value) -> bool {
+    message
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .is_some_and(|error| {
+            error.starts_with("No session found with id ")
+                || error.starts_with("Session does not exist")
+        })
+}
+
+/// JSON-RPC 成功响应必须显式携带 result；仅仅没有 error 不能证明请求成功。
+pub(super) fn is_success_response(message: &Value) -> bool {
+    message.get("result").is_some() && message.get("error").is_none()
+}
+
+/// ACP 的 `session/load` 成功响应只确认加载完成，不要求重复返回 sessionId；恢复时
+/// 继续使用请求中经过持久绑定校验的 ID。只有 `session/new` 必须返回新的 sessionId。
+/// 加载响应按 ACP 契约位于全部历史之后；空会话保留 ID，但首轮仍需补入 UI 上下文。
+pub(super) fn resolve_session(
+    response: &Value,
+    resumed_session_id: Option<&str>,
+    pending: &BootstrapMessages,
+) -> Result<(String, bool), String> {
+    if !is_success_response(response) {
+        return Err("Grok 会话响应缺少有效 result".to_string());
+    }
+    if let Some(session_id) = resumed_session_id {
+        return Ok((session_id.to_string(), pending.replayed_history));
+    }
+    response
+        .pointer("/result/sessionId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(|session_id| (session_id.to_string(), false))
+        .ok_or_else(|| "Grok session/new 未返回 session id".to_string())
 }
 
 pub(super) fn response_error(message: &Value) -> Option<&str> {
@@ -397,3 +522,6 @@ pub(super) fn is_renderable_update(message: &Value, session_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod recovery_tests;

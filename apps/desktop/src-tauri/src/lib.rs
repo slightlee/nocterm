@@ -8,14 +8,14 @@ use std::sync::Arc;
 use commands::sftp::{SftpLocalDirectoryState, SftpTransferState, shutdown_sftp};
 use nocterm_application::{
     ai_audit::AiAuditService, ai_conversation::AiConversationService,
-    ai_execution::AiExecutionService, connection::ConnectionService, health::HealthService,
-    settings::SettingsService,
+    ai_execution::AiExecutionService, ai_native_session::AiNativeSessionService,
+    connection::ConnectionService, health::HealthService, settings::SettingsService,
 };
 use nocterm_infrastructure::{
     credential::SystemCredentialStore, persistence::SqliteConnectionRepository,
     platform::SystemPlatformProbe,
 };
-use state::AppState;
+use state::{AppState, AppStateServices};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,7 +32,11 @@ pub fn run() {
 
     let app = builder
         .setup(|app| {
-            let database_path = app.path().app_data_dir()?.join("nocterm.db");
+            let app_data_directory = app.path().app_data_dir()?;
+            // 持久化 Grok 会话不能把异常退出前的进程级认证投影带入下一次运行。
+            commands::ai_provider::cleanup_stale_grok_authentication_links(&app_data_directory)
+                .map_err(std::io::Error::other)?;
+            let database_path = app_data_directory.join("nocterm.db");
             let repository = Arc::new(
                 SqliteConnectionRepository::open(&database_path)
                     .map_err(|error| std::io::Error::other(error.to_string()))?,
@@ -44,6 +48,7 @@ pub fn run() {
             let ai_audit_service = AiAuditService::new(repository.clone());
             let ai_conversation_service = AiConversationService::new(repository.clone());
             let ai_execution_service = AiExecutionService::new(repository.clone());
+            let ai_native_session_service = AiNativeSessionService::new(repository.clone());
             // 不能确定是否已 dispatch 的旧记录只收敛为 ResultUnknown，启动恢复绝不重放命令。
             ai_execution_service
                 .recover_after_startup(current_unix_ms())
@@ -55,12 +60,16 @@ pub fn run() {
             );
 
             app.manage(AppState::new(
-                health_service,
-                connection_service,
-                settings_service,
-                ai_audit_service,
-                ai_conversation_service,
-                ai_execution_service,
+                AppStateServices {
+                    health_service,
+                    connection_service,
+                    settings_service,
+                    ai_audit_service,
+                    ai_conversation_service,
+                    ai_execution_service,
+                    ai_native_session_service,
+                },
+                app_data_directory,
             ));
             if let Some(state) = app.try_state::<AppState>() {
                 commands::ai_bridge::start_gateway(app.handle().clone(), &state);
@@ -85,6 +94,7 @@ pub fn run() {
             commands::ai::ai_session_start,
             commands::ai::ai_session_stop,
             commands::ai::ai_conversation_reset,
+            commands::ai::ai_conversation_release,
             commands::ai::ai_tool_approval_resolve,
             commands::ai::ai_ssh_visible_get,
             commands::ai::ai_ssh_visible_set,

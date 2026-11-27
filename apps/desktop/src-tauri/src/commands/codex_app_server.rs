@@ -49,6 +49,10 @@ impl PersistentProviderRuntime for CodexAppServerManager {
             conversation_id,
             session_id,
             identity,
+            native_session_id,
+            native_session_identity,
+            native_session_lease,
+            native_session_service,
             initial_prompt,
             continuation_prompt,
             bridge,
@@ -58,6 +62,7 @@ impl PersistentProviderRuntime for CodexAppServerManager {
             command_policy,
             mcp_dispatcher: _,
         } = launch;
+        let native_conversation_id = conversation_id.clone();
         self.sessions.start_turn(
             app.clone(),
             PersistentTurnRequest {
@@ -73,6 +78,11 @@ impl PersistentProviderRuntime for CodexAppServerManager {
                     app,
                     CodexAppServerLaunch {
                         identity,
+                        conversation_id: native_conversation_id,
+                        native_session_id,
+                        native_session_identity,
+                        native_session_lease,
+                        native_session_service,
                         bridge,
                         bridge_executable,
                         provider_executable,

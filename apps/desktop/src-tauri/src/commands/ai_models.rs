@@ -4,7 +4,10 @@
 use std::{
     io::Write,
     process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -63,6 +66,34 @@ fn provider_command(provider: &str) -> Result<Command, String> {
     apply_local_network_bypass(&mut command);
     command.current_dir(std::env::temp_dir());
     Ok(command)
+}
+
+/// 发送前以后端实际可执行文件为准复核版本，避免旧缓存、自定义模型或直接 IPC
+/// 绕过目录中的不可用标记。版本探测不读取账号，也不发送推理请求。
+pub(super) fn ensure_claude_native_session_support(
+    executable: &std::path::Path,
+    cancellation: &AtomicBool,
+) -> Result<(), String> {
+    let mut command = Command::new(executable);
+    if let Some(path) = provider_environment_path(executable) {
+        command.env("PATH", path);
+    }
+    hide_console_window(&mut command);
+    command.current_dir(std::env::temp_dir());
+    let version = probe_cli_version_cancellable(&mut command, cancellation).map_err(|error| {
+        if cancellation.load(Ordering::Acquire) {
+            error
+        } else {
+            "无法确认 Claude Code 版本，已停止以避免不兼容的会话恢复".to_string()
+        }
+    })?;
+    if claude_catalog::supports_native_session_contract(&version) {
+        return Ok(());
+    }
+    Err(format!(
+        "Claude Code 版本过低，原生会话恢复需要 {} 或更高版本",
+        claude_catalog::NATIVE_SESSION_MINIMUM
+    ))
 }
 
 fn discover_models(provider: &str) -> Result<AiModelCatalog, String> {
@@ -442,6 +473,17 @@ fn add(
 
 /// 使用已发现的同一可执行文件与环境；不读取账号文件，也不从初始化中的账号信息推断版本。
 fn probe_cli_version(command: &mut Command) -> Result<String, String> {
+    probe_cli_version_cancellable(command, &AtomicBool::new(false))
+}
+
+/// 聊天启动的版本探测复用取消信号；设置页的独立版本读取保持原截止时间。
+fn probe_cli_version_cancellable(
+    command: &mut Command,
+    cancellation: &AtomicBool,
+) -> Result<String, String> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err("AI 会话启动已取消".into());
+    }
     // Command 的参数会累积，版本探测用独立实例，原命令仍留给初始化协议。
     let mut version_command = Command::new(command.get_program());
     for (key, value) in command.get_envs() {
@@ -454,8 +496,8 @@ fn probe_cli_version(command: &mut Command) -> Result<String, String> {
     }
     hide_console_window(&mut version_command);
     let mut probe = Probe::start(version_command.arg("--version"), false)?;
-    let line = probe.next_line()?.ok_or(INVALID)?;
-    probe.finish()?;
+    let line = probe.next_line_cancellable(cancellation)?.ok_or(INVALID)?;
+    probe.finish_cancellable(cancellation)?;
     let version = parse_cli_version(&line).ok_or(INVALID)?;
     Ok(version.to_string())
 }
@@ -518,14 +560,23 @@ impl Probe {
     }
 
     fn next_line(&self) -> Result<Option<String>, String> {
-        let time = self
-            .deadline
-            .checked_duration_since(Instant::now())
-            .ok_or("AI_MODEL_CATALOG_TIMEOUT")?;
-        match self.lines.recv_timeout(time) {
-            Ok(line) => line.map(Some),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(None),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err("AI_MODEL_CATALOG_TIMEOUT".into()),
+        self.next_line_cancellable(&AtomicBool::new(false))
+    }
+
+    fn next_line_cancellable(&self, cancellation: &AtomicBool) -> Result<Option<String>, String> {
+        loop {
+            if cancellation.load(Ordering::Acquire) {
+                return Err("AI 会话启动已取消".into());
+            }
+            let time = self
+                .deadline
+                .checked_duration_since(Instant::now())
+                .ok_or("AI_MODEL_CATALOG_TIMEOUT")?;
+            match self.lines.recv_timeout(time.min(Duration::from_millis(20))) {
+                Ok(line) => return line.map(Some),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            }
         }
     }
 
@@ -547,7 +598,14 @@ impl Probe {
 
     /// stdout EOF 不保证进程已退出，短命目录命令仍需确认退出码并受截止时间约束。
     fn finish(&mut self) -> Result<(), String> {
+        self.finish_cancellable(&AtomicBool::new(false))
+    }
+
+    fn finish_cancellable(&mut self, cancellation: &AtomicBool) -> Result<(), String> {
         loop {
+            if cancellation.load(Ordering::Acquire) {
+                return Err("AI 会话启动已取消".into());
+            }
             if let Some(status) = self.child.try_wait().map_err(|_| UNAVAILABLE)? {
                 return if status.success() {
                     Ok(())

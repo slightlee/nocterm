@@ -162,6 +162,7 @@ export function AiPanel({
         <AiHistoryMenu
           activeConversationId={controller.activeConversationId}
           canClear={messages.length > 0}
+          disabled={providerChangePending}
           conversations={controller.conversations}
           currentTargetKey={workspaceTargetKey}
           onClear={() => void handleClearConversation()}
@@ -260,7 +261,7 @@ export function AiPanel({
           currentTargetBusyElsewhere
             ? '当前终端的另一会话正在执行，请从历史会话中返回任务。'
             : providerChangePending
-              ? '正在切换 Agent…'
+              ? '正在更新会话…'
               : !viewingCurrentTarget || !targetReady
                 ? targetUnavailableMessage
                 : undefined
